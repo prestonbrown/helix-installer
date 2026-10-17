@@ -7,6 +7,7 @@ pub mod identify;
 pub mod lint;
 pub mod manifest;
 pub mod manifest_sig;
+pub mod transport;
 pub mod version;
 
 /// Crate version, reported by the app shell.

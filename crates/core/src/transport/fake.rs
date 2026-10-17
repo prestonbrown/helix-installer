@@ -1,0 +1,424 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Scriptable in-memory transports. Each fake is cheap to clone-share via
+//! `Arc` and records what it was asked so tests can assert on it afterwards.
+
+use super::*;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[derive(Default)]
+struct MoonrakerState {
+    printer_info: HashMap<String, Value>,
+    system_info: HashMap<String, Value>,
+    update_status: HashMap<String, Value>,
+    gcodes: Vec<(String, String)>,
+    upgrades: Vec<String>,
+}
+
+/// Canned JSON per host address; a host with nothing registered is unreachable.
+#[derive(Default)]
+pub struct FakeMoonraker {
+    state: Mutex<MoonrakerState>,
+}
+
+impl FakeMoonraker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn set_printer_info(&self, addr: &str, v: Value) {
+        lock(&self.state).printer_info.insert(addr.into(), v);
+    }
+    pub fn set_system_info(&self, addr: &str, v: Value) {
+        lock(&self.state).system_info.insert(addr.into(), v);
+    }
+    pub fn set_update_status(&self, addr: &str, v: Value) {
+        lock(&self.state).update_status.insert(addr.into(), v);
+    }
+    /// (host addr, script) for every `gcode` call, in order.
+    pub fn gcodes(&self) -> Vec<(String, String)> {
+        lock(&self.state).gcodes.clone()
+    }
+    pub fn upgrades(&self) -> Vec<String> {
+        lock(&self.state).upgrades.clone()
+    }
+}
+
+#[async_trait]
+impl Moonraker for FakeMoonraker {
+    async fn printer_info(&self, host: &Host) -> Result<Value> {
+        lock(&self.state)
+            .printer_info
+            .get(&host.addr)
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+    async fn system_info(&self, host: &Host) -> Result<Value> {
+        lock(&self.state)
+            .system_info
+            .get(&host.addr)
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+    async fn update_status(&self, host: &Host) -> Result<Value> {
+        lock(&self.state)
+            .update_status
+            .get(&host.addr)
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+    async fn gcode(&self, host: &Host, script: &str) -> Result<()> {
+        lock(&self.state)
+            .gcodes
+            .push((host.addr.clone(), script.into()));
+        Ok(())
+    }
+    async fn update_upgrade(&self, _host: &Host, name: &str) -> Result<()> {
+        lock(&self.state).upgrades.push(name.into());
+        Ok(())
+    }
+}
+
+struct JobScript {
+    chunks: Vec<(String, Option<i32>)>,
+    revealed: usize,
+}
+
+type Fallback = Box<dyn Fn(&str) -> ExecOutput + Send + Sync>;
+
+#[derive(Default)]
+struct SshState {
+    accepted: Vec<(String, String, String)>,
+    table: HashMap<String, ExecOutput>,
+    fallback: Option<Fallback>,
+    commands: Vec<String>,
+    stdins: Vec<Vec<u8>>,
+    uploads: Vec<(String, Vec<u8>)>,
+    queued_jobs: Vec<Vec<(String, Option<i32>)>>,
+    jobs: HashMap<String, JobScript>,
+    next_job: u32,
+    drop_next_session_after: Option<u32>,
+}
+
+/// Shared by every session it hands out, so a reconnect sees the same job logs.
+#[derive(Clone, Default)]
+pub struct FakeSsh {
+    state: std::sync::Arc<Mutex<SshState>>,
+}
+
+impl FakeSsh {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Registers a login the host accepts; hosts with no registration are unreachable.
+    pub fn accept(&self, addr: &str, user: &str, password: &str) {
+        lock(&self.state)
+            .accepted
+            .push((addr.into(), user.into(), password.into()));
+    }
+    pub fn on_command(&self, cmd: &str, out: ExecOutput) {
+        lock(&self.state).table.insert(cmd.into(), out);
+    }
+    /// Answers any command missing from the table; without one it exits 127.
+    pub fn set_fallback(&self, f: impl Fn(&str) -> ExecOutput + Send + Sync + 'static) {
+        lock(&self.state).fallback = Some(Box::new(f));
+    }
+    /// Queues the log for the next `spawn_detached`: (text, exit) chunks,
+    /// one revealed per `read_job` call; `Some` exit marks the job finished.
+    pub fn script_job(&self, chunks: Vec<(&str, Option<i32>)>) {
+        let chunks = chunks
+            .into_iter()
+            .map(|(t, e)| (t.to_string(), e))
+            .collect();
+        lock(&self.state).queued_jobs.push(chunks);
+    }
+    /// The next session to connect fails every call from its n-th (1-based)
+    /// onward with `Unreachable`; later sessions are unaffected.
+    pub fn drop_after(&self, n: u32) {
+        lock(&self.state).drop_next_session_after = Some(n);
+    }
+    /// Every command passed to `exec` or `spawn_detached`.
+    pub fn commands(&self) -> Vec<String> {
+        lock(&self.state).commands.clone()
+    }
+    /// Every stdin payload, kept apart from the command lines.
+    pub fn stdins(&self) -> Vec<Vec<u8>> {
+        lock(&self.state).stdins.clone()
+    }
+    /// (remote path, bytes) for every upload.
+    pub fn uploads(&self) -> Vec<(String, Vec<u8>)> {
+        lock(&self.state).uploads.clone()
+    }
+}
+
+#[async_trait]
+impl Ssh for FakeSsh {
+    async fn connect(&self, host: &Host, login: &Login) -> Result<Box<dyn SshSession>> {
+        let mut st = lock(&self.state);
+        if !st.accepted.iter().any(|(a, _, _)| *a == host.addr) {
+            return Err(TransportError::Unreachable);
+        }
+        if !st
+            .accepted
+            .iter()
+            .any(|(a, u, p)| *a == host.addr && *u == login.user && *p == login.password)
+        {
+            return Err(TransportError::Auth);
+        }
+        let drop_at = st.drop_next_session_after.take();
+        Ok(Box::new(FakeSshSession {
+            state: self.state.clone(),
+            calls: 0,
+            drop_at,
+        }))
+    }
+}
+
+struct FakeSshSession {
+    state: std::sync::Arc<Mutex<SshState>>,
+    calls: u32,
+    drop_at: Option<u32>,
+}
+
+impl FakeSshSession {
+    fn tick(&mut self) -> Result<()> {
+        self.calls += 1;
+        match self.drop_at {
+            Some(n) if self.calls >= n => Err(TransportError::Unreachable),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[async_trait]
+impl SshSession for FakeSshSession {
+    async fn exec(
+        &mut self,
+        cmd: &str,
+        stdin: Option<&[u8]>,
+        _timeout: Duration,
+    ) -> Result<ExecOutput> {
+        self.tick()?;
+        let mut st = lock(&self.state);
+        st.commands.push(cmd.into());
+        if let Some(b) = stdin {
+            st.stdins.push(b.to_vec());
+        }
+        if let Some(o) = st.table.get(cmd) {
+            return Ok(o.clone());
+        }
+        if let Some(f) = &st.fallback {
+            return Ok(f(cmd));
+        }
+        Ok(ExecOutput {
+            stdout: String::new(),
+            stderr: format!("{cmd}: command not found"),
+            exit: 127,
+        })
+    }
+
+    async fn upload(&mut self, local: &Path, remote: &str) -> Result<()> {
+        self.tick()?;
+        let bytes = std::fs::read(local).map_err(|e| TransportError::Io(e.to_string()))?;
+        lock(&self.state).uploads.push((remote.into(), bytes));
+        Ok(())
+    }
+
+    async fn spawn_detached(
+        &mut self,
+        cmd: &str,
+        sudo_password: Option<&str>,
+    ) -> Result<RemoteJob> {
+        self.tick()?;
+        let mut st = lock(&self.state);
+        st.commands.push(cmd.into());
+        if let Some(p) = sudo_password {
+            st.stdins.push(p.as_bytes().to_vec());
+        }
+        let chunks = if st.queued_jobs.is_empty() {
+            vec![(String::new(), Some(0))]
+        } else {
+            st.queued_jobs.remove(0)
+        };
+        st.next_job += 1;
+        let log_path = format!("/tmp/fake-job-{}.log", st.next_job);
+        st.jobs.insert(
+            log_path.clone(),
+            JobScript {
+                chunks,
+                revealed: 0,
+            },
+        );
+        Ok(RemoteJob { log_path })
+    }
+
+    async fn read_job(&mut self, job: &RemoteJob, from_offset: u64) -> Result<JobChunk> {
+        self.tick()?;
+        let mut st = lock(&self.state);
+        let script = st
+            .jobs
+            .get_mut(&job.log_path)
+            .ok_or_else(|| TransportError::Io(format!("no such log {}", job.log_path)))?;
+        if script.revealed < script.chunks.len() {
+            script.revealed += 1;
+        }
+        let shown = &script.chunks[..script.revealed];
+        let full: String = shown.iter().map(|(t, _)| t.as_str()).collect();
+        let text = full
+            .get(from_offset as usize..)
+            .unwrap_or_default()
+            .to_string();
+        let exit = if script.revealed == script.chunks.len() {
+            script.chunks.last().and_then(|(_, e)| *e)
+        } else {
+            None
+        };
+        Ok(JobChunk {
+            text,
+            next_offset: full.len() as u64,
+            exit,
+        })
+    }
+}
+
+#[derive(Default)]
+struct DrivesState {
+    drives: Vec<Drive>,
+    files: HashMap<(String, String), Vec<u8>>,
+    ejected: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct FakeDrives {
+    state: Mutex<DrivesState>,
+}
+
+impl FakeDrives {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn add(&self, d: Drive) {
+        lock(&self.state).drives.push(d);
+    }
+    /// Bytes written to `name` on drive `id` by `copy_to`.
+    pub fn file(&self, id: &str, name: &str) -> Option<Vec<u8>> {
+        lock(&self.state)
+            .files
+            .get(&(id.to_string(), name.to_string()))
+            .cloned()
+    }
+    pub fn ejected(&self) -> Vec<String> {
+        lock(&self.state).ejected.clone()
+    }
+    fn known(&self, d: &Drive) -> Result<()> {
+        if lock(&self.state).drives.iter().any(|x| x.id == d.id) {
+            Ok(())
+        } else {
+            Err(TransportError::Io(format!("unknown drive {}", d.id)))
+        }
+    }
+}
+
+#[async_trait]
+impl Drives for FakeDrives {
+    fn list_removable(&self) -> Result<Vec<Drive>> {
+        Ok(lock(&self.state)
+            .drives
+            .iter()
+            .filter(|d| d.removable && !d.system)
+            .cloned()
+            .collect())
+    }
+    async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()> {
+        self.known(drive)?;
+        let bytes = std::fs::read(src).map_err(|e| TransportError::Io(e.to_string()))?;
+        lock(&self.state)
+            .files
+            .insert((drive.id.clone(), name.into()), bytes);
+        Ok(())
+    }
+    async fn eject(&self, drive: &Drive) -> Result<()> {
+        self.known(drive)?;
+        lock(&self.state).ejected.push(drive.id.clone());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct FakeFetch {
+    bodies: Mutex<HashMap<String, Vec<u8>>>,
+    requests: Mutex<Vec<String>>,
+}
+
+impl FakeFetch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn add(&self, url: &str, bytes: Vec<u8>) {
+        lock(&self.bodies).insert(url.into(), bytes);
+    }
+    /// Every URL requested, in order, including misses.
+    pub fn requests(&self) -> Vec<String> {
+        lock(&self.requests).clone()
+    }
+    fn body(&self, url: &str) -> Result<Vec<u8>> {
+        lock(&self.requests).push(url.into());
+        lock(&self.bodies)
+            .get(url)
+            .cloned()
+            .ok_or(TransportError::Http(404))
+    }
+}
+
+#[async_trait]
+impl Fetch for FakeFetch {
+    async fn get(
+        &self,
+        url: &str,
+        dest: &Path,
+        progress: &(dyn Fn(u64, Option<u64>) + Sync),
+    ) -> Result<()> {
+        let bytes = self.body(url)?;
+        std::fs::write(dest, &bytes).map_err(|e| TransportError::Io(e.to_string()))?;
+        let n = bytes.len() as u64;
+        progress(n, Some(n));
+        Ok(())
+    }
+    async fn get_text(&self, url: &str) -> Result<String> {
+        String::from_utf8(self.body(url)?).map_err(|e| TransportError::Protocol(e.to_string()))
+    }
+}
+
+/// Sleeping advances the clock and returns at once.
+pub struct FakeClock {
+    now: Mutex<SystemTime>,
+}
+
+impl FakeClock {
+    pub fn new() -> Self {
+        Self::at(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+    }
+    pub fn at(t: SystemTime) -> Self {
+        FakeClock { now: Mutex::new(t) }
+    }
+}
+
+impl Default for FakeClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Clock for FakeClock {
+    fn now(&self) -> SystemTime {
+        *lock(&self.now)
+    }
+    async fn sleep(&self, d: Duration) {
+        *lock(&self.now) += d;
+    }
+}
