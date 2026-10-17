@@ -30,8 +30,6 @@ pub(crate) fn map_err(e: reqwest::Error) -> TransportError {
         TransportError::Timeout
     } else if e.is_connect() {
         TransportError::Unreachable
-    } else if let Some(status) = e.status() {
-        TransportError::Http(status.as_u16())
     } else {
         TransportError::Protocol(e.to_string())
     }

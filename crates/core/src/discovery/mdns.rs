@@ -27,7 +27,10 @@ pub async fn browse(window: Duration) -> Vec<Host> {
         for ip in svc.get_addresses_v4() {
             let mut host = Host::new(ip.to_string());
             host.moonraker_port = svc.get_port();
-            if !found.iter().any(|h| h.addr == host.addr) {
+            if !found
+                .iter()
+                .any(|h| (&h.addr, h.moonraker_port) == (&host.addr, host.moonraker_port))
+            {
                 found.push(host);
             }
         }

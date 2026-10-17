@@ -29,8 +29,25 @@ fn key_of(host: &Host, facts: &Facts) -> String {
     ["serial", "mac"]
         .iter()
         .find_map(|k| facts.get(*k).and_then(Value::as_str))
-        .unwrap_or(&host.addr)
-        .to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| endpoint(host))
+}
+
+/// The address, with the port when it is not Moonraker's usual one.
+fn endpoint(host: &Host) -> String {
+    if host.moonraker_port == sweep::MOONRAKER_PORT {
+        host.addr.clone()
+    } else {
+        format!("{}:{}", host.addr, host.moonraker_port)
+    }
+}
+
+fn runs_moonraker(c: &Candidate) -> bool {
+    c.facts.contains_key("has_moonraker")
+}
+
+fn endpoint_pair(h: &Host) -> (&str, u16) {
+    (h.addr.as_str(), h.moonraker_port)
 }
 
 impl Candidate {
@@ -39,9 +56,22 @@ impl Candidate {
         Candidate { host, facts, key }
     }
 
+    /// Two Moonraker instances are one printer only at the same address and port; a reply
+    /// that never reached Moonraker (FlashForge UDP) joins by shared serial or address.
+    fn is_same_printer(&self, other: &Candidate) -> bool {
+        if runs_moonraker(self) && runs_moonraker(other) {
+            return endpoint_pair(&self.host) == endpoint_pair(&other.host);
+        }
+        self.key == other.key || self.host.addr == other.host.addr
+    }
+
     fn absorb(&mut self, other: Candidate) {
-        // The address that runs Moonraker is the one the install talks to.
-        if !self.facts.contains_key("has_moonraker") && other.facts.contains_key("has_moonraker") {
+        let take_host = match (runs_moonraker(self), runs_moonraker(&other)) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => endpoint_pair(&other.host) < endpoint_pair(&self.host),
+        };
+        if take_host {
             self.host = other.host;
         }
         for (k, v) in other.facts {
@@ -51,21 +81,19 @@ impl Candidate {
     }
 }
 
-/// Folds candidates that are the same printer: equal key, or the same address.
+/// Folds candidates that are the same printer (see `is_same_printer`). The surviving host
+/// is the one running Moonraker, ties broken by the lowest (address, port).
 pub fn merge(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
     for c in candidates {
-        let same = |o: &Candidate| o.key == c.key || o.host.addr == c.host.addr;
-        match out.iter().position(same) {
+        match out.iter().position(|o| o.is_same_printer(&c)) {
             Some(i) => out[i].absorb(c),
             None => out.push(c),
         }
-        // A merge can make two earlier entries the same printer (a serial learned late).
+        // A fold can make two earlier entries the same printer (a serial learned late).
         let mut i = 0;
         while i < out.len() {
-            let dup = (i + 1..out.len())
-                .find(|&j| out[j].key == out[i].key || out[j].host.addr == out[i].host.addr);
-            match dup {
+            match (i + 1..out.len()).find(|&j| out[i].is_same_printer(&out[j])) {
                 Some(j) => {
                     let other = out.remove(j);
                     out[i].absorb(other);
@@ -121,15 +149,15 @@ async fn candidate_for(env: &Env, host: Host) -> Option<Candidate> {
 /// Looks for printers for `timeout`: mDNS, a sweep of the local /24s and FlashForge UDP run
 /// together, and what they find is merged by `Candidate::key`.
 pub async fn discover(env: &Env, timeout: Duration) -> Vec<Candidate> {
-    let own = sweep::local_private_ipv4s();
+    let own = sweep::local_private_ifaces();
     let (announced, swept, flashforge) = tokio::join!(
         mdns::browse(timeout),
-        sweep::sweep(env.net.as_ref(), &own),
+        sweep::sweep(env.net.as_ref(), &own, timeout),
         flashforge::scan(timeout),
     );
     let mut hosts: Vec<Host> = Vec::new();
     for h in announced.into_iter().chain(swept) {
-        if !hosts.iter().any(|x| x.addr == h.addr) {
+        if !hosts.iter().any(|x| endpoint_pair(x) == endpoint_pair(&h)) {
             hosts.push(h);
         }
     }

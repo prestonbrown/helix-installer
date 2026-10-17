@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use helix_installer_core::discovery::sweep::sweep;
+use helix_installer_core::discovery::sweep::{subnet_targets, sweep, Iface};
 use helix_installer_core::discovery::{
     manual_host, merge, parse_flashforge_reply, probe_host, Candidate,
 };
@@ -135,7 +135,11 @@ async fn the_sweep_finds_open_ports_on_the_subnet_and_skips_itself() {
     net.answer("192.168.7.99", 7125, None);
     net.answer("192.168.7.5", 7125, None);
     net.answer("192.168.8.20", 7125, None);
-    let mut found = sweep(&net, &[Ipv4Addr::new(192, 168, 7, 5)]).await;
+    let own = Iface {
+        ip: Ipv4Addr::new(192, 168, 7, 5),
+        mask: Ipv4Addr::new(255, 255, 255, 0),
+    };
+    let mut found = sweep(&net, &[own], std::time::Duration::from_secs(5)).await;
     found.sort_by(|a, b| a.addr.cmp(&b.addr));
     let addrs: Vec<_> = found.iter().map(|h| h.addr.as_str()).collect();
     assert_eq!(addrs, ["192.168.7.20", "192.168.7.99"]);
@@ -199,4 +203,89 @@ fn manual_host_accepts_an_ip_and_rejects_text() {
     assert_eq!(manual_host(" 192.168.1.9 ").unwrap().addr, "192.168.1.9");
     assert!(manual_host("not an ip").is_err());
     assert!(manual_host("").is_err());
+}
+
+fn iface(ip: [u8; 4], prefix: u32) -> Iface {
+    Iface {
+        ip: Ipv4Addr::from(ip),
+        mask: Ipv4Addr::from(u32::MAX << (32 - prefix)),
+    }
+}
+
+#[test]
+fn subnet_targets_stay_within_one_slash_24() {
+    let t24 = subnet_targets(iface([192, 168, 1, 5], 24));
+    assert_eq!(t24.len(), 253);
+    assert!(!t24.contains(&Ipv4Addr::new(192, 168, 1, 5)));
+    assert_eq!(t24[0], Ipv4Addr::new(192, 168, 1, 1));
+
+    let t16 = subnet_targets(iface([10, 1, 7, 9], 16));
+    assert_eq!(t16.len(), 253);
+    assert!(t16.iter().all(|a| a.octets()[..3] == [10, 1, 7]));
+
+    let t28 = subnet_targets(iface([192, 168, 1, 70], 28));
+    assert_eq!(t28.len(), 13);
+    assert_eq!(t28[0], Ipv4Addr::new(192, 168, 1, 65));
+    assert_eq!(*t28.last().unwrap(), Ipv4Addr::new(192, 168, 1, 78));
+
+    assert!(subnet_targets(iface([192, 168, 1, 70], 32)).is_empty());
+}
+
+#[tokio::test]
+async fn the_sweep_covers_at_most_four_subnets() {
+    let net = FakeNet::new();
+    for third in 1..=5u8 {
+        net.answer(&format!("10.0.{third}.20"), 7125, None);
+    }
+    let ifaces: Vec<Iface> = (1..=5u8).map(|t| iface([10, 0, t, 5], 24)).collect();
+    let found = sweep(&net, &ifaces, std::time::Duration::from_secs(5)).await;
+    assert_eq!(found.len(), 4);
+}
+
+fn mr_at(addr: &str, port: u16, name: &str) -> Candidate {
+    let mut host = Host::new(addr);
+    host.moonraker_port = port;
+    Candidate::new(
+        host,
+        facts(&[
+            ("has_moonraker", json!(true)),
+            ("klipper_hostname", json!(name)),
+        ]),
+    )
+}
+
+#[test]
+fn two_moonraker_ports_on_one_ip_stay_two_candidates() {
+    let merged = merge(vec![
+        mr_at("10.0.0.9", 7125, "a"),
+        mr_at("10.0.0.9", 7126, "b"),
+    ]);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].facts["klipper_hostname"], json!("a"));
+    assert_eq!(merged[1].facts["klipper_hostname"], json!("b"));
+    assert_ne!(merged[0].key, merged[1].key);
+}
+
+#[test]
+fn a_flashforge_reply_and_one_moonraker_on_an_ip_are_one_candidate() {
+    let ff = Candidate::new(Host::new("10.0.0.9"), facts(&[("serial", json!("SN1"))]));
+    let merged = merge(vec![ff, mr_at("10.0.0.9", 7126, "a")]);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].host.moonraker_port, 7126);
+    assert_eq!(merged[0].key, "SN1");
+}
+
+#[test]
+fn the_surviving_host_does_not_depend_on_order() {
+    let udp = |addr: &str| Candidate::new(Host::new(addr), facts(&[("serial", json!("SN1"))]));
+    let a = merge(vec![udp("10.0.0.9"), udp("10.0.0.3")]);
+    let b = merge(vec![udp("10.0.0.3"), udp("10.0.0.9")]);
+    assert_eq!(a[0].host.addr, "10.0.0.3");
+    assert_eq!(b[0].host.addr, "10.0.0.3");
+    let with_mr = merge(vec![udp("10.0.0.3"), {
+        let mut c = mr_at("10.0.0.9", 7125, "x");
+        c.facts.insert("serial".into(), json!("SN1"));
+        Candidate::new(c.host, c.facts)
+    }]);
+    assert_eq!(with_mr[0].host.addr, "10.0.0.9");
 }
