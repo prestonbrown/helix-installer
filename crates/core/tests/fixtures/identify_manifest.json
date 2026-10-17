@@ -1,0 +1,76 @@
+{
+  "manifest_version": 1,
+  "min_app_version": "0.1.0",
+  "artifacts": {},
+  "recipes": {},
+  "printers": [
+    {
+      "id": "k1", "name": "Creality K1",
+      "identify": [{"user_model": "k1"}, {"klipper_hostname": "creality_k1"}],
+      "recipes": [
+        {"when": {"state": "helix"}, "recipe": "helix_upgrade"},
+        {"when": {"state": "stock"}, "recipe": "k1_stock"},
+        {"when": {"state": "modded:moonraker", "services": {"contains": "simple-af"}}, "recipe": "k1_simple_af"}
+      ],
+      "restore": "k1_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/k1"}
+    },
+    {
+      "id": "k2", "name": "Creality K2",
+      "identify": [{"model": "k2"}, {"user_model": "k2"}],
+      "recipes": [
+        {"when": {"state": "helix"}, "recipe": "helix_upgrade"},
+        {"when": {"state": "stock", "stock_version": ">=1.1"}, "recipe": "k2_stock"}
+      ],
+      "restore": "k2_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/k2"}
+    },
+    {
+      "id": "q2", "name": "QIDI Q2",
+      "identify": [{"model": "q2"}],
+      "recipes": [
+        {"when": {"state": "stock", "stock_version": ">=1.3"}, "recipe": "q2_stock"}
+      ],
+      "restore": "q2_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/q2"}
+    },
+    {
+      "id": "max4", "name": "QIDI Max 4",
+      "identify": [{"model": "max4"}],
+      "recipes": [
+        {"when": {"state": "stock"}, "recipe": "max4_stock"}
+      ],
+      "restore": "max4_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/max4"}
+    },
+    {
+      "id": "pi5", "name": "Raspberry Pi 5 (MainsailOS)",
+      "identify": [{"model": "pi5", "services": {"contains": "mainsail"}}],
+      "recipes": [
+        {"when": {"state": "helix"}, "recipe": "helix_upgrade"},
+        {"when": {"state": "modded:moonraker"}, "recipe": "pi_install"}
+      ],
+      "restore": "pi_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/pi"}
+    },
+    {
+      "id": "ad5x", "name": "FlashForge AD5X",
+      "identify": [{"flashforge_udp.model": "AD5X"}],
+      "recipes": [
+        {"when": {"state": "helix"}, "recipe": "helix_upgrade"},
+        {"when": {"state": "modded:moonraker", "klipper_objects": {"contains": "gcode_macro ZMOD"}}, "recipe": "ad5x_zmod"}
+      ],
+      "restore": "ad5x_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/ad5x"}
+    },
+    {
+      "id": "ad5m", "name": "FlashForge AD5M",
+      "identify": [{"flashforge_udp.model": "AD5M"}],
+      "recipes": [
+        {"when": {"state": "stock", "stock_version": ">=3.1.5 <3.2"}, "recipe": "ad5m_stock"}
+      ],
+      "restore": "ad5m_restore",
+      "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/ad5m"}
+    }
+  ]
+}

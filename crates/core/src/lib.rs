@@ -3,6 +3,7 @@
 //! Installer logic for HelixScreen. This crate must not depend on Tauri.
 
 pub mod facts;
+pub mod identify;
 pub mod manifest;
 pub mod manifest_sig;
 pub mod version;
