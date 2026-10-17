@@ -4,14 +4,14 @@
 //! point of no return: before it a stop is a refusal (nothing changed), after it every stop is a
 //! committed failure the UI must turn into recovery.
 
+use crate::facts::Facts;
 use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Choice, Login, Manifest, Step};
-use crate::run_state::{self, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
+use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
 use crate::transport::{Drive, Env};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub enum Prompt {
 
 /// What the user answered. Deserialize-only: a `Login` carries a password, so an input is never
 /// written anywhere.
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "input", content = "value", rename_all = "snake_case")]
 pub enum Input {
     Next,
@@ -54,18 +54,6 @@ pub enum Input {
     Login(Login),
     Drive(String),
     Cancel,
-}
-
-impl fmt::Debug for Input {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Input::Next => f.write_str("Next"),
-            Input::Choice(c) => f.debug_tuple("Choice").field(c).finish(),
-            Input::Login(l) => write!(f, "Login({:?}, <password>)", l.user),
-            Input::Drive(d) => f.debug_tuple("Drive").field(d).finish(),
-            Input::Cancel => f.write_str("Cancel"),
-        }
-    }
 }
 
 /// `step` is the 0-based index into the recipe; `total` is its length.
@@ -173,6 +161,9 @@ impl Runner {
             let reason = format!("recipe {} is not in the manifest", self.state.recipe_id);
             return self.fail(reason, None);
         };
+        if !self.pinned_to(steps) {
+            return self.manifest_changed();
+        }
         if matches!(input, Some(Input::Cancel)) {
             return self.cancel();
         }
@@ -182,38 +173,53 @@ impl Runner {
         loop {
             let index = self.state.step_index;
             let Some(step) = steps.get(index) else {
+                if index > steps.len() {
+                    let reason = format!("the saved run is at step {index} of {}", steps.len());
+                    return self.fail(reason, None);
+                }
                 self.state.status = RunStatus::Done;
                 self.log(index, "recipe complete".into());
                 return self.persist(Event::Done);
             };
-            let outcome = self.run_step(&manifest, step, input.take()).await;
-            self.calls += 1;
-            // A prompt alone changes nothing, and a refusal says nothing changed; any other
-            // outcome means the committing step has started acting on the printer.
-            if step.commits()
-                && !self.state.committed
-                && !matches!(
-                    outcome,
-                    StepOutcome::NeedInput(_) | StepOutcome::Refused { .. }
-                )
-            {
+
+            if self.calls == 0 && self.state.started_step == Some(index) && !step.is_idempotent() {
+                match input.take() {
+                    Some(Input::Choice(c)) if c == RERUN => {}
+                    Some(Input::Choice(c)) if c == STOP => {
+                        let reason = "stopped: this step may already have run on the printer";
+                        return self.fail(reason.into(), None);
+                    }
+                    _ => return self.persist(Event::NeedInput(rerun_prompt())),
+                }
+            }
+
+            // Recorded on disk before the step acts, so a crash inside it resumes as committed.
+            let mut changed = false;
+            if step.commits() && !self.state.committed && commits_on(step, input.as_ref()) {
                 self.state.committed = true;
                 self.log(index, "passed the point of no return".into());
+                changed = true;
             }
+            if self.state.started_step != Some(index) {
+                self.state.started_step = Some(index);
+                changed = true;
+            }
+            if changed {
+                if let Err(e) = self.autosave() {
+                    return self.fail(format!("could not save install progress: {e}"), None);
+                }
+            }
+
+            let outcome = self.run_step(&manifest, step, input.take()).await;
+            self.calls += 1;
             match outcome {
                 StepOutcome::Done => {
                     if step.commits() && self.state.identity.is_none() {
-                        self.state.identity = Some(
-                            IDENTITY_KEYS
-                                .iter()
-                                .filter_map(|k| {
-                                    self.state.facts.get(*k).map(|v| (k.to_string(), v.clone()))
-                                })
-                                .collect(),
-                        );
+                        self.record_identity(index);
                     }
                     self.log(index, format!("{}: done", step.type_name()));
                     self.state.step_index += 1;
+                    self.state.started_step = None;
                     self.calls = 0;
                     if let Err(e) = self.autosave() {
                         let reason = format!("could not save install progress: {e}");
@@ -241,6 +247,55 @@ impl Runner {
                 StepOutcome::Failed { reason, help } => return self.fail(reason, help),
             }
         }
+    }
+
+    /// True when the run belongs to this manifest and recipe. A run that has not started is
+    /// pinned to them here; one part-way through without a pin cannot be trusted.
+    fn pinned_to(&mut self, steps: &[Step]) -> bool {
+        let manifest = &self.manifest.sha256;
+        let recipe = recipe_sha256(steps);
+        match (&self.state.manifest_sha256, &self.state.recipe_sha256) {
+            (Some(m), Some(r)) => m == manifest && *r == recipe,
+            (None, None) if self.state.step_index == 0 && !self.state.committed => {
+                self.state.manifest_sha256 = Some(manifest.clone());
+                self.state.recipe_sha256 = Some(recipe);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn manifest_changed(&mut self) -> Event {
+        let doc = self.printer_doc();
+        if self.state.committed {
+            let help = format!(
+                "The installer's printer data changed mid-install; follow the recovery guide: {doc}"
+            );
+            self.fail(
+                "the installer's printer data changed since this install started".into(),
+                Some(help),
+            )
+        } else {
+            self.refuse(
+                doc,
+                "the installer's printer data changed; start again".into(),
+            )
+        }
+    }
+
+    /// Captures the facts that name the printer, for re-identification after the commit.
+    fn record_identity(&mut self, index: usize) {
+        let identity: Facts = IDENTITY_KEYS
+            .iter()
+            .filter_map(|k| self.state.facts.get(*k).map(|v| (k.to_string(), v.clone())))
+            .collect();
+        if identity.is_empty() {
+            self.log(
+                index,
+                "no model or serial is known at the point of no return; the printer cannot be re-identified".into(),
+            );
+        }
+        self.state.identity = Some(identity);
     }
 
     async fn run_step(
@@ -322,10 +377,12 @@ impl Runner {
             return event;
         };
         let reason = format!("could not save install progress: {e}");
-        self.state.status = RunStatus::Failed {
-            reason: reason.clone(),
-            help: None,
-        };
+        if !self.state.status.is_finished() {
+            self.state.status = RunStatus::Failed {
+                reason: reason.clone(),
+                help: None,
+            };
+        }
         Event::Failed {
             committed: self.state.committed,
             step: self.state.step_index,
@@ -347,6 +404,31 @@ impl Runner {
             step,
             text,
         });
+    }
+}
+
+const RERUN: &str = "retry";
+const STOP: &str = "stop";
+
+fn rerun_prompt() -> Prompt {
+    let choice = |value: &str, label: &str| Choice {
+        value: value.into(),
+        label: label.into(),
+        image: None,
+    };
+    Prompt::Ask {
+        question: "This step may already have run on the printer. Run it again?".into(),
+        choices: vec![choice(RERUN, "Run it again"), choice(STOP, "Stop")],
+    }
+}
+
+/// When a committing step passes the point of no return: a step that only asks the user
+/// commits on the answer that tells the installer to act; every other step as it starts.
+fn commits_on(step: &Step, input: Option<&Input>) -> bool {
+    match step {
+        Step::Info { .. } | Step::UserAction { .. } => matches!(input, Some(Input::Next)),
+        Step::Ask { .. } => matches!(input, Some(Input::Choice(_))),
+        _ => true,
     }
 }
 

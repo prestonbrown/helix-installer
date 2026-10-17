@@ -2,7 +2,7 @@
 
 use helix_installer_core::manifest::Login;
 use helix_installer_core::transport::fake::{
-    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeSsh,
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
 use helix_installer_core::transport::*;
 use serde_json::json;
@@ -252,6 +252,7 @@ fn env_bundles_fakes() {
         drives: Arc::new(FakeDrives::new()),
         fetch: Arc::new(FakeFetch::new()),
         clock: Arc::new(FakeClock::new()),
+        net: Arc::new(FakeNet::new()),
     };
 }
 

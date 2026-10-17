@@ -69,6 +69,8 @@ pub struct StepCtx<'a> {
     pub manifest: &'a Manifest,
     /// The host the run is pinned to.
     pub host: &'a Host,
+    /// Probe output must go through `record_probe`, which enforces re-identification; write
+    /// here directly only for facts the user supplied or the step itself decided.
     pub facts: &'a mut Facts,
     /// A detached job on the printer, saved with the run so a reopened app can follow it.
     pub job: &'a mut Option<RemoteJob>,
@@ -183,7 +185,7 @@ pub(crate) async fn run_builtin(
             message,
             help,
             ..
-        } => wait_for::run(ctx, *target, *timeout_s, message, help).await,
+        } => wait_for::run(ctx, *target, *timeout_s, message, help, input).await,
         Step::MoonrakerGcode { script, .. } => moonraker::gcode(ctx, script).await,
         Step::MoonrakerUpdate { name, .. } => moonraker::update(ctx, name).await,
         Step::WriteStick { .. }

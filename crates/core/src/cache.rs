@@ -21,6 +21,15 @@ pub fn part_path(cache_dir: &Path, sha256: &str) -> PathBuf {
     cache_dir.join(format!("{sha256}.part"))
 }
 
+/// Lowercase hex sha256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(digest: &[u8]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Lowercase hex sha256 of the file, hashed in chunks so large images never
 /// sit in memory whole.
 pub fn hash_file(path: &Path) -> std::io::Result<String> {
@@ -34,9 +43,5 @@ pub fn hash_file(path: &Path) -> std::io::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(hex(&hasher.finalize()))
 }

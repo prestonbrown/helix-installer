@@ -423,3 +423,34 @@ impl Clock for FakeClock {
         *lock(&self.now) += d;
     }
 }
+
+/// Scripted TCP answers per (host, port); anything unscripted is unreachable.
+#[derive(Default)]
+pub struct FakeNet {
+    answers: Mutex<HashMap<(String, u16), Option<String>>>,
+}
+
+impl FakeNet {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// The port accepts connections and sends `banner` as its first line (`None`: silent).
+    pub fn answer(&self, addr: &str, port: u16, banner: Option<&str>) {
+        lock(&self.answers).insert((addr.into(), port), banner.map(str::to_string));
+    }
+}
+
+#[async_trait]
+impl Net for FakeNet {
+    async fn tcp_banner(
+        &self,
+        host: &Host,
+        port: u16,
+        _timeout: Duration,
+    ) -> Result<Option<String>> {
+        lock(&self.answers)
+            .get(&(host.addr.clone(), port))
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+}

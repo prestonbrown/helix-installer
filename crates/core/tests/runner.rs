@@ -3,11 +3,11 @@
 use async_trait::async_trait;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::{Login, Manifest, Step};
-use helix_installer_core::run_state::{RunState, RunStatus};
+use helix_installer_core::run_state::{recipe_sha256, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
 use helix_installer_core::transport::fake::{
-    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeSsh,
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
 use helix_installer_core::transport::{Clock, Env, ExecOutput, Host};
 use serde_json::{json, Value};
@@ -24,6 +24,7 @@ struct Fakes {
     ssh: FakeSsh,
     fetch: Arc<FakeFetch>,
     clock: Arc<FakeClock>,
+    net: Arc<FakeNet>,
 }
 
 impl Fakes {
@@ -33,6 +34,7 @@ impl Fakes {
             ssh: FakeSsh::new(),
             fetch: Arc::new(FakeFetch::new()),
             clock: Arc::new(FakeClock::new()),
+            net: Arc::new(FakeNet::new()),
         }
     }
     fn env(&self) -> Env {
@@ -42,6 +44,7 @@ impl Fakes {
             drives: Arc::new(FakeDrives::new()),
             fetch: self.fetch.clone(),
             clock: self.clock.clone(),
+            net: self.net.clone(),
         }
     }
 }
@@ -709,4 +712,420 @@ async fn events_serialize_with_a_kind_tag() {
     let input: Input =
         serde_json::from_value(json!({ "input": "choice", "value": "yes" })).unwrap();
     assert!(matches!(input, Input::Choice(c) if c == "yes"));
+}
+
+/// A step handler that never finishes, standing in for the app dying mid-step.
+struct Hang;
+
+#[async_trait]
+impl StepHandler for Hang {
+    async fn run(&self, _: &mut StepCtx<'_>, _: &Step, _: Option<Input>) -> StepOutcome {
+        std::future::pending().await
+    }
+}
+
+/// Fails its first `fail_first` runs, then succeeds; counts every run.
+struct Flaky {
+    fail_first: usize,
+    runs: std::sync::Mutex<usize>,
+}
+
+impl Flaky {
+    fn new(fail_first: usize) -> Arc<Flaky> {
+        Arc::new(Flaky {
+            fail_first,
+            runs: std::sync::Mutex::new(0),
+        })
+    }
+    fn runs(&self) -> usize {
+        *self.runs.lock().unwrap()
+    }
+}
+
+#[async_trait]
+impl StepHandler for Flaky {
+    async fn run(&self, _: &mut StepCtx<'_>, _: &Step, _: Option<Input>) -> StepOutcome {
+        let mut n = self.runs.lock().unwrap();
+        *n += 1;
+        if *n <= self.fail_first {
+            StepOutcome::failed("printer said no")
+        } else {
+            StepOutcome::Done
+        }
+    }
+}
+
+fn is_rerun_question(ev: &Event) -> bool {
+    matches!(ev, Event::NeedInput(Prompt::Ask { question, choices })
+        if question.contains("may already have run")
+            && choices.iter().map(|c| c.value.as_str()).collect::<Vec<_>>() == ["retry", "stop"])
+}
+
+#[tokio::test]
+async fn a_crash_inside_a_committing_step_resumes_as_committed() {
+    let f = Fakes::new();
+    let dir = tempfile::tempdir().unwrap();
+    let m = manifest(json!([
+        { "type": "moonraker_gcode", "script": "FLASH", "commits": true }
+    ]));
+    let mut r = Runner::new(f.env(), m.clone(), state("crash", json!({})))
+        .with_handler("moonraker_gcode", Arc::new(Hang))
+        .with_autosave(dir.path().to_path_buf());
+    let timed_out = tokio::time::timeout(Duration::from_millis(100), r.advance(None)).await;
+    assert!(timed_out.is_err());
+    drop(r);
+
+    let saved = Runner::load(dir.path(), "crash").unwrap();
+    assert!(saved.committed);
+    assert_eq!(saved.started_step, Some(0));
+    let mut r = Runner::new(f.env(), m, saved).with_autosave(dir.path().to_path_buf());
+    let ev = r.advance(None).await;
+    assert!(is_rerun_question(&ev), "{ev:?}");
+    assert!(matches!(
+        r.advance(Some(Input::Cancel)).await,
+        Event::Failed {
+            committed: true,
+            ..
+        }
+    ));
+    let ids: Vec<_> = Runner::list_unfinished(dir.path())
+        .into_iter()
+        .map(|s| s.run_id)
+        .collect();
+    assert_eq!(ids, vec!["crash".to_string()]);
+    assert!(f.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn a_committing_user_action_commits_on_confirm_even_if_verify_fails() {
+    let f = Fakes::new();
+    let m = manifest(json!([{
+        "type": "user_action", "text": "Flash", "commits": true,
+        "verify": { "moonraker": "printer_info" }
+    }]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    r.advance(None).await;
+    assert!(!r.state().committed);
+    assert!(matches!(
+        r.advance(Some(Input::Next)).await,
+        Event::Failed {
+            committed: true,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn retrying_a_non_idempotent_step_asks_first_and_retry_runs_it() {
+    let f = Fakes::new();
+    let flaky = Flaky::new(1);
+    let m = manifest(json!([{ "type": "moonraker_gcode", "script": "X" }]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})))
+        .with_handler("moonraker_gcode", flaky.clone());
+    assert!(matches!(r.advance(None).await, Event::Failed { .. }));
+    let ev = r.advance(None).await;
+    assert!(is_rerun_question(&ev), "{ev:?}");
+    assert_eq!(flaky.runs(), 1);
+    // Any other answer asks again.
+    assert!(is_rerun_question(&r.advance(Some(Input::Next)).await));
+    assert!(matches!(
+        r.advance(Some(Input::Choice("retry".into()))).await,
+        Event::Done
+    ));
+    assert_eq!(flaky.runs(), 2);
+    assert_eq!(r.state().started_step, None);
+}
+
+#[tokio::test]
+async fn retrying_a_non_idempotent_step_can_stop_instead() {
+    let f = Fakes::new();
+    let flaky = Flaky::new(1);
+    let m = manifest(json!([
+        { "type": "info", "text": "go", "commits": true },
+        { "type": "ssh_run", "command": "x", "timeout_s": 5 }
+    ]));
+    let mut r =
+        Runner::new(f.env(), m, state("run1", json!({}))).with_handler("ssh_run", flaky.clone());
+    r.advance(None).await;
+    assert!(matches!(
+        r.advance(Some(Input::Next)).await,
+        Event::Failed { .. }
+    ));
+    assert!(is_rerun_question(&r.advance(None).await));
+    assert!(matches!(
+        r.advance(Some(Input::Choice("stop".into()))).await,
+        Event::Failed {
+            committed: true,
+            step: 1,
+            ..
+        }
+    ));
+    assert_eq!(flaky.runs(), 1);
+}
+
+#[tokio::test]
+async fn an_idempotent_step_is_not_questioned_on_retry() {
+    let f = Fakes::new();
+    let m = manifest(json!([
+        { "type": "probe", "moonraker": "printer_info" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(r.advance(None).await, Event::Failed { .. }));
+    f.moonraker.set_printer_info(ADDR, json!({}));
+    assert!(matches!(r.advance(None).await, Event::Done));
+}
+
+async fn resume_with_changed_manifest(commit: bool, change_recipe: bool) -> Event {
+    let f = Fakes::new();
+    let dir = tempfile::tempdir().unwrap();
+    let steps = json!([
+        { "type": "info", "text": "one", "commits": commit },
+        { "type": "info", "text": "two" }
+    ]);
+    let m = manifest(steps);
+    let mut r = Runner::new(f.env(), m.clone(), state("run1", json!({})));
+    r.advance(None).await;
+    r.advance(Some(Input::Next)).await;
+    r.save(dir.path()).unwrap();
+    let changed = if change_recipe {
+        manifest(json!([
+            { "type": "info", "text": "one", "commits": commit },
+            { "type": "info", "text": "two, reworded" }
+        ]))
+    } else {
+        let mut other = (*m).clone();
+        other.sha256 = "0".repeat(64);
+        Arc::new(other)
+    };
+    let mut r = Runner::new(f.env(), changed, Runner::load(dir.path(), "run1").unwrap());
+    r.advance(Some(Input::Next)).await
+}
+
+#[tokio::test]
+async fn a_changed_recipe_or_manifest_refuses_a_resume_before_commit() {
+    for change_recipe in [true, false] {
+        match resume_with_changed_manifest(false, change_recipe).await {
+            Event::Refused { doc, reason } => {
+                assert_eq!(doc, PRINTER_DOC);
+                assert!(reason.contains("start again"), "{reason}");
+            }
+            e => panic!("expected Refused, got {e:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_changed_recipe_or_manifest_fails_a_resume_after_commit() {
+    for change_recipe in [true, false] {
+        match resume_with_changed_manifest(true, change_recipe).await {
+            Event::Failed {
+                committed, help, ..
+            } => {
+                assert!(committed);
+                assert!(help.unwrap_or_default().contains("recovery guide"));
+            }
+            e => panic!("expected Failed, got {e:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_step_index_past_the_end_is_never_done() {
+    let f = Fakes::new();
+    let m = manifest(json!([{ "type": "info", "text": "one" }]));
+    let mut s = state("run1", json!({}));
+    s.manifest_sha256 = Some(m.sha256.clone());
+    s.recipe_sha256 = Some(recipe_sha256(&m.recipes["r"]));
+    s.step_index = 5;
+    let mut r = Runner::new(f.env(), m, s);
+    assert!(matches!(r.advance(None).await, Event::Failed { .. }));
+}
+
+#[tokio::test]
+async fn an_unpinned_state_part_way_through_is_not_trusted() {
+    let f = Fakes::new();
+    let m = manifest(json!([
+        { "type": "info", "text": "one" },
+        { "type": "info", "text": "two" }
+    ]));
+    let mut s = state("run1", json!({}));
+    s.step_index = 1;
+    let mut r = Runner::new(f.env(), m, s);
+    assert!(matches!(r.advance(None).await, Event::Refused { .. }));
+}
+
+#[tokio::test]
+async fn wait_for_ssh_reads_the_banner_without_logging_in() {
+    let f = Fakes::new();
+    f.net.answer(ADDR, 22, Some("SSH-2.0-dropbear_2022.83"));
+    let m = manifest(json!([
+        { "type": "wait_for", "target": "ssh", "timeout_s": 10, "message": "w" }
+    ]));
+    let mut r = Runner::new(f.env(), m.clone(), state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+
+    let f = Fakes::new();
+    f.net.answer(ADDR, 22, Some("HTTP/1.1 400 Bad Request"));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Failed { .. }));
+}
+
+#[tokio::test]
+async fn wait_for_port_needs_only_a_connection() {
+    let m = manifest(json!([
+        { "type": "wait_for", "target": { "port": 8080 }, "timeout_s": 10, "message": "w" }
+    ]));
+    let f = Fakes::new();
+    f.net.answer(ADDR, 8080, None);
+    let mut r = Runner::new(f.env(), m.clone(), state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+
+    let f = Fakes::new();
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Failed { .. }));
+}
+
+#[tokio::test]
+async fn tcp_port_probe_records_whether_the_port_answers() {
+    let m = manifest(json!([
+        { "type": "probe", "tcp_port": 4408, "fact": "fluidd_open" }
+    ]));
+    for open in [true, false] {
+        let f = Fakes::new();
+        if open {
+            f.net.answer(ADDR, 4408, None);
+        }
+        let mut r = Runner::new(f.env(), m.clone(), state("run1", json!({})));
+        assert!(matches!(r.advance(None).await, Event::Done));
+        assert_eq!(r.state().facts.get("fluidd_open"), Some(&json!(open)));
+    }
+}
+
+fn helix_wait() -> Arc<Manifest> {
+    manifest(json!([
+        { "type": "wait_for", "target": "helix_service", "timeout_s": 10, "message": "w",
+          "help": "Power-cycle the printer" }
+    ]))
+}
+
+#[tokio::test]
+async fn wait_for_helix_service_reads_moonraker_service_state() {
+    let f = Fakes::new();
+    f.moonraker.set_system_info(
+        ADDR,
+        json!({ "system_info": { "service_state": {
+            "helixscreen": { "active_state": "active", "sub_state": "running" }
+        }}}),
+    );
+    let mut r = Runner::new(f.env(), helix_wait(), state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+}
+
+#[tokio::test]
+async fn wait_for_helix_service_falls_back_to_pidof_over_a_held_login() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_system_info(ADDR, json!({ "system_info": { "service_state": {} } }));
+    f.ssh.accept(ADDR, "root", PASSWORD);
+    f.ssh.on_command("pidof helix-screen", out("1234\n"));
+    let m = manifest(json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "wait_for", "target": "helix_service", "timeout_s": 10, "message": "w" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})))
+        .with_handler("ssh_login", Arc::new(TestLogin));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    assert!(f.ssh.commands().contains(&"pidof helix-screen".to_string()));
+}
+
+#[tokio::test]
+async fn wait_for_helix_service_asks_the_user_when_nothing_can_tell() {
+    for (answer, done) in [("yes", true), ("no", false)] {
+        let f = Fakes::new();
+        f.moonraker
+            .set_system_info(ADDR, json!({ "system_info": { "service_state": {} } }));
+        let mut r = Runner::new(f.env(), helix_wait(), state("run1", json!({})));
+        match settle(&mut r, None).await {
+            Event::NeedInput(Prompt::Ask { question, choices }) => {
+                assert!(question.contains("Is HelixScreen showing"), "{question}");
+                let values: Vec<_> = choices.iter().map(|c| c.value.as_str()).collect();
+                assert_eq!(values, ["yes", "no"]);
+            }
+            e => panic!("expected Ask, got {e:?}"),
+        }
+        let ev = r.advance(Some(Input::Choice(answer.into()))).await;
+        if done {
+            assert!(matches!(ev, Event::Done), "{ev:?}");
+        } else {
+            match ev {
+                Event::Failed { help, .. } => {
+                    assert_eq!(help.as_deref(), Some("Power-cycle the printer"))
+                }
+                e => panic!("expected Failed, got {e:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_login_never_prints_its_password() {
+    let l = Login {
+        user: "root".into(),
+        password: PASSWORD.into(),
+    };
+    let shown = format!("{l:?} {:?}", Input::Login(l.clone()));
+    assert!(shown.contains("root"));
+    assert!(!shown.contains(PASSWORD), "{shown}");
+}
+
+/// Refuses after replacing the autosave directory with a file, so the save that records the
+/// refusal fails.
+struct RefuseAndBreakSaves(std::path::PathBuf);
+
+#[async_trait]
+impl StepHandler for RefuseAndBreakSaves {
+    async fn run(&self, _: &mut StepCtx<'_>, _: &Step, _: Option<Input>) -> StepOutcome {
+        std::fs::remove_dir_all(&self.0).unwrap();
+        std::fs::write(&self.0, "not a directory").unwrap();
+        StepOutcome::Refused {
+            doc: "https://doc/fw".into(),
+            reason: "too old".into(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_save_error_does_not_turn_a_refusal_into_a_failure() {
+    let f = Fakes::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let m = manifest(json!([
+        { "type": "require", "fact": "fw_version", "range": ">=2", "doc": "https://doc/fw" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({ "fw_version": "1" })))
+        .with_handler("require", Arc::new(RefuseAndBreakSaves(runs.clone())))
+        .with_autosave(runs);
+    let ev = r.advance(None).await;
+    assert!(
+        matches!(ev, Event::Failed { ref reason, .. } if reason.contains("save")),
+        "{ev:?}"
+    );
+    assert!(matches!(r.state().status, RunStatus::Refused { .. }));
+}
+
+#[tokio::test]
+async fn committing_without_a_model_or_serial_is_logged() {
+    let f = Fakes::new();
+    let m = manifest(json!([{ "type": "info", "text": "go", "commits": true }]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    r.advance(None).await;
+    r.advance(Some(Input::Next)).await;
+    assert!(
+        r.state()
+            .log
+            .iter()
+            .any(|e| e.text.contains("cannot be re-identified")),
+        "{:?}",
+        r.state().log
+    );
 }

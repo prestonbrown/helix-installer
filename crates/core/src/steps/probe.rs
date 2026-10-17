@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 const SSH_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const TCP_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub async fn run(ctx: &mut StepCtx<'_>, probe: &Probe) -> StepOutcome {
     let found = match gather(ctx, probe).await {
@@ -58,7 +59,15 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
                 }
             }
         }
-        Probe::TcpPort { .. } => Err("probing a TCP port is not supported".into()),
+        Probe::TcpPort { tcp_port, fact } => {
+            let open = ctx
+                .env
+                .net
+                .tcp_banner(ctx.host, *tcp_port, TCP_PROBE_TIMEOUT)
+                .await
+                .is_ok();
+            Ok(Facts::from([(fact.clone(), Value::Bool(open))]))
+        }
     }
 }
 
@@ -110,10 +119,10 @@ pub fn moonraker_facts(kind: MoonrakerProbe, v: &Value) -> Facts {
     f
 }
 
-/// True when Moonraker's `machine.system_info` answer shows the HelixScreen service active.
-pub fn helix_service_active(system_info: &Value) -> bool {
+/// Whether Moonraker's `machine.system_info` answer shows the HelixScreen service active;
+/// `None` when it lists no such service (init.d printers, or not installed yet).
+pub fn helix_service_active(system_info: &Value) -> Option<bool> {
     system_info
-        .pointer("/system_info/service_state/helixscreen/active_state")
-        .and_then(Value::as_str)
-        == Some("active")
+        .pointer("/system_info/service_state/helixscreen")
+        .map(|s| s.get("active_state").and_then(Value::as_str) == Some("active"))
 }

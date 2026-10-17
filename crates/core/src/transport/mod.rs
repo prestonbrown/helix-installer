@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The four interfaces every install step talks to the outside world through,
+//! The interfaces every install step talks to the outside world through,
 //! plus the clock. Recipes depend only on these traits so they run end to end
 //! against the scriptable fakes in `fake`.
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
+pub mod net_tcp;
 
 use crate::manifest::Login;
 use async_trait::async_trait;
@@ -137,6 +138,15 @@ pub trait Fetch: Send + Sync {
 }
 
 #[async_trait]
+pub trait Net: Send + Sync {
+    /// Connects to `port` and returns the first line the server sends within `timeout`:
+    /// `Ok(None)` when it connected but stayed silent, `Unreachable` when the connection was
+    /// refused or never answered.
+    async fn tcp_banner(&self, host: &Host, port: u16, timeout: Duration)
+        -> Result<Option<String>>;
+}
+
+#[async_trait]
 pub trait Clock: Send + Sync {
     fn now(&self) -> SystemTime;
     async fn sleep(&self, d: Duration);
@@ -149,4 +159,5 @@ pub struct Env {
     pub drives: Arc<dyn Drives>,
     pub fetch: Arc<dyn Fetch>,
     pub clock: Arc<dyn Clock>,
+    pub net: Arc<dyn Net>,
 }

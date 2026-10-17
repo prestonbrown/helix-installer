@@ -3,7 +3,7 @@
 use helix_installer_core::manifest::Artifact;
 use helix_installer_core::steps::download::{fetch_artifact, DownloadError};
 use helix_installer_core::transport::fake::{
-    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeSsh,
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
 use helix_installer_core::transport::{Env, TransportError};
 use sha2::{Digest, Sha256};
@@ -25,6 +25,7 @@ fn env_with(fetch: Arc<FakeFetch>) -> Env {
         drives: Arc::new(FakeDrives::new()),
         fetch,
         clock: Arc::new(FakeClock::new()),
+        net: Arc::new(FakeNet::new()),
     }
 }
 

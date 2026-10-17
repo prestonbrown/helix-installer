@@ -3,10 +3,12 @@
 //! What a run has done so far, written to disk after every step so an install outlives the app.
 //! Nothing in this tree may hold a secret: the SSH password lives only in the runner's memory.
 
+use crate::cache::sha256_hex;
 use crate::facts::Facts;
+use crate::manifest::Step;
 use crate::transport::{Host, RemoteJob};
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Facts that name the physical printer. Once the point of no return is passed, a probe that
@@ -59,6 +61,16 @@ pub struct RunState {
     /// The `IDENTITY_KEYS` facts as they stood when the committing step completed.
     #[serde(default)]
     pub identity: Option<Facts>,
+    /// sha256 of the manifest and of the recipe's canonical JSON the run started with. A run
+    /// only continues against the same recipe it was planned with.
+    #[serde(default)]
+    pub manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub recipe_sha256: Option<String>,
+    /// The step that was dispatched and has not completed: if it is still current when the run
+    /// resumes or retries, it may already have acted on the printer.
+    #[serde(default)]
+    pub started_step: Option<usize>,
     /// A detached job on the printer that the current step is following.
     pub job: Option<RemoteJob>,
     pub log: Vec<LogEntry>,
@@ -83,11 +95,20 @@ impl RunState {
             facts,
             committed: false,
             identity: None,
+            manifest_sha256: None,
+            recipe_sha256: None,
+            started_step: None,
             job: None,
             log: Vec::new(),
             status: RunStatus::Running,
         }
     }
+}
+
+/// sha256 of the recipe's JSON. Serialization is deterministic (declared field order, sorted
+/// maps), so the same steps always hash the same.
+pub fn recipe_sha256(steps: &[Step]) -> String {
+    sha256_hex(&serde_json::to_vec(steps).unwrap_or_default())
 }
 
 /// The run id becomes a file name, so it may not name a path.
@@ -112,7 +133,14 @@ pub(crate) fn save(state: &RunState, dir: &Path) -> io::Result<()> {
     let json = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
     std::fs::create_dir_all(dir)?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(&json)?;
+        f.sync_all()
+    });
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     std::fs::rename(&tmp, &path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })

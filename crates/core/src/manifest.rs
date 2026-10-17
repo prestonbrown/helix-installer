@@ -2,6 +2,7 @@
 
 //! The signed manifest that carries every piece of printer knowledge the installer acts on.
 
+use crate::cache::sha256_hex;
 use crate::manifest_sig::verify_signature;
 use crate::version::{FwVersion, VersionRange};
 use serde::de::{self, Deserializer};
@@ -39,6 +40,10 @@ impl std::error::Error for ManifestError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Lowercase hex sha256 of the verified bytes this manifest was parsed from; empty when it
+    /// was not parsed by `verify_and_parse`. A run is pinned to it.
+    #[serde(skip)]
+    pub sha256: String,
     pub manifest_version: u32,
     pub min_app_version: String,
     pub printers: Vec<Printer>,
@@ -190,11 +195,21 @@ pub struct Verified {
     pub firmware: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Login {
     pub user: String,
     pub password: String,
+}
+
+/// Never prints the password, so a logged login cannot leak it.
+impl fmt::Debug for Login {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Login")
+            .field("user", &self.user)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +377,14 @@ impl Step {
         }
     }
 
+    /// False for steps that act on the printer in a way that is not safe to repeat blindly.
+    pub fn is_idempotent(&self) -> bool {
+        !matches!(
+            self,
+            Step::MoonrakerGcode { .. } | Step::SshRun { .. } | Step::HelixInstall { .. }
+        )
+    }
+
     /// True for the step that marks the point of no return.
     pub fn commits(&self) -> bool {
         match self {
@@ -443,8 +466,9 @@ pub fn verify_and_parse(
         });
     }
 
-    let manifest: Manifest =
+    let mut manifest: Manifest =
         serde_json::from_slice(bytes).map_err(|e| ManifestError::Malformed(e.to_string()))?;
+    manifest.sha256 = sha256_hex(bytes);
     for (name, steps) in &manifest.recipes {
         for (i, step) in steps.iter().enumerate() {
             if matches!(step, Step::Probe { .. }) && step.probe().is_none() {
