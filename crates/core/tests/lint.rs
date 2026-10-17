@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use helix_installer_core::lint::{lint, lint_with, LintError};
+use helix_installer_core::manifest::Manifest;
+use serde_json::{json, Value};
+use std::process::Command;
+
+fn base() -> Value {
+    json!({
+        "manifest_version": 1,
+        "min_app_version": "0.1.0",
+        "artifacts": {
+            "fw": {"url": "https://example.org/fw.bin", "sha256": "a".repeat(64)}
+        },
+        "printers": [{
+            "id": "p1", "name": "Printer One", "photo": "p1.png",
+            "identify": [{"model": "p1"}],
+            "recipes": [{"when": {"state": "stock"}, "recipe": "install"}],
+            "restore": "restore",
+            "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/p1"},
+            "verified": {"by": "me", "date": "2026-10-01", "firmware": "1.0"}
+        }],
+        "recipes": {
+            "install": [
+                {"type": "info", "text": "hi", "image": "step.png"},
+                {"type": "download", "artifact": "fw"},
+                {"type": "helix_install", "platform": "armv7"}
+            ],
+            "restore": [{"type": "ssh_run", "command": "true", "timeout_s": 5}]
+        }
+    })
+}
+
+fn assets() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    for f in ["p1.png", "step.png"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    d
+}
+
+fn run(v: Value, allow_unverified: bool) -> Vec<LintError> {
+    let m: Manifest = serde_json::from_value(v).unwrap();
+    lint_with(&m, assets().path(), allow_unverified)
+}
+
+fn only(v: Value, needle: &str) {
+    let errs = run(v, false);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains(needle), "{errs:?}");
+}
+
+#[test]
+fn valid_manifest_is_clean() {
+    let m: Manifest = serde_json::from_value(base()).unwrap();
+    assert_eq!(lint(&m, assets().path()), vec![]);
+}
+
+#[test]
+fn bad_sha_and_url() {
+    let mut v = base();
+    v["artifacts"]["fw"]["sha256"] = json!("abc");
+    only(v, "sha256");
+    let mut v = base();
+    v["artifacts"]["fw"]["url"] = json!("http://example.org/fw.bin");
+    only(v, "https");
+}
+
+#[test]
+fn fallback_must_refuse_with_doc() {
+    let mut v = base();
+    v["printers"][0]["fallback"]["refuse"] = json!(false);
+    only(v, "refuse");
+    let mut v = base();
+    v["printers"][0]["fallback"]["doc"] = json!("");
+    only(v, "doc");
+}
+
+#[test]
+fn unknown_restore_and_recipe() {
+    let mut v = base();
+    v["printers"][0]["restore"] = json!("nope");
+    v["recipes"]["restore"] = json!([{"type": "helix_install", "platform": "armv7"}]);
+    only(v, "restore");
+    let mut v = base();
+    v["printers"][0]["recipes"][0]["recipe"] = json!("nope");
+    only(v, "unknown recipe");
+}
+
+#[test]
+fn unknown_artifact() {
+    let mut v = base();
+    v["recipes"]["install"][1]["artifact"] = json!("nope");
+    only(v, "unknown artifact");
+}
+
+#[test]
+fn missing_images() {
+    let mut v = base();
+    v["printers"][0]["photo"] = json!("missing.png");
+    only(v, "missing.png");
+    let mut v = base();
+    v["recipes"]["install"][0]["image"] = json!("../etc/passwd");
+    only(v, "relative");
+}
+
+#[test]
+fn terminal_step_rule() {
+    let mut v = base();
+    v["recipes"]["install"] = json!([{"type": "info", "text": "x"}]);
+    only(v, "last step");
+    // SshRun is only a legal ending for a restore recipe.
+    let mut v = base();
+    v["recipes"]["install"] = json!([{"type": "ssh_run", "command": "true", "timeout_s": 5}]);
+    only(v, "last step");
+    let mut v = base();
+    v["recipes"]["install"] =
+        json!([{"type": "wait_for", "target": "moonraker", "timeout_s": 5, "message": "m"}]);
+    only(v, "last step");
+    let mut v = base();
+    v["recipes"]["install"] =
+        json!([{"type": "wait_for", "target": "helix_service", "timeout_s": 5, "message": "m"}]);
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn at_most_one_commit_step() {
+    let mut v = base();
+    v["recipes"]["install"][1]["commits"] = json!(true);
+    v["recipes"]["install"][2]["commits"] = json!(true);
+    only(v, "commits");
+}
+
+#[test]
+fn empty_when_is_an_error() {
+    let mut v = base();
+    v["printers"][0]["recipes"][0]["when"] = json!({});
+    only(v, "empty when");
+}
+
+#[test]
+fn overlapping_ranges_are_flagged() {
+    let mut v = base();
+    v["printers"][0]["recipes"] = json!([
+        {"when": {"fw_version": ">=1.0 <=2.0"}, "recipe": "install"},
+        {"when": {"fw_version": ">=1.5"}, "recipe": "restore"}
+    ]);
+    only(v, "same facts");
+}
+
+#[test]
+fn disjoint_choices_pass() {
+    let mut v = base();
+    v["printers"][0]["recipes"] = json!([
+        {"when": {"fw_version": "<1.5"}, "recipe": "install"},
+        {"when": {"fw_version": ">=1.5"}, "recipe": "restore"}
+    ]);
+    assert_eq!(run(v, false), vec![]);
+    let mut v = base();
+    v["printers"][0]["recipes"] = json!([
+        {"when": {"state": "stock"}, "recipe": "install"},
+        {"when": {"state": "helix"}, "recipe": "restore"}
+    ]);
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn unverified_printer_needs_the_flag() {
+    let mut v = base();
+    v["printers"][0].as_object_mut().unwrap().remove("verified");
+    only(v.clone(), "verified");
+    assert_eq!(run(v, true), vec![]);
+}
+
+#[test]
+fn restore_recipe_may_end_in_gcode() {
+    let mut v = base();
+    v["recipes"]["restore"] = json!([{"type": "moonraker_gcode", "script": "FIRMWARE_RESTART"}]);
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn binary_prints_errors_and_exits_nonzero() {
+    let dir = assets();
+    let mut v = base();
+    v["artifacts"]["fw"]["sha256"] = json!("abc");
+    let path = dir.path().join("m.json");
+    std::fs::write(&path, v.to_string()).unwrap();
+    let bin = env!("CARGO_BIN_EXE_manifest-lint");
+    let out = Command::new(bin)
+        .arg(&path)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.starts_with("fw: "), "{stdout}");
+
+    std::fs::write(&path, base().to_string()).unwrap();
+    let out = Command::new(bin)
+        .arg(&path)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+}

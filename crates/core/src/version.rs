@@ -172,6 +172,30 @@ impl VersionRange {
         &self.source
     }
 
+    /// Versions at and around every bound: enough to tell whether two ranges can accept the same
+    /// version, since membership only changes at a bound.
+    pub fn sample_versions(&self) -> Vec<FwVersion> {
+        let mut out = Vec::new();
+        for c in self.alternatives.iter().flatten() {
+            let base = match c {
+                Comparator::Cmp(_, v) => v.0.clone(),
+                Comparator::Prefix(p) => p.clone(),
+            };
+            let mut bumped = base.clone();
+            if let Some(last) = bumped.last_mut() {
+                *last = last.saturating_add(1);
+            }
+            let mut lowered = base.clone();
+            if let Some(last) = lowered.last_mut() {
+                *last = last.saturating_sub(1);
+            }
+            let mut deeper = base.clone();
+            deeper.push(1);
+            out.extend([base, bumped, lowered, deeper].map(FwVersion));
+        }
+        out
+    }
+
     pub fn matches(&self, v: &FwVersion) -> bool {
         self.alternatives
             .iter()

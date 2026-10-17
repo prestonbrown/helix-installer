@@ -4,6 +4,7 @@
 
 pub mod facts;
 pub mod identify;
+pub mod lint;
 pub mod manifest;
 pub mod manifest_sig;
 pub mod version;

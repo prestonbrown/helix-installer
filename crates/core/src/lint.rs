@@ -1,0 +1,245 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Static checks on a manifest, run in CI before it is signed and published.
+
+use crate::manifest::{Cond, Manifest, Printer, RecipeChoice, Step, WaitTarget};
+use std::collections::BTreeSet;
+use std::fmt;
+use std::path::{Component, Path};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintError {
+    /// The printer, recipe or artifact id the problem is in.
+    pub subject: String,
+    pub message: String,
+}
+
+impl fmt::Display for LintError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.subject, self.message)
+    }
+}
+
+/// Strict lint: every printer must carry a `verified` record.
+pub fn lint(m: &Manifest, asset_root: &Path) -> Vec<LintError> {
+    lint_with(m, asset_root, false)
+}
+
+pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec<LintError> {
+    let mut errs = Vec::new();
+    let mut err = |subject: &str, message: String| {
+        errs.push(LintError {
+            subject: subject.to_string(),
+            message,
+        })
+    };
+
+    let restores: BTreeSet<&str> = m.printers.iter().map(|p| p.restore.as_str()).collect();
+
+    for (id, a) in &m.artifacts {
+        if a.sha256.len() != 64 || !a.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+            err(id, "sha256 must be 64 hex characters".into());
+        }
+        if !a.url.starts_with("https://") {
+            err(id, "url must be https".into());
+        }
+    }
+
+    for p in &m.printers {
+        lint_printer(m, p, asset_root, allow_unverified, &mut err);
+    }
+
+    for (id, steps) in &m.recipes {
+        lint_recipe(
+            m,
+            id,
+            steps,
+            restores.contains(id.as_str()),
+            asset_root,
+            &mut err,
+        );
+    }
+    errs
+}
+
+fn lint_printer(
+    m: &Manifest,
+    p: &Printer,
+    asset_root: &Path,
+    allow_unverified: bool,
+    err: &mut impl FnMut(&str, String),
+) {
+    if !p.fallback.refuse {
+        err(&p.id, "fallback.refuse must be true".into());
+    }
+    if p.fallback.doc.trim().is_empty() {
+        err(&p.id, "fallback.doc is empty".into());
+    }
+    if !m.recipes.contains_key(&p.restore) {
+        err(
+            &p.id,
+            format!("restore names unknown recipe {:?}", p.restore),
+        );
+    }
+    if let Some(photo) = &p.photo {
+        check_image(&p.id, photo, asset_root, err);
+    }
+    if p.verified.is_none() && !allow_unverified {
+        err(&p.id, "printer has no verified record".into());
+    }
+    for c in &p.recipes {
+        if c.when.is_empty() {
+            err(
+                &p.id,
+                format!(
+                    "choice for {:?} has an empty when and never matches",
+                    c.recipe
+                ),
+            );
+        }
+        if !m.recipes.contains_key(&c.recipe) {
+            err(&p.id, format!("choice names unknown recipe {:?}", c.recipe));
+        }
+    }
+    for (i, a) in p.recipes.iter().enumerate() {
+        for b in &p.recipes[i + 1..] {
+            if choices_overlap(a, b) {
+                err(
+                    &p.id,
+                    format!(
+                        "recipe choices {:?} and {:?} can match the same facts",
+                        a.recipe, b.recipe
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Two choices overlap when they constrain the same keys and every key is satisfiable by one
+/// fact at once. Choices with different key sets are never reported, even where one is
+/// strictly narrower than the other, so this under-reports; the first matching choice wins
+/// in `identify`, so an order-dependent pair is not ambiguous at runtime.
+fn choices_overlap(a: &RecipeChoice, b: &RecipeChoice) -> bool {
+    if a.when.is_empty() || a.when.keys().ne(b.when.keys()) {
+        return false;
+    }
+    a.when
+        .iter()
+        .all(|(k, ca)| jointly_satisfiable(ca, &b.when[k]))
+}
+
+fn jointly_satisfiable(a: &Cond, b: &Cond) -> bool {
+    match (a, b) {
+        (Cond::Contains { .. }, _) | (_, Cond::Contains { .. }) => true,
+        (Cond::Exact(x), Cond::Exact(y)) => x == y,
+        (Cond::Range(x), Cond::Range(y)) => x
+            .sample_versions()
+            .into_iter()
+            .chain(y.sample_versions())
+            .any(|v| x.matches(&v) && y.matches(&v)),
+        _ => false,
+    }
+}
+
+fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str, String)) {
+    let path = Path::new(rel);
+    let escapes = path.is_absolute()
+        || path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        });
+    if escapes {
+        err(
+            subject,
+            format!("image {rel:?} must be a relative path inside the asset root"),
+        );
+    } else if !root.join(path).is_file() {
+        err(
+            subject,
+            format!("image {rel:?} not found under the asset root"),
+        );
+    }
+}
+
+fn step_commits(s: &Step) -> bool {
+    match s {
+        Step::Info { commits, .. }
+        | Step::UserAction { commits, .. }
+        | Step::Ask { commits, .. }
+        | Step::Probe { commits, .. }
+        | Step::Require { commits, .. }
+        | Step::Download { commits, .. }
+        | Step::WriteStick { commits, .. }
+        | Step::WaitFor { commits, .. }
+        | Step::SshLogin { commits, .. }
+        | Step::SshRun { commits, .. }
+        | Step::MoonrakerGcode { commits, .. }
+        | Step::MoonrakerUpdate { commits, .. }
+        | Step::HelixInstall { commits, .. } => *commits,
+    }
+}
+
+fn is_terminal(s: &Step, is_restore: bool) -> bool {
+    match s {
+        Step::WaitFor { target, .. } => *target == WaitTarget::HelixService,
+        Step::HelixInstall { .. } | Step::MoonrakerUpdate { .. } | Step::Require { .. } => true,
+        Step::SshRun { .. } | Step::MoonrakerGcode { .. } => is_restore,
+        _ => false,
+    }
+}
+
+fn lint_recipe(
+    m: &Manifest,
+    id: &str,
+    steps: &[Step],
+    is_restore: bool,
+    asset_root: &Path,
+    err: &mut impl FnMut(&str, String),
+) {
+    match steps.last() {
+        None => err(id, "recipe has no steps".into()),
+        Some(last) if !is_terminal(last, is_restore) => err(
+            id,
+            "last step does not leave the run done or refused".into(),
+        ),
+        _ => {}
+    }
+    if steps.iter().filter(|s| step_commits(s)).count() > 1 {
+        err(id, "more than one step has commits: true".into());
+    }
+    let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {
+        if !m.artifacts.contains_key(name) {
+            err(id, format!("references unknown artifact {name:?}"));
+        }
+    };
+    for (i, s) in steps.iter().enumerate() {
+        match s {
+            Step::Download { artifact: a, .. } => artifact(a, err),
+            Step::WriteStick {
+                artifacts, rename, ..
+            } => {
+                artifacts.iter().for_each(|a| artifact(a, err));
+                rename.keys().for_each(|a| artifact(a, err));
+            }
+            Step::Info {
+                image: Some(img), ..
+            }
+            | Step::UserAction {
+                image: Some(img), ..
+            } => check_image(id, img, asset_root, err),
+            Step::Ask { choices, .. } => {
+                for img in choices.iter().filter_map(|c| c.image.as_deref()) {
+                    check_image(id, img, asset_root, err);
+                }
+            }
+            Step::Probe { .. } if s.probe().is_none() => err(
+                id,
+                format!("step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"),
+            ),
+            _ => {}
+        }
+    }
+}
