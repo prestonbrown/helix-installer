@@ -2,6 +2,9 @@
 
 //! Installer logic for HelixScreen. This crate must not depend on Tauri.
 
+pub mod facts;
+pub mod version;
+
 /// Crate version, reported by the app shell.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
