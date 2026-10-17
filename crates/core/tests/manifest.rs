@@ -155,16 +155,8 @@ fn cond_type_follows_the_key() {
 fn steps_deserialize_into_their_variants() {
     let m = parsed();
     let steps = &m.recipes["ad5m_forge_x"];
-    assert!(matches!(
-        &steps[1],
-        Step::Probe {
-            probe: Probe::Moonraker { .. },
-            ..
-        }
-    ));
-    assert!(
-        matches!(&steps[2], Step::Probe { probe: Probe::Ssh { fact, .. }, .. } if fact == "arch")
-    );
+    assert!(matches!(steps[1].probe(), Some(Probe::Moonraker { .. })));
+    assert!(matches!(steps[2].probe(), Some(Probe::Ssh { fact, .. }) if fact == "arch"));
     assert!(matches!(
         &steps[5],
         Step::WaitFor {
@@ -194,13 +186,18 @@ fn manifest_round_trips_through_json() {
     ));
 }
 
+fn tempdir(_tag: &str) -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
+}
+
 fn cache(dir: &std::path::Path) -> ManifestCache {
     ManifestCache::new(dir.to_path_buf(), &pubkey(), "0.1.0")
 }
 
 #[test]
 fn cache_honours_the_30_day_limit() {
-    let dir = tempdir("age");
+    let td = tempdir("age");
+    let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
     c.store(&bytes, &sign(&bytes), at(1_000_000)).unwrap();
@@ -211,7 +208,8 @@ fn cache_honours_the_30_day_limit() {
 
 #[test]
 fn cache_rejects_a_time_in_the_future() {
-    let dir = tempdir("future");
+    let td = tempdir("future");
+    let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
     c.store(&bytes, &sign(&bytes), at(2_000_000)).unwrap();
@@ -220,7 +218,8 @@ fn cache_rejects_a_time_in_the_future() {
 
 #[test]
 fn cache_reverifies_the_signature() {
-    let dir = tempdir("tamper");
+    let td = tempdir("tamper");
+    let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
     c.store(&bytes, &sign(&bytes), at(1_000_000)).unwrap();
@@ -232,17 +231,76 @@ fn cache_reverifies_the_signature() {
 
 #[test]
 fn empty_cache_loads_nothing() {
-    assert!(cache(&tempdir("empty")).load(at(1)).is_none());
+    assert!(cache(tempdir("empty").path()).load(at(1)).is_none());
 }
 
-fn tempdir(tag: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "helix-installer-manifest-{tag}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).unwrap();
-    p
+fn malformed_after(from: &str, to: &str) {
+    let text = String::from_utf8(manifest_bytes()).unwrap();
+    assert!(text.contains(from), "fixture lacks {from:?}");
+    let bytes = text.replacen(from, to, 1).into_bytes();
+    let err = verify_and_parse(&bytes, &sign(&bytes), &pubkey(), "0.1.0").unwrap_err();
+    assert!(
+        matches!(err, ManifestError::Malformed(_)),
+        "{to:?}: {err:?}"
+    );
+}
+
+#[test]
+fn unknown_fields_are_malformed() {
+    malformed_after("\"id\": \"ad5m\",", "\"id\": \"ad5m\", \"surprise\": 1,");
+    malformed_after(
+        "\"type\": \"info\",",
+        "\"type\": \"info\", \"surprise\": 1,",
+    );
+    malformed_after("\"sha256\"", "\"extra\": 1, \"sha256\"");
+    malformed_after(
+        "\"contains\": \"klipper\"",
+        "\"contains\": \"klipper\", \"extra\": 1",
+    );
+    malformed_after("\"by\": ", "\"extra\": 1, \"by\": ");
+}
+
+#[test]
+fn misspelled_commits_is_malformed() {
+    malformed_after("\"commits\": true", "\"commit\": true");
+    malformed_after(
+        "\"moonraker\": \"printer_info\"",
+        "\"moonraker\": \"printer_info\", \"commit\": true",
+    );
+    malformed_after("\"fact\": \"arch\"", "\"fact\": \"arch\", \"extra\": 1");
+}
+
+#[test]
+fn probe_with_two_shapes_is_malformed() {
+    malformed_after(
+        "\"moonraker\": \"printer_info\"",
+        "\"moonraker\": \"printer_info\", \"tcp_port\": 22",
+    );
+    malformed_after(
+        "\"ssh\": \"uname -m\", \"fact\": \"arch\"",
+        "\"ssh\": \"uname -m\"",
+    );
+}
+
+#[test]
+fn failed_store_keeps_the_previous_cache() {
+    let td = tempdir("partial");
+    let dir = td.path().to_path_buf();
+    let bytes = manifest_bytes();
+    let c = cache(&dir);
+    c.store(&bytes, &sign(&bytes), at(1_000_000)).unwrap();
+
+    let newer = with_min_version("0.1.0")
+        .into_iter()
+        .chain(*b"\n")
+        .collect::<Vec<u8>>();
+    std::fs::remove_file(dir.join("manifest.fetched_at")).unwrap();
+    std::fs::create_dir(dir.join("manifest.fetched_at")).unwrap();
+    assert!(c.store(&newer, &sign(&newer), at(1_000_100)).is_err());
+    std::fs::remove_dir(dir.join("manifest.fetched_at")).unwrap();
+    std::fs::write(dir.join("manifest.fetched_at"), "1000000").unwrap();
+    // The signature file and manifest are replaced as a pair; the old pair would also verify.
+    assert!(c.load(at(1_000_000 + DAY)).is_some());
 }
 
 /// Regenerates the committed test keypair: `cargo test -p helix_installer_core --test manifest -- --ignored regenerate`.

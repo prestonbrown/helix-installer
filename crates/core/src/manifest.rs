@@ -37,6 +37,7 @@ impl fmt::Display for ManifestError {
 impl std::error::Error for ManifestError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub manifest_version: u32,
     pub min_app_version: String,
@@ -46,6 +47,7 @@ pub struct Manifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Printer {
     pub id: String,
     pub name: String,
@@ -64,6 +66,7 @@ pub struct Printer {
 pub type IdentifyRule = BTreeMap<String, Cond>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecipeChoice {
     #[serde(with = "cond_map")]
     pub when: BTreeMap<String, Cond>,
@@ -81,6 +84,7 @@ pub enum Cond {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ContainsRepr {
     contains: String,
 }
@@ -163,6 +167,7 @@ mod rule_list {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub url: String,
     pub sha256: String,
@@ -171,12 +176,14 @@ pub struct Artifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fallback {
     pub refuse: bool,
     pub doc: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Verified {
     pub by: String,
     pub date: String,
@@ -184,12 +191,14 @@ pub struct Verified {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Login {
     pub user: String,
     pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Choice {
     pub value: String,
     pub label: String,
@@ -207,7 +216,7 @@ pub enum MoonrakerProbe {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Probe {
     Moonraker { moonraker: MoonrakerProbe },
     Ssh { ssh: String, fact: String },
@@ -232,7 +241,7 @@ pub enum PlatformSel {
 
 /// One recipe step. `commits` marks the point of no return.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Step {
     Info {
         text: String,
@@ -257,9 +266,17 @@ pub enum Step {
         #[serde(default)]
         commits: bool,
     },
+    /// Exactly one of `moonraker`, `ssh` (with `fact`) or `tcp_port` (with `fact`); `Step::probe`
+    /// returns it as a `Probe`, and `verify_and_parse` rejects any other combination.
     Probe {
-        #[serde(flatten)]
-        probe: Probe,
+        #[serde(default)]
+        moonraker: Option<MoonrakerProbe>,
+        #[serde(default)]
+        ssh: Option<String>,
+        #[serde(default)]
+        tcp_port: Option<u16>,
+        #[serde(default)]
+        fact: Option<String>,
         #[serde(default)]
         commits: bool,
     },
@@ -325,6 +342,42 @@ pub enum Step {
     },
 }
 
+impl Step {
+    /// The probe a `Step::Probe` describes, or `None` for any other step or an invalid combination.
+    pub fn probe(&self) -> Option<Probe> {
+        match self {
+            Step::Probe {
+                moonraker: Some(m),
+                ssh: None,
+                tcp_port: None,
+                fact: None,
+                ..
+            } => Some(Probe::Moonraker { moonraker: *m }),
+            Step::Probe {
+                moonraker: None,
+                ssh: Some(ssh),
+                tcp_port: None,
+                fact: Some(fact),
+                ..
+            } => Some(Probe::Ssh {
+                ssh: ssh.clone(),
+                fact: fact.clone(),
+            }),
+            Step::Probe {
+                moonraker: None,
+                ssh: None,
+                tcp_port: Some(port),
+                fact: Some(fact),
+                ..
+            } => Some(Probe::TcpPort {
+                tcp_port: *port,
+                fact: fact.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// Verifies the signature over `bytes`, rejects a manifest that needs a newer app than
 /// `app_version`, then parses it. An unknown step type is an error, never skipped.
 pub fn verify_and_parse(
@@ -352,7 +405,18 @@ pub fn verify_and_parse(
         });
     }
 
-    serde_json::from_slice(bytes).map_err(|e| ManifestError::Malformed(e.to_string()))
+    let manifest: Manifest =
+        serde_json::from_slice(bytes).map_err(|e| ManifestError::Malformed(e.to_string()))?;
+    for (name, steps) in &manifest.recipes {
+        for (i, step) in steps.iter().enumerate() {
+            if matches!(step, Step::Probe { .. }) && step.probe().is_none() {
+                return Err(ManifestError::Malformed(format!(
+                    "recipe {name} step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"
+                )));
+            }
+        }
+    }
+    Ok(manifest)
 }
 
 /// On-disk copy of the last good manifest, usable offline for `CACHE_MAX_AGE`.
@@ -382,9 +446,19 @@ impl ManifestCache {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
             .as_secs();
         std::fs::create_dir_all(&self.dir)?;
-        std::fs::write(self.path("manifest.json"), bytes)?;
-        std::fs::write(self.path("manifest.json.minisig"), sig)?;
-        std::fs::write(self.path("manifest.fetched_at"), secs.to_string())
+        // The sidecar goes last: until it is renamed, the previous cache is still complete.
+        self.replace("manifest.json", bytes)?;
+        self.replace("manifest.json.minisig", sig.as_bytes())?;
+        self.replace("manifest.fetched_at", secs.to_string().as_bytes())
+    }
+
+    /// Writes `name` via a temp file in the same directory so a reader never sees a partial file.
+    fn replace(&self, name: &str, contents: &[u8]) -> std::io::Result<()> {
+        let tmp = self.path(&format!("{name}.tmp"));
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, self.path(name)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
     }
 
     /// Returns the cached manifest only if it was fetched under 30 days before `now` and still
