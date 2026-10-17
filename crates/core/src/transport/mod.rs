@@ -9,6 +9,7 @@ pub mod fake;
 pub mod fetch_http;
 pub mod moonraker_http;
 pub mod net_tcp;
+pub mod ssh_russh;
 
 use crate::manifest::Login;
 use async_trait::async_trait;
