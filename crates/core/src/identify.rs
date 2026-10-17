@@ -96,6 +96,7 @@ fn printer_matches(p: &Printer, f: &Facts) -> bool {
         .any(|rule| !rule.is_empty() && all_match(rule, f))
 }
 
+/// A printer with no matching choice always refuses; `fallback.refuse` is not consulted.
 fn refuse(printer: &Printer) -> Identified {
     Identified::Refuse {
         printer_id: Some(printer.id.clone()),
@@ -129,7 +130,11 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
     let state = start_state(f);
     let mut facts = f.clone();
     facts.insert("state".to_string(), Value::String(state.as_fact()));
-    match printer.recipes.iter().find(|c| all_match(&c.when, &facts)) {
+    match printer
+        .recipes
+        .iter()
+        .find(|c| !c.when.is_empty() && all_match(&c.when, &facts))
+    {
         Some(choice) => Identified::Recipe {
             printer_id: printer.id.clone(),
             state,

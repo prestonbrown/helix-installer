@@ -224,3 +224,40 @@ fn bool_and_number_facts_compare_by_json_text() {
         Identified::Recipe { ref printer_id, .. } if printer_id == "k1"
     ));
 }
+
+#[test]
+fn empty_when_never_matches() {
+    let mut m = manifest();
+    m.printers[0].recipes[0].when.clear();
+    m.printers[0].recipes.truncate(1);
+    match identify(&m, &probe("k1_rooted_stock")) {
+        Identified::Refuse {
+            printer_id: Some(p),
+            doc,
+            reason,
+        } => {
+            assert_eq!(p, "k1");
+            assert_eq!(doc, "https://helixscreen.org/docs/k1");
+            assert!(reason.contains("Creality K1"), "{reason}");
+        }
+        other => panic!("expected Refuse, got {other:?}"),
+    }
+}
+
+#[test]
+fn helix_installed_must_be_a_json_true() {
+    let mut f = probe("helix_k2");
+    f.insert("helix_installed".into(), "true".into());
+    assert_eq!(start_state(&f), modded());
+}
+
+#[test]
+fn helix_without_version_still_reaches_the_helix_recipe() {
+    let mut f = probe("helix_k2");
+    f.remove("helix_version");
+    assert_eq!(start_state(&f), StartState::Helix(String::new()));
+    assert_eq!(
+        identify(&manifest(), &f),
+        recipe("k2", StartState::Helix(String::new()), "helix_upgrade")
+    );
+}
