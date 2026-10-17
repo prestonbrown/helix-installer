@@ -37,8 +37,13 @@ pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec
     let restores: BTreeSet<&str> = m.printers.iter().map(|p| p.restore.as_str()).collect();
 
     for (id, a) in &m.artifacts {
-        if a.sha256.len() != 64 || !a.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-            err(id, "sha256 must be 64 hex characters".into());
+        if a.sha256.len() != 64
+            || !a
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            err(id, "sha256 must be 64 characters of lowercase hex".into());
         }
         if !a.url.starts_with("https://") {
             err(id, "url must be https".into());

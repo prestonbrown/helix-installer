@@ -60,7 +60,13 @@ fn valid_manifest_is_clean() {
 fn bad_sha_and_url() {
     let mut v = base();
     v["artifacts"]["fw"]["sha256"] = json!("abc");
-    only(v, "sha256");
+    only(v, "lowercase hex");
+    let mut v = base();
+    v["artifacts"]["fw"]["sha256"] = json!("A".repeat(64));
+    only(v, "lowercase hex");
+    let mut v = base();
+    v["artifacts"]["fw"]["sha256"] = json!("g".repeat(64));
+    only(v, "lowercase hex");
     let mut v = base();
     v["artifacts"]["fw"]["url"] = json!("http://example.org/fw.bin");
     only(v, "https");
@@ -203,4 +209,104 @@ fn binary_prints_errors_and_exits_nonzero() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
+}
+
+fn install_with(step: Value) -> Value {
+    let mut v = base();
+    v["recipes"]["install"] = json!([step, {"type": "helix_install", "platform": "armv7"}]);
+    v
+}
+
+#[test]
+fn write_stick_artifact_refs() {
+    only(
+        install_with(json!({"type": "write_stick", "artifacts": ["nope"]})),
+        "unknown artifact",
+    );
+    only(
+        install_with(
+            json!({"type": "write_stick", "artifacts": ["fw"], "rename": {"nope": "x.bin"}}),
+        ),
+        "unknown artifact",
+    );
+    assert_eq!(
+        run(
+            install_with(
+                json!({"type": "write_stick", "artifacts": ["fw"], "rename": {"fw": "x.bin"}})
+            ),
+            false
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn step_images_must_exist() {
+    only(
+        install_with(json!({"type": "user_action", "text": "t", "image": "gone.png"})),
+        "gone.png",
+    );
+    only(
+        install_with(json!({"type": "info", "text": "t", "image": "gone.png"})),
+        "gone.png",
+    );
+    only(
+        install_with(json!({"type": "ask", "fact": "f", "question": "q",
+            "choices": [{"value": "a", "label": "A", "image": "gone.png"}]})),
+        "gone.png",
+    );
+    only(
+        install_with(json!({"type": "info", "text": "t", "image": "/etc/passwd"})),
+        "relative",
+    );
+}
+
+#[test]
+fn empty_recipe_is_an_error() {
+    let mut v = base();
+    v["recipes"]["install"] = json!([]);
+    only(v, "no steps");
+}
+
+#[test]
+fn moonraker_update_and_require_are_terminals() {
+    let mut v = base();
+    v["recipes"]["install"] = json!([{"type": "moonraker_update", "name": "helixscreen"}]);
+    assert_eq!(run(v, false), vec![]);
+    let mut v = base();
+    v["recipes"]["install"] =
+        json!([{"type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://x"}]);
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn malformed_probe_step() {
+    only(
+        install_with(json!({"type": "probe", "ssh": "uname"})),
+        "probe needs exactly one",
+    );
+}
+
+#[test]
+fn contains_conditions_on_one_key_overlap() {
+    let mut v = base();
+    v["printers"][0]["recipes"] = json!([
+        {"when": {"modules": {"contains": "a"}}, "recipe": "install"},
+        {"when": {"modules": {"contains": "b"}}, "recipe": "restore"}
+    ]);
+    only(v, "same facts");
+}
+
+#[test]
+fn binary_exits_2_on_unparseable_json() {
+    let dir = assets();
+    let path = dir.path().join("m.json");
+    std::fs::write(&path, "not json").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_manifest-lint"))
+        .arg(&path)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!out.stderr.is_empty());
 }

@@ -32,7 +32,7 @@ fn main() -> ExitCode {
         Ok(m) => m,
         Err(e) => {
             eprintln!("{manifest_path}: {e}");
-            return ExitCode::FAILURE;
+            return ExitCode::from(2);
         }
     };
     let errors = lint_with(&manifest, Path::new(asset_root), allow_unverified);
