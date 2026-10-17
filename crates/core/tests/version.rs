@@ -92,3 +92,11 @@ fn malformed_ranges_are_errors() {
         assert!(VersionRange::parse(s).is_err(), "{s:?} should be an error");
     }
 }
+
+#[test]
+fn inclusive_operators_accept_their_bound() {
+    assert!(range(">=1.1.7").matches(&v("1.1.7")));
+    assert!(range("<=1.2.3").matches(&v("1.2.3")));
+    assert!(!range(">=1.1.7").matches(&v("1.1.6")));
+    assert!(!range("<=1.2.3").matches(&v("1.2.4")));
+}
