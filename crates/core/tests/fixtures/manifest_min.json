@@ -1,0 +1,40 @@
+{
+  "manifest_version": 1,
+  "min_app_version": "0.1.0",
+  "printers": [
+    {
+      "id": "ad5m",
+      "name": "Flashforge Adventurer 5M",
+      "photo": "ad5m.jpg",
+      "identify": [
+        { "ssh_banner": "Forge-X", "fw_version": ">=1.0 <2.0" },
+        { "plugins": { "contains": "klipper" } }
+      ],
+      "recipes": [
+        { "when": { "fw_version": "1.x" }, "recipe": "ad5m_forge_x" }
+      ],
+      "restore": "https://helixscreen.org/docs/restore-ad5m",
+      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/unsupported" },
+      "verified": { "by": "prestonbrown", "date": "2026-10-01", "firmware": "1.2.3" }
+    }
+  ],
+  "artifacts": {
+    "helix_stick": {
+      "url": "https://releases.helixscreen.org/stable/helix.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "recipes": {
+    "ad5m_forge_x": [
+      { "type": "info", "text": "Hello" },
+      { "type": "probe", "moonraker": "printer_info" },
+      { "type": "probe", "ssh": "uname -m", "fact": "arch" },
+      { "type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://helixscreen.org/docs/fw" },
+      { "type": "download", "artifact": "helix_stick" },
+      { "type": "wait_for", "target": { "port": 22 }, "timeout_s": 60, "message": "waiting", "help": "check cable" },
+      { "type": "ssh_login", "logins": [ { "user": "root", "password": "root" } ], "ask_if_failed": true },
+      { "type": "ssh_run", "command": "sync", "timeout_s": 10, "commits": true },
+      { "type": "helix_install", "platform": { "from_arch": { "armv7l": "pi32" } }, "update": false }
+    ]
+  }
+}

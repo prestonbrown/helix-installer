@@ -141,7 +141,10 @@ impl Comparator {
 
 /// Alternatives separated by `||`; each alternative is space-separated comparators that must all hold.
 #[derive(Debug, Clone)]
-pub struct VersionRange(Vec<Vec<Comparator>>);
+pub struct VersionRange {
+    alternatives: Vec<Vec<Comparator>>,
+    source: String,
+}
 
 impl VersionRange {
     pub fn parse(s: &str) -> Result<VersionRange, RangeError> {
@@ -158,10 +161,33 @@ impl VersionRange {
                 Ok(comparators)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(VersionRange(alternatives))
+        Ok(VersionRange {
+            alternatives,
+            source: s.to_string(),
+        })
+    }
+
+    /// The expression this range was parsed from.
+    pub fn as_str(&self) -> &str {
+        &self.source
     }
 
     pub fn matches(&self, v: &FwVersion) -> bool {
-        self.0.iter().any(|alt| alt.iter().all(|c| c.matches(v)))
+        self.alternatives
+            .iter()
+            .any(|alt| alt.iter().all(|c| c.matches(v)))
+    }
+}
+
+impl serde::Serialize for VersionRange {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.source)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for VersionRange {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        VersionRange::parse(&s).map_err(serde::de::Error::custom)
     }
 }
