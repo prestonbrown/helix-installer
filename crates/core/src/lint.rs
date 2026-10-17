@@ -169,24 +169,6 @@ fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str,
     }
 }
 
-fn step_commits(s: &Step) -> bool {
-    match s {
-        Step::Info { commits, .. }
-        | Step::UserAction { commits, .. }
-        | Step::Ask { commits, .. }
-        | Step::Probe { commits, .. }
-        | Step::Require { commits, .. }
-        | Step::Download { commits, .. }
-        | Step::WriteStick { commits, .. }
-        | Step::WaitFor { commits, .. }
-        | Step::SshLogin { commits, .. }
-        | Step::SshRun { commits, .. }
-        | Step::MoonrakerGcode { commits, .. }
-        | Step::MoonrakerUpdate { commits, .. }
-        | Step::HelixInstall { commits, .. } => *commits,
-    }
-}
-
 fn is_terminal(s: &Step, is_restore: bool) -> bool {
     match s {
         Step::WaitFor { target, .. } => *target == WaitTarget::HelixService,
@@ -212,7 +194,7 @@ fn lint_recipe(
         ),
         _ => {}
     }
-    if steps.iter().filter(|s| step_commits(s)).count() > 1 {
+    if steps.iter().filter(|s| s.commits()).count() > 1 {
         err(id, "more than one step has commits: true".into());
     }
     let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {

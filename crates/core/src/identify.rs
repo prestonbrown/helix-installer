@@ -8,7 +8,8 @@ use crate::version::FwVersion;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const GENERIC_REFUSE_DOC: &str = "https://helixscreen.org/docs/install";
+/// The install guide linked when no printer-specific one applies.
+pub const GENERIC_REFUSE_DOC: &str = "https://helixscreen.org/docs/install";
 
 /// What is on the printer before the installer touches it.
 #[derive(Debug, Clone, PartialEq, Eq)]

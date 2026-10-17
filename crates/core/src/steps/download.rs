@@ -3,6 +3,7 @@
 //! The only path by which firmware and release files reach the user's PC:
 //! every file is hash-verified before it is visible in the cache.
 
+use super::{StepCtx, StepOutcome};
 use crate::cache::{cached_path, hash_file, is_sha256_hex, part_path};
 use crate::manifest::Artifact;
 use crate::transport::{Env, TransportError};
@@ -68,4 +69,26 @@ pub async fn fetch_artifact(
     }
     std::fs::rename(&part, &final_path).map_err(io)?;
     Ok(final_path)
+}
+
+/// The `download` step. Its first run only reports what is being fetched, so the UI shows it
+/// while the download runs.
+pub async fn run(ctx: &mut StepCtx<'_>, name: &str) -> StepOutcome {
+    let Some(a) = ctx.manifest.artifacts.get(name) else {
+        return StepOutcome::failed(format!("artifact {name} is not in the manifest"));
+    };
+    if ctx.calls == 0 {
+        return StepOutcome::Progress {
+            title: format!("Downloading {}", a.filename.as_deref().unwrap_or(name)),
+            detail: None,
+            fraction: None,
+        };
+    }
+    let Some(dir) = ctx.cache_dir else {
+        return StepOutcome::failed("no download cache directory is set");
+    };
+    match fetch_artifact(ctx.env, a, dir, &|_, _| {}).await {
+        Ok(_) => StepOutcome::Done,
+        Err(e) => StepOutcome::failed(format!("{name}: {e}")),
+    }
 }

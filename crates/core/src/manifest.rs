@@ -343,6 +343,44 @@ pub enum Step {
 }
 
 impl Step {
+    /// The `type` tag this step has in the manifest.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Step::Info { .. } => "info",
+            Step::UserAction { .. } => "user_action",
+            Step::Ask { .. } => "ask",
+            Step::Probe { .. } => "probe",
+            Step::Require { .. } => "require",
+            Step::Download { .. } => "download",
+            Step::WriteStick { .. } => "write_stick",
+            Step::WaitFor { .. } => "wait_for",
+            Step::SshLogin { .. } => "ssh_login",
+            Step::SshRun { .. } => "ssh_run",
+            Step::MoonrakerGcode { .. } => "moonraker_gcode",
+            Step::MoonrakerUpdate { .. } => "moonraker_update",
+            Step::HelixInstall { .. } => "helix_install",
+        }
+    }
+
+    /// True for the step that marks the point of no return.
+    pub fn commits(&self) -> bool {
+        match self {
+            Step::Info { commits, .. }
+            | Step::UserAction { commits, .. }
+            | Step::Ask { commits, .. }
+            | Step::Probe { commits, .. }
+            | Step::Require { commits, .. }
+            | Step::Download { commits, .. }
+            | Step::WriteStick { commits, .. }
+            | Step::WaitFor { commits, .. }
+            | Step::SshLogin { commits, .. }
+            | Step::SshRun { commits, .. }
+            | Step::MoonrakerGcode { commits, .. }
+            | Step::MoonrakerUpdate { commits, .. }
+            | Step::HelixInstall { commits, .. } => *commits,
+        }
+    }
+
     /// The probe a `Step::Probe` describes, or `None` for any other step or an invalid combination.
     pub fn probe(&self) -> Option<Probe> {
         match self {
