@@ -95,8 +95,7 @@ struct SshState {
     accepted: Vec<(String, String, String)>,
     table: HashMap<String, ExecOutput>,
     fallback: Option<Fallback>,
-    commands: Vec<String>,
-    stdins: Vec<Vec<u8>>,
+    calls: Vec<(String, Option<Vec<u8>>)>,
     uploads: Vec<(String, Vec<u8>)>,
     queued_jobs: Vec<Vec<(String, Option<i32>)>>,
     jobs: HashMap<String, JobScript>,
@@ -143,11 +142,24 @@ impl FakeSsh {
     }
     /// Every command passed to `exec` or `spawn_detached`.
     pub fn commands(&self) -> Vec<String> {
-        lock(&self.state).commands.clone()
+        lock(&self.state)
+            .calls
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect()
     }
     /// Every stdin payload, kept apart from the command lines.
     pub fn stdins(&self) -> Vec<Vec<u8>> {
-        lock(&self.state).stdins.clone()
+        lock(&self.state)
+            .calls
+            .iter()
+            .filter_map(|(_, s)| s.clone())
+            .collect()
+    }
+    /// (command, stdin) per `exec`/`spawn_detached`, so a test can prove
+    /// which command received which stdin.
+    pub fn calls(&self) -> Vec<(String, Option<Vec<u8>>)> {
+        lock(&self.state).calls.clone()
     }
     /// (remote path, bytes) for every upload.
     pub fn uploads(&self) -> Vec<(String, Vec<u8>)> {
@@ -204,10 +216,7 @@ impl SshSession for FakeSshSession {
     ) -> Result<ExecOutput> {
         self.tick()?;
         let mut st = lock(&self.state);
-        st.commands.push(cmd.into());
-        if let Some(b) = stdin {
-            st.stdins.push(b.to_vec());
-        }
+        st.calls.push((cmd.into(), stdin.map(|b| b.to_vec())));
         if let Some(o) = st.table.get(cmd) {
             return Ok(o.clone());
         }
@@ -235,15 +244,12 @@ impl SshSession for FakeSshSession {
     ) -> Result<RemoteJob> {
         self.tick()?;
         let mut st = lock(&self.state);
-        st.commands.push(cmd.into());
-        if let Some(p) = sudo_password {
-            st.stdins.push(p.as_bytes().to_vec());
+        st.calls
+            .push((cmd.into(), sudo_password.map(|p| p.as_bytes().to_vec())));
+        if st.queued_jobs.is_empty() {
+            return Err(TransportError::Protocol(format!("unscripted job: {cmd}")));
         }
-        let chunks = if st.queued_jobs.is_empty() {
-            vec![(String::new(), Some(0))]
-        } else {
-            st.queued_jobs.remove(0)
-        };
+        let chunks = st.queued_jobs.remove(0);
         st.next_job += 1;
         let log_path = format!("/tmp/fake-job-{}.log", st.next_job);
         st.jobs.insert(
@@ -270,7 +276,7 @@ impl SshSession for FakeSshSession {
         let full: String = shown.iter().map(|(t, _)| t.as_str()).collect();
         let text = full
             .get(from_offset as usize..)
-            .unwrap_or_default()
+            .ok_or_else(|| TransportError::Protocol(format!("bad log offset {from_offset}")))?
             .to_string();
         let exit = if script.revealed == script.chunks.len() {
             script.chunks.last().and_then(|(_, e)| *e)
@@ -325,13 +331,8 @@ impl FakeDrives {
 
 #[async_trait]
 impl Drives for FakeDrives {
-    fn list_removable(&self) -> Result<Vec<Drive>> {
-        Ok(lock(&self.state)
-            .drives
-            .iter()
-            .filter(|d| d.removable && !d.system)
-            .cloned()
-            .collect())
+    fn list_drives(&self) -> Result<Vec<Drive>> {
+        Ok(lock(&self.state).drives.to_vec())
     }
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()> {
         self.known(drive)?;

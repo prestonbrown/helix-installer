@@ -187,9 +187,9 @@ async fn drives_copy_reads_back_and_eject_is_recorded() {
     let mut sys = usb("c");
     sys.system = true;
     drives.add(sys);
-    let listed = drives.list_removable().unwrap();
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, "d1");
+    let listed = drives.list_drives().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed[1].system);
 
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("fw.bin");
@@ -253,4 +253,52 @@ fn env_bundles_fakes() {
         fetch: Arc::new(FakeFetch::new()),
         clock: Arc::new(FakeClock::new()),
     };
+}
+
+#[tokio::test]
+async fn ssh_calls_pair_each_command_with_its_stdin() {
+    let ssh = FakeSsh::new();
+    ssh.accept("192.168.1.50", "root", "pw");
+    ssh.script_job(vec![("", Some(0))]);
+    let mut s = ssh.connect(&host(), &login("root", "pw")).await.unwrap();
+    let t = Duration::from_secs(1);
+    s.exec("a", None, t).await.unwrap();
+    s.exec("b", Some(b"x"), t).await.unwrap();
+    s.spawn_detached("c", Some("pw")).await.unwrap();
+    assert_eq!(
+        ssh.calls(),
+        vec![
+            ("a".to_string(), None),
+            ("b".to_string(), Some(b"x".to_vec())),
+            ("c".to_string(), Some(b"pw".to_vec())),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn ssh_read_job_rejects_bad_offsets() {
+    let ssh = FakeSsh::new();
+    ssh.accept("192.168.1.50", "root", "pw");
+    ssh.script_job(vec![("h\u{e9}llo", Some(0))]);
+    let mut s = ssh.connect(&host(), &login("root", "pw")).await.unwrap();
+    let job = s.spawn_detached("x", None).await.unwrap();
+    assert!(matches!(
+        s.read_job(&job, 99).await,
+        Err(TransportError::Protocol(_))
+    ));
+    assert!(matches!(
+        s.read_job(&job, 2).await,
+        Err(TransportError::Protocol(_))
+    ));
+}
+
+#[tokio::test]
+async fn ssh_spawn_without_scripted_job_is_a_protocol_error() {
+    let ssh = FakeSsh::new();
+    ssh.accept("192.168.1.50", "root", "pw");
+    let mut s = ssh.connect(&host(), &login("root", "pw")).await.unwrap();
+    assert_eq!(
+        s.spawn_detached("run.sh", None).await.unwrap_err(),
+        TransportError::Protocol("unscripted job: run.sh".into())
+    );
 }

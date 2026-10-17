@@ -117,8 +117,9 @@ pub trait SshSession: Send {
 
 #[async_trait]
 pub trait Drives: Send + Sync {
-    /// Removable, non-system drives only.
-    fn list_removable(&self) -> Result<Vec<Drive>>;
+    /// Every drive with its `removable` and `system` flags, unfiltered;
+    /// callers decide which to offer.
+    fn list_drives(&self) -> Result<Vec<Drive>>;
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()>;
     async fn eject(&self, drive: &Drive) -> Result<()>;
 }
