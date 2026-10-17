@@ -3,6 +3,7 @@
 //! The signed manifest that carries every piece of printer knowledge the installer acts on.
 
 use crate::cache::sha256_hex;
+use crate::fs_atomic::write_atomic;
 use crate::manifest_sig::verify_signature;
 use crate::version::{FwVersion, VersionRange};
 use serde::de::{self, Deserializer};
@@ -37,7 +38,7 @@ impl fmt::Display for ManifestError {
 
 impl std::error::Error for ManifestError {}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// Lowercase hex sha256 of the verified bytes this manifest was parsed from; empty when it
@@ -514,13 +515,8 @@ impl ManifestCache {
         self.replace("manifest.fetched_at", secs.to_string().as_bytes())
     }
 
-    /// Writes `name` via a temp file in the same directory so a reader never sees a partial file.
     fn replace(&self, name: &str, contents: &[u8]) -> std::io::Result<()> {
-        let tmp = self.path(&format!("{name}.tmp"));
-        std::fs::write(&tmp, contents)?;
-        std::fs::rename(&tmp, self.path(name)).inspect_err(|_| {
-            let _ = std::fs::remove_file(&tmp);
-        })
+        write_atomic(&self.path(name), contents)
     }
 
     /// Returns the cached manifest only if it was fetched under 30 days before `now` and still

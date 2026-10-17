@@ -6,7 +6,7 @@
 
 use crate::facts::Facts;
 use crate::identify::GENERIC_REFUSE_DOC;
-use crate::manifest::{Choice, Login, Manifest, Step};
+use crate::manifest::{verify_and_parse, Choice, Login, Manifest, Step};
 use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
 use crate::transport::{Drive, Env};
@@ -91,6 +91,8 @@ pub struct Runner {
     autosave: Option<PathBuf>,
     /// Times the current step has run since it became current.
     calls: u32,
+    /// Why the run's own manifest copy could not be verified on resume; the run cannot go on.
+    manifest_error: Option<String>,
 }
 
 impl Runner {
@@ -104,7 +106,49 @@ impl Runner {
             cache_dir: None,
             autosave: None,
             calls: 0,
+            manifest_error: None,
         }
+    }
+
+    /// Starts a run in `dir`: verifies the manifest, keeps a copy of its bytes and signature
+    /// beside the run's state so a later resume runs against the same recipe even after a newer
+    /// manifest is published, and saves the state after every step.
+    pub fn start(
+        env: Env,
+        dir: &Path,
+        manifest_bytes: &[u8],
+        sig: &str,
+        pubkey: &str,
+        app_version: &str,
+        state: RunState,
+    ) -> io::Result<Runner> {
+        let manifest = verify_and_parse(manifest_bytes, sig, pubkey, app_version)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        run_state::save_manifest(dir, &state.run_id, manifest_bytes, sig)?;
+        let runner = Runner::new(env, Arc::new(manifest), state).with_autosave(dir.to_path_buf());
+        runner.save(dir)?;
+        Ok(runner)
+    }
+
+    /// Reopens a run saved in `dir` against its own manifest copy, re-verified. A copy that no
+    /// longer verifies is reported by the first `advance`, as a refusal before the point of no
+    /// return and a committed failure after it.
+    pub fn resume(
+        env: Env,
+        dir: &Path,
+        run_id: &str,
+        pubkey: &str,
+        app_version: &str,
+    ) -> io::Result<Runner> {
+        let state = run_state::load(dir, run_id)?;
+        let (manifest, error) = match run_state::load_manifest(dir, run_id, pubkey, app_version) {
+            Ok(m) => (m, None),
+            Err(e) => (Manifest::default(), Some(e)),
+        };
+        let mut runner =
+            Runner::new(env, Arc::new(manifest), state).with_autosave(dir.to_path_buf());
+        runner.manifest_error = error;
+        Ok(runner)
     }
 
     /// Runs every step of `step_type` (its manifest `type` tag) through `handler`.
@@ -155,6 +199,13 @@ impl Runner {
                 }
             }
             RunStatus::Running | RunStatus::Failed { .. } => {}
+        }
+        if let Some(e) = self.manifest_error.clone() {
+            self.log(
+                self.state.step_index,
+                format!("the run's manifest copy did not verify: {e}"),
+            );
+            return self.manifest_changed();
         }
         let manifest = self.manifest.clone();
         let Some(steps) = manifest.recipes.get(&self.state.recipe_id) else {
@@ -427,7 +478,9 @@ fn rerun_prompt() -> Prompt {
 fn commits_on(step: &Step, input: Option<&Input>) -> bool {
     match step {
         Step::Info { .. } | Step::UserAction { .. } => matches!(input, Some(Input::Next)),
-        Step::Ask { .. } => matches!(input, Some(Input::Choice(_))),
+        Step::Ask { choices, .. } => {
+            matches!(input, Some(Input::Choice(c)) if choices.iter().any(|x| x.value == *c))
+        }
         _ => true,
     }
 }

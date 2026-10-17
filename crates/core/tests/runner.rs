@@ -1129,3 +1129,190 @@ async fn committing_without_a_model_or_serial_is_logged() {
         r.state().log
     );
 }
+
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn pubkey() -> String {
+    std::fs::read_to_string(fixture("test_key.pub")).unwrap()
+}
+
+fn sign(bytes: &[u8]) -> String {
+    let sk_text = std::fs::read_to_string(fixture("test_key.sec")).unwrap();
+    let sk = minisign::SecretKeyBox::from_string(&sk_text)
+        .unwrap()
+        .into_unencrypted_secret_key()
+        .unwrap();
+    minisign::sign(None, &sk, std::io::Cursor::new(bytes), None, None)
+        .unwrap()
+        .into_string()
+}
+
+const APP: &str = "0.1.0";
+
+fn signed_manifest(second_text: &str, commit: bool) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "manifest_version": 1,
+        "min_app_version": APP,
+        "printers": [{
+            "id": "k1",
+            "name": "Creality K1",
+            "identify": [{ "model": "K1" }],
+            "recipes": [{ "when": { "state": "stock" }, "recipe": "r" }],
+            "restore": "r",
+            "fallback": { "refuse": true, "doc": PRINTER_DOC }
+        }],
+        "artifacts": {},
+        "recipes": { "r": [
+            { "type": "info", "text": "one", "commits": commit },
+            { "type": "info", "text": second_text }
+        ]}
+    }))
+    .unwrap()
+}
+
+/// Starts a run on manifest A and leaves it saved at its second step.
+async fn started_run(f: &Fakes, dir: &std::path::Path, commit: bool) {
+    let a = signed_manifest("two", commit);
+    let mut r = Runner::start(
+        f.env(),
+        dir,
+        &a,
+        &sign(&a),
+        &pubkey(),
+        APP,
+        state("run1", json!({})),
+    )
+    .unwrap();
+    r.advance(None).await;
+    assert!(matches!(
+        r.advance(Some(Input::Next)).await,
+        Event::NeedInput(Prompt::Info { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_resumed_run_uses_its_own_manifest_copy_not_the_newest() {
+    let f = Fakes::new();
+    let dir = tempfile::tempdir().unwrap();
+    started_run(&f, dir.path(), true).await;
+    assert!(dir.path().join("run1.manifest.json").exists());
+    assert!(dir.path().join("run1.manifest.json.minisig").exists());
+
+    // A newer manifest is published to the shared cache.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let b = signed_manifest("two, reworded", true);
+    helix_installer_core::manifest::ManifestCache::new(
+        cache_dir.path().to_path_buf(),
+        &pubkey(),
+        APP,
+    )
+    .store(&b, &sign(&b), std::time::SystemTime::now())
+    .unwrap();
+
+    let ids: Vec<_> = Runner::list_unfinished(dir.path())
+        .into_iter()
+        .map(|s| s.run_id)
+        .collect();
+    assert_eq!(ids, vec!["run1".to_string()]);
+
+    let mut r = Runner::resume(f.env(), dir.path(), "run1", &pubkey(), APP).unwrap();
+    match r.advance(None).await {
+        Event::NeedInput(Prompt::Info { text, .. }) => assert_eq!(text, "two"),
+        e => panic!("expected step two, got {e:?}"),
+    }
+    assert!(matches!(r.advance(Some(Input::Next)).await, Event::Done));
+}
+
+enum Tamper {
+    Corrupt,
+    SwapForAnotherSigned,
+}
+
+async fn resume_tampered(commit: bool, how: Tamper) -> Event {
+    let f = Fakes::new();
+    let dir = tempfile::tempdir().unwrap();
+    started_run(&f, dir.path(), commit).await;
+    let copy = dir.path().join("run1.manifest.json");
+    match how {
+        Tamper::Corrupt => {
+            let mut bytes = std::fs::read(&copy).unwrap();
+            bytes[10] ^= 1;
+            std::fs::write(&copy, bytes).unwrap();
+        }
+        Tamper::SwapForAnotherSigned => {
+            let b = signed_manifest("two, reworded", commit);
+            std::fs::write(&copy, &b).unwrap();
+            std::fs::write(dir.path().join("run1.manifest.json.minisig"), sign(&b)).unwrap();
+        }
+    }
+    let mut r = Runner::resume(f.env(), dir.path(), "run1", &pubkey(), APP).unwrap();
+    r.advance(Some(Input::Next)).await
+}
+
+#[tokio::test]
+async fn a_tampered_manifest_copy_refuses_before_commit() {
+    for how in [Tamper::Corrupt, Tamper::SwapForAnotherSigned] {
+        assert!(matches!(
+            resume_tampered(false, how).await,
+            Event::Refused { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_tampered_manifest_copy_fails_committed_after_commit() {
+    for how in [Tamper::Corrupt, Tamper::SwapForAnotherSigned] {
+        match resume_tampered(true, how).await {
+            Event::Failed {
+                committed, help, ..
+            } => {
+                assert!(committed);
+                assert!(help.unwrap_or_default().contains("recovery guide"));
+            }
+            e => panic!("expected Failed, got {e:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn wait_for_helix_service_asks_after_a_silent_timeout() {
+    let f = Fakes::new();
+    let mut r = Runner::new(f.env(), helix_wait(), state("run1", json!({})));
+    let start = f.clock.now();
+    match settle(&mut r, None).await {
+        Event::NeedInput(Prompt::Ask { question, .. }) => {
+            assert!(question.contains("Is HelixScreen showing"), "{question}")
+        }
+        e => panic!("expected Ask, got {e:?}"),
+    }
+    assert!(f.clock.now().duration_since(start).unwrap() >= Duration::from_secs(10));
+    assert!(matches!(
+        r.advance(Some(Input::Choice("yes".into()))).await,
+        Event::Done
+    ));
+}
+
+#[tokio::test]
+async fn a_committing_ask_commits_only_on_a_listed_choice() {
+    let f = Fakes::new();
+    let m = manifest(json!([{
+        "type": "ask", "fact": "go", "question": "Flash now?", "commits": true,
+        "choices": [{ "value": "yes", "label": "Yes" }]
+    }]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    r.advance(None).await;
+    assert!(matches!(
+        r.advance(Some(Input::Choice("maybe".into()))).await,
+        Event::NeedInput(Prompt::Ask { .. })
+    ));
+    assert!(!r.state().committed);
+    assert!(matches!(
+        r.advance(Some(Input::Choice("yes".into()))).await,
+        Event::Done
+    ));
+    assert!(r.state().committed);
+}

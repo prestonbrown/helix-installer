@@ -4,6 +4,7 @@
 
 pub mod cache;
 pub mod facts;
+mod fs_atomic;
 pub mod identify;
 pub mod lint;
 pub mod manifest;

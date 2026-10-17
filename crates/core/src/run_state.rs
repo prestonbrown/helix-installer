@@ -5,10 +5,11 @@
 
 use crate::cache::sha256_hex;
 use crate::facts::Facts;
-use crate::manifest::Step;
+use crate::fs_atomic::write_atomic;
+use crate::manifest::{verify_and_parse, Manifest, Step};
 use crate::transport::{Host, RemoteJob};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Facts that name the physical printer. Once the point of no return is passed, a probe that
@@ -126,24 +127,45 @@ fn state_path(dir: &Path, run_id: &str) -> io::Result<PathBuf> {
     Ok(dir.join(format!("{run_id}.json")))
 }
 
-/// Writes `<dir>/<run_id>.json` through a temp file, so a crash mid-write leaves the previous
-/// state intact.
+/// Writes `<dir>/<run_id>.json` atomically, so a crash mid-write leaves the previous state.
 pub(crate) fn save(state: &RunState, dir: &Path) -> io::Result<()> {
     let path = state_path(dir, &state.run_id)?;
     let json = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
     std::fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("json.tmp");
-    let written = std::fs::File::create(&tmp).and_then(|mut f| {
-        f.write_all(&json)?;
-        f.sync_all()
-    });
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    std::fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    write_atomic(&path, &json)
+}
+
+/// The run's own copy of the signed manifest it started with:
+/// `<dir>/<run_id>.manifest.json` and its `.minisig`.
+fn manifest_paths(dir: &Path, run_id: &str) -> io::Result<(PathBuf, PathBuf)> {
+    state_path(dir, run_id)?;
+    Ok((
+        dir.join(format!("{run_id}{MANIFEST_SUFFIX}")),
+        dir.join(format!("{run_id}{MANIFEST_SUFFIX}.minisig")),
+    ))
+}
+
+const MANIFEST_SUFFIX: &str = ".manifest.json";
+
+pub(crate) fn save_manifest(dir: &Path, run_id: &str, bytes: &[u8], sig: &str) -> io::Result<()> {
+    let (manifest, minisig) = manifest_paths(dir, run_id)?;
+    std::fs::create_dir_all(dir)?;
+    write_atomic(&manifest, bytes)?;
+    write_atomic(&minisig, sig.as_bytes())
+}
+
+/// Re-verifies the run's manifest copy; any problem reading or verifying it is an error.
+pub(crate) fn load_manifest(
+    dir: &Path,
+    run_id: &str,
+    pubkey: &str,
+    app_version: &str,
+) -> Result<Manifest, String> {
+    let (manifest, minisig) = manifest_paths(dir, run_id).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let sig =
+        std::fs::read_to_string(&minisig).map_err(|e| format!("{}: {e}", minisig.display()))?;
+    verify_and_parse(&bytes, &sig, pubkey, app_version).map_err(|e| e.to_string())
 }
 
 pub(crate) fn load(dir: &Path, run_id: &str) -> io::Result<RunState> {
@@ -160,7 +182,10 @@ pub(crate) fn list_unfinished(dir: &Path) -> Vec<RunState> {
     let mut runs: Vec<RunState> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "json")
+                && !p.to_string_lossy().ends_with(MANIFEST_SUFFIX)
+        })
         .filter_map(|p| std::fs::read(p).ok())
         .filter_map(|b| serde_json::from_slice::<RunState>(&b).ok())
         .filter(|s| !s.status.is_finished())

@@ -14,6 +14,8 @@ const PIDOF_TIMEOUT: Duration = Duration::from_secs(10);
 enum Poll {
     Up,
     NotYet,
+    /// Nothing answered: the printer may still be rebooting.
+    Silent,
     /// No source available can say whether the target is up; only the user can.
     CannotTell,
 }
@@ -49,11 +51,12 @@ pub async fn run(
     let timeout = Duration::from_secs(timeout_s);
     let start = ctx.env.clock.now();
     loop {
-        match poll(ctx, target).await {
+        let silent = match poll(ctx, target).await {
             Poll::Up => return StepOutcome::Done,
-            Poll::NotYet => {}
+            Poll::NotYet => false,
+            Poll::Silent => true,
             Poll::CannotTell => return ask_if_showing(),
-        }
+        };
         let waited = ctx
             .env
             .clock
@@ -61,6 +64,10 @@ pub async fn run(
             .duration_since(start)
             .unwrap_or_default();
         if waited >= timeout {
+            // With nothing on the printer able to answer, only the user can say.
+            if silent {
+                return ask_if_showing();
+            }
             return StepOutcome::Failed {
                 reason: format!("{} did not answer within {timeout_s} seconds", name(target)),
                 help,
@@ -108,7 +115,7 @@ async fn poll(ctx: &mut StepCtx<'_>, target: WaitTarget) -> Poll {
 
 /// Moonraker's service state where it has one; otherwise `pidof` over the held SSH login.
 /// A printer whose Moonraker answers without listing the service, with no login held, can
-/// only be judged by the user. One whose Moonraker does not answer may still be rebooting.
+/// only be judged by the user; one whose Moonraker does not answer may still be rebooting.
 async fn helix_service(ctx: &mut StepCtx<'_>) -> Poll {
     let info = ctx.env.moonraker.system_info(ctx.host).await;
     let moonraker_answered = info.is_ok();
@@ -121,7 +128,7 @@ async fn helix_service(ctx: &mut StepCtx<'_>) -> Poll {
         return if moonraker_answered {
             Poll::CannotTell
         } else {
-            Poll::NotYet
+            Poll::Silent
         };
     }
     let ran = match ctx.ssh().await {
