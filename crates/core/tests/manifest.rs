@@ -184,9 +184,13 @@ fn manifest_round_trips_through_json() {
         &again.printers[0].identify[0]["fw_version"],
         Cond::Range(_)
     ));
+    assert!(matches!(
+        &again.printers[0].identify[1]["plugins"],
+        Cond::Contains { contains } if contains == "klipper"
+    ));
 }
 
-fn tempdir(_tag: &str) -> tempfile::TempDir {
+fn tempdir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
@@ -196,7 +200,7 @@ fn cache(dir: &std::path::Path) -> ManifestCache {
 
 #[test]
 fn cache_honours_the_30_day_limit() {
-    let td = tempdir("age");
+    let td = tempdir();
     let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
@@ -208,7 +212,7 @@ fn cache_honours_the_30_day_limit() {
 
 #[test]
 fn cache_rejects_a_time_in_the_future() {
-    let td = tempdir("future");
+    let td = tempdir();
     let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
@@ -218,7 +222,7 @@ fn cache_rejects_a_time_in_the_future() {
 
 #[test]
 fn cache_reverifies_the_signature() {
-    let td = tempdir("tamper");
+    let td = tempdir();
     let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);
@@ -231,7 +235,7 @@ fn cache_reverifies_the_signature() {
 
 #[test]
 fn empty_cache_loads_nothing() {
-    assert!(cache(tempdir("empty").path()).load(at(1)).is_none());
+    assert!(cache(tempdir().path()).load(at(1)).is_none());
 }
 
 fn malformed_after(from: &str, to: &str) {
@@ -271,6 +275,14 @@ fn misspelled_commits_is_malformed() {
 }
 
 #[test]
+fn unknown_field_in_platform_selector_is_malformed() {
+    malformed_after(
+        "\"from_arch\": { \"armv7l\": \"pi32\" }",
+        "\"from_arch\": { \"armv7l\": \"pi32\" }, \"x\": 1",
+    );
+}
+
+#[test]
 fn probe_with_two_shapes_is_malformed() {
     malformed_after(
         "\"moonraker\": \"printer_info\"",
@@ -284,7 +296,7 @@ fn probe_with_two_shapes_is_malformed() {
 
 #[test]
 fn failed_store_keeps_the_previous_cache() {
-    let td = tempdir("partial");
+    let td = tempdir();
     let dir = td.path().to_path_buf();
     let bytes = manifest_bytes();
     let c = cache(&dir);

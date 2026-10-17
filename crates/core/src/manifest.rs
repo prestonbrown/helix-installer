@@ -233,7 +233,7 @@ pub enum WaitTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum PlatformSel {
     Fixed(String),
     FromArch { from_arch: BTreeMap<String, String> },
