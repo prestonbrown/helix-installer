@@ -1,0 +1,8 @@
+[package]
+name = "helix_installer_core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Installer logic for HelixScreen, independent of any UI toolkit"
+
+[dependencies]
