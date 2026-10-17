@@ -16,6 +16,7 @@ struct MoonrakerState {
     printer_info: HashMap<String, Value>,
     system_info: HashMap<String, Value>,
     update_status: HashMap<String, Value>,
+    objects_list: HashMap<String, Value>,
     gcodes: Vec<(String, String)>,
     upgrades: Vec<String>,
 }
@@ -38,6 +39,9 @@ impl FakeMoonraker {
     }
     pub fn set_update_status(&self, addr: &str, v: Value) {
         lock(&self.state).update_status.insert(addr.into(), v);
+    }
+    pub fn set_objects_list(&self, addr: &str, v: Value) {
+        lock(&self.state).objects_list.insert(addr.into(), v);
     }
     /// (host addr, script) for every `gcode` call, in order.
     pub fn gcodes(&self) -> Vec<(String, String)> {
@@ -67,6 +71,13 @@ impl Moonraker for FakeMoonraker {
     async fn update_status(&self, host: &Host) -> Result<Value> {
         lock(&self.state)
             .update_status
+            .get(&host.addr)
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+    async fn objects_list(&self, host: &Host) -> Result<Value> {
+        lock(&self.state)
+            .objects_list
             .get(&host.addr)
             .cloned()
             .ok_or(TransportError::Unreachable)

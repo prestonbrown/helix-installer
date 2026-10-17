@@ -6,6 +6,8 @@
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
+pub mod fetch_http;
+pub mod moonraker_http;
 pub mod net_tcp;
 
 use crate::manifest::Login;
@@ -89,6 +91,8 @@ pub trait Moonraker: Send + Sync {
     async fn printer_info(&self, host: &Host) -> Result<Value>;
     async fn system_info(&self, host: &Host) -> Result<Value>;
     async fn update_status(&self, host: &Host) -> Result<Value>;
+    /// Moonraker's `/printer/objects/list` answer: `{"objects": [..]}`.
+    async fn objects_list(&self, host: &Host) -> Result<Value>;
     async fn gcode(&self, host: &Host, script: &str) -> Result<()>;
     async fn update_upgrade(&self, host: &Host, name: &str) -> Result<()>;
 }

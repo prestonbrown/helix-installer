@@ -30,9 +30,7 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
                 MoonrakerProbe::PrinterInfo => mr.printer_info(host).await,
                 MoonrakerProbe::SystemInfo => mr.system_info(host).await,
                 MoonrakerProbe::UpdateStatus => mr.update_status(host).await,
-                MoonrakerProbe::ObjectsList => {
-                    return Err("probing Klipper's object list is not supported".into())
-                }
+                MoonrakerProbe::ObjectsList => mr.objects_list(host).await,
             };
             answer
                 .map(|v| moonraker_facts(*moonraker, &v))
@@ -101,12 +99,16 @@ pub fn moonraker_facts(kind: MoonrakerProbe, v: &Value) -> Facts {
                 "os_distribution",
                 str_at(v, &["system_info", "distribution", "name"]),
             );
-            put(
-                "services",
-                v.pointer("/system_info/available_services")
-                    .filter(|s| s.is_array())
-                    .cloned(),
-            );
+            let services = v
+                .pointer("/system_info/available_services")
+                .filter(|s| s.is_array());
+            if services.is_some_and(|s| {
+                s.as_array()
+                    .is_some_and(|a| a.iter().any(|n| n == "helixscreen"))
+            }) {
+                put("helix_installed", Some(Value::Bool(true)));
+            }
+            put("services", services.cloned());
         }
         MoonrakerProbe::UpdateStatus => {
             if let Some(helix) = v.pointer("/version_info/helixscreen") {
@@ -114,7 +116,15 @@ pub fn moonraker_facts(kind: MoonrakerProbe, v: &Value) -> Facts {
                 put("helix_version", str_at(helix, &["version"]));
             }
         }
-        MoonrakerProbe::ObjectsList => {}
+        MoonrakerProbe::ObjectsList => {
+            let names = v.get("objects").and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .filter(|o| o.is_string())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            put("klipper_objects", names.map(Value::Array));
+        }
     }
     f
 }
