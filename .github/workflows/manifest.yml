@@ -1,0 +1,105 @@
+name: Manifest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build manifest-lint
+        run: cargo build --release -p helix_installer_core --bin manifest-lint
+      - name: Lint the manifest
+        run: target/release/manifest-lint manifest/manifest.json manifest/img
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      # The publish job signs with the real CLI; this signs with a key made here and checks the
+      # result with the app's own verifier (legacy signatures refused), so a CLI that stops
+      # producing prehashed signatures fails a pull request instead of a release.
+      - name: Signing round trip with a throwaway key
+        run: |
+          d=$(mktemp -d)
+          minisign -G -W -p "$d/throwaway.pub" -s "$d/throwaway.key"
+          minisign -S -H -s "$d/throwaway.key" -m manifest/manifest.json -x "$d/manifest.json.minisig"
+          target/release/manifest-lint --verify manifest/manifest.json --sig "$d/manifest.json.minisig" --pubkey "$d/throwaway.pub"
+          cp manifest/manifest.json "$d/tampered.json"
+          echo " " >> "$d/tampered.json"
+          if target/release/manifest-lint --verify "$d/tampered.json" --sig "$d/manifest.json.minisig" --pubkey "$d/throwaway.pub"; then
+            echo "::error::a tampered manifest verified"
+            exit 1
+          fi
+
+  publish:
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Required reviewer on this environment gates every publish; the secrets below live in it.
+    environment: manifest-publish
+    concurrency: manifest-publish
+    env:
+      MANIFEST_SIGNING_KEY: ${{ secrets.MANIFEST_SIGNING_KEY }}
+      MANIFEST_SIGNING_KEY_PASSWORD: ${{ secrets.MANIFEST_SIGNING_KEY_PASSWORD }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET_NAME || 'helixscreen-releases' }}
+      R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require signing and upload configuration
+        run: |
+          missing=""
+          for v in MANIFEST_SIGNING_KEY MANIFEST_SIGNING_KEY_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          case "$R2_ENDPOINT" in https://.r2.*) missing="$missing R2_ACCOUNT_ID" ;; esac
+          if [ -n "$missing" ]; then
+            echo "::error::Not publishing: missing in the manifest-publish environment:$missing. Nothing was signed or uploaded. See docs/SIGNING.md."
+            exit 1
+          fi
+          key=$(sed -n 's/^pub const MANIFEST_PUBKEY: &str = "\(.*\)";$/\1/p' crates/core/src/keys.rs)
+          if [ -z "$key" ]; then
+            echo "::error::Not publishing: MANIFEST_PUBKEY in crates/core/src/keys.rs is empty, so no app could verify the result. See docs/SIGNING.md."
+            exit 1
+          fi
+          echo "MANIFEST_PUBKEY=$key" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build manifest-lint
+        run: cargo build --release -p helix_installer_core --bin manifest-lint
+      - name: Lint the manifest
+        run: target/release/manifest-lint manifest/manifest.json manifest/img
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      - name: Sign
+        run: |
+          umask 077
+          key=$RUNNER_TEMP/manifest.key
+          printf '%s\n' "$MANIFEST_SIGNING_KEY" > "$key"
+          printf '%s\n' "$MANIFEST_SIGNING_KEY_PASSWORD" | minisign -S -H -s "$key" -m manifest/manifest.json -x manifest/manifest.json.minisig
+          rm -f "$key"
+          # The app verifies against the key compiled into it; a signature it would refuse is not published.
+          target/release/manifest-lint --verify manifest/manifest.json --sig manifest/manifest.json.minisig --pubkey "$MANIFEST_PUBKEY"
+      - name: Upload to R2
+        run: |
+          set -e
+          dest="s3://${R2_BUCKET}/installer"
+          # Images land first so a manifest never names one that is not there yet.
+          aws s3 sync manifest/img "$dest/img" --endpoint-url "$R2_ENDPOINT" --exclude ".gitkeep"
+          aws s3 cp manifest/manifest.json "$dest/manifest.json" --endpoint-url "$R2_ENDPOINT" --content-type application/json
+          aws s3 cp manifest/manifest.json.minisig "$dest/manifest.json.minisig" --endpoint-url "$R2_ENDPOINT" --content-type text/plain
+      - name: Verify what was published
+        if: env.R2_PUBLIC_URL != ''
+        run: |
+          d=$(mktemp -d)
+          curl -fsS "$R2_PUBLIC_URL/installer/manifest.json" -o "$d/manifest.json"
+          curl -fsS "$R2_PUBLIC_URL/installer/manifest.json.minisig" -o "$d/manifest.json.minisig"
+          target/release/manifest-lint --verify "$d/manifest.json" --sig "$d/manifest.json.minisig" --pubkey "$MANIFEST_PUBKEY"

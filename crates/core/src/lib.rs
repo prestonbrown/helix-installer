@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod facts;
 mod fs_atomic;
 pub mod identify;
+pub mod keys;
 pub mod lint;
 pub mod manifest;
 pub mod manifest_sig;

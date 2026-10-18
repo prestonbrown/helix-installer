@@ -3,6 +3,7 @@
 pub mod commands;
 
 use commands::{ipc, AppConfig, AppCore, LanDiscovery};
+use helix_installer_core::keys::{manifest_location, MANIFEST_PUBKEY};
 use helix_installer_core::manifest::Channel;
 use helix_installer_core::transport::drives_sys::SysDrives;
 use helix_installer_core::transport::fetch_http::HttpFetch;
@@ -13,10 +14,6 @@ use helix_installer_core::transport::{Env, SystemClock};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
-
-/// The key the published printer list is signed with. Empty until the list is published, so
-/// until then only a key given in `HELIX_INSTALLER_PUBKEY` verifies anything.
-const MANIFEST_PUBKEY: &str = "";
 
 /// Overrides for development: where to fetch the printer list (`<url or path>`, signature at
 /// `<url or path>.minisig`) and the public key it is signed with (key text or a `.pub` path).
@@ -61,7 +58,7 @@ fn app_core(data_dir: PathBuf) -> AppCore {
         data_dir,
         discovery: Arc::new(LanDiscovery),
         pubkey: pubkey(),
-        manifest_location: std::env::var(MANIFEST_ENV).ok().filter(|v| !v.is_empty()),
+        manifest_location: Some(manifest_location(std::env::var(MANIFEST_ENV).ok())),
         channel_override: channel_override(std::env::var(CHANNEL_ENV).ok()),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
     })
