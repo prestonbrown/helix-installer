@@ -170,6 +170,19 @@ pub trait Clock: Send + Sync {
     async fn sleep(&self, d: Duration);
 }
 
+/// The wall clock and tokio's timer.
+pub struct SystemClock;
+
+#[async_trait]
+impl Clock for SystemClock {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
+    async fn sleep(&self, d: Duration) {
+        tokio::time::sleep(d).await
+    }
+}
+
 #[derive(Clone)]
 pub struct Env {
     pub moonraker: Arc<dyn Moonraker>,

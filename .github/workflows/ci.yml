@@ -39,3 +39,6 @@ jobs:
       - name: Check UI
         working-directory: ui
         run: npm run check
+      - name: Test UI
+        working-directory: ui
+        run: npm test

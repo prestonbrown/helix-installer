@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use helix_installer_core::facts::Facts;
-use helix_installer_core::identify::{identify, start_state, Identified, StartState};
+use helix_installer_core::identify::{
+    identify, identify_as, start_state, Identified, StartState, GENERIC_REFUSE_DOC,
+};
 use helix_installer_core::manifest::Manifest;
 use std::path::PathBuf;
 
@@ -260,4 +262,58 @@ fn helix_without_version_still_reaches_the_helix_recipe() {
         identify(&manifest(), &f),
         recipe("k2", StartState::Helix(String::new()), "helix_upgrade")
     );
+}
+
+#[test]
+fn a_picked_model_with_no_facts_gets_its_stock_recipe() {
+    assert_eq!(
+        identify_as(&manifest(), "k1", &probe("empty")),
+        recipe("k1", StartState::Stock, "k1_stock")
+    );
+}
+
+#[test]
+fn a_picked_model_settles_an_ambiguous_printer() {
+    assert_eq!(
+        identify_as(&manifest(), "k1", &probe("two_printers")),
+        recipe("k1", StartState::Stock, "k1_stock")
+    );
+}
+
+#[test]
+fn a_picked_model_the_facts_contradict_is_refused() {
+    match identify_as(&manifest(), "k1", &probe("k2_stock")) {
+        Identified::Refuse {
+            printer_id: Some(p),
+            doc,
+            reason,
+        } => {
+            assert_eq!(p, "k1");
+            assert_eq!(doc, "https://helixscreen.org/docs/k1");
+            assert!(reason.contains("Creality K1"), "{reason}");
+        }
+        other => panic!("expected Refuse, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_picked_model_missing_from_the_manifest_is_refused() {
+    assert_eq!(
+        identify_as(&manifest(), "nope", &probe("empty")),
+        Identified::Refuse {
+            printer_id: None,
+            doc: GENERIC_REFUSE_DOC.to_string(),
+            reason: "printer not recognised".to_string(),
+        }
+    );
+}
+
+#[test]
+fn a_picked_model_still_needs_a_matching_recipe() {
+    let mut f = probe("empty");
+    f.insert("stock_version".into(), "1.0".into());
+    assert!(matches!(
+        identify_as(&manifest(), "k2", &f),
+        Identified::Refuse { printer_id: Some(ref p), .. } if p == "k2"
+    ));
 }

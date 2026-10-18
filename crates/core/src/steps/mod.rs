@@ -83,6 +83,15 @@ impl Session {
     pub(crate) fn begin_step(&mut self) {
         self.defaults_tried = false;
     }
+
+    /// The password of the login held now, for stripping from a support bundle.
+    pub(crate) fn secrets(&self) -> Vec<String> {
+        self.login
+            .iter()
+            .map(|l| l.password.clone())
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
 }
 
 /// Everything a step may read or change while it runs.

@@ -128,6 +128,11 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
         }
     };
 
+    choose_recipe(printer, f)
+}
+
+/// Picks the recipe for `printer` from the facts' starting state, or refuses.
+fn choose_recipe(printer: &Printer, f: &Facts) -> Identified {
     let state = start_state(f);
     let mut facts = f.clone();
     facts.insert("state".to_string(), Value::String(state.as_fact()));
@@ -143,4 +148,29 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
         },
         None => refuse(printer),
     }
+}
+
+/// Identifies the printer as the model the user picked, which is how a printer that answers
+/// nothing (stock firmware) or answers like several models is named. Facts that match other
+/// models but not the picked one refuse: the user's word never overrides what the printer says.
+pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
+    let Some(printer) = m.printers.iter().find(|p| p.id == printer_id) else {
+        return Identified::Refuse {
+            printer_id: None,
+            doc: GENERIC_REFUSE_DOC.to_string(),
+            reason: "printer not recognised".to_string(),
+        };
+    };
+    let matched_any = m.printers.iter().any(|p| printer_matches(p, f));
+    if matched_any && !printer_matches(printer, f) {
+        return Identified::Refuse {
+            printer_id: Some(printer.id.clone()),
+            doc: printer.fallback.doc.clone(),
+            reason: format!(
+                "this printer answers as a different model, not a {}",
+                printer.name
+            ),
+        };
+    }
+    choose_recipe(printer, f)
 }

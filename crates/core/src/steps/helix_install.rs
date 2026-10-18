@@ -12,7 +12,7 @@ use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, PlatformSel};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
-use crate::transport::RemoteJob;
+use crate::transport::{Env, RemoteJob};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -135,7 +135,7 @@ async fn launch(
         return Err(StepOutcome::failed("no download cache directory is set"));
     };
     let release: ReleaseManifest =
-        fetch_json(ctx, RELEASES_MANIFEST_URL, "the release list").await?;
+        fetch_json(ctx.env, RELEASES_MANIFEST_URL, "the release list").await?;
     let Some(asset) = release.assets.get(platform) else {
         return Err(StepOutcome::failed(format!(
             "HelixScreen {} has no build for platform {platform}",
@@ -154,7 +154,7 @@ async fn launch(
         sha256: asset.sha256.clone(),
         filename: Some(tarball_name.clone()),
     };
-    let script = install_sh_artifact(ctx, &release.tag).await?;
+    let script = install_sh_artifact(ctx.env, &release.tag).await?;
 
     let tarball_local = fetch_artifact(ctx.env, &tarball, &cache, &|_, _| {})
         .await
@@ -216,13 +216,14 @@ async fn check_sudo(ctx: &mut StepCtx<'_>) -> Result<(), StepOutcome> {
     }
 }
 
+/// Takes the `Env` rather than the `StepCtx`: a shared borrow of the context held across an
+/// await would make the runner's future not `Send`.
 async fn fetch_json<T: for<'de> Deserialize<'de>>(
-    ctx: &StepCtx<'_>,
+    env: &Env,
     url: &str,
     what: &str,
 ) -> Result<T, StepOutcome> {
-    let text = ctx
-        .env
+    let text = env
         .fetch
         .get_text(url)
         .await
@@ -232,14 +233,14 @@ async fn fetch_json<T: for<'de> Deserialize<'de>>(
 }
 
 /// `install.sh` from the GitHub release `tag`, checked against the asset's `digest`.
-async fn install_sh_artifact(ctx: &StepCtx<'_>, tag: &str) -> Result<Artifact, StepOutcome> {
+async fn install_sh_artifact(env: &Env, tag: &str) -> Result<Artifact, StepOutcome> {
     if !safe_name(tag) {
         return Err(StepOutcome::failed(format!(
             "the release list names an unusable tag: {tag}"
         )));
     }
     let url = format!("{GITHUB_RELEASE_API}/{tag}");
-    let release: GithubRelease = fetch_json(ctx, &url, "the GitHub release").await?;
+    let release: GithubRelease = fetch_json(env, &url, "the GitHub release").await?;
     let Some(asset) = release.assets.into_iter().find(|a| a.name == "install.sh") else {
         return Err(StepOutcome::failed(format!(
             "the GitHub release {tag} has no install.sh"

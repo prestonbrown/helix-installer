@@ -482,6 +482,14 @@ pub fn verify_and_parse(
     Ok(manifest)
 }
 
+/// A verified manifest with the bytes and signature it was verified from.
+#[derive(Debug, Clone)]
+pub struct SignedManifest {
+    pub bytes: Vec<u8>,
+    pub sig: String,
+    pub manifest: Manifest,
+}
+
 /// On-disk copy of the last good manifest, usable offline for `CACHE_MAX_AGE`.
 pub struct ManifestCache {
     dir: PathBuf,
@@ -522,6 +530,11 @@ impl ManifestCache {
     /// Returns the cached manifest only if it was fetched under 30 days before `now` and still
     /// verifies.
     pub fn load(&self, now: SystemTime) -> Option<Manifest> {
+        self.load_signed(now).map(|s| s.manifest)
+    }
+
+    /// As `load`, keeping the signed bytes, which a run needs to keep its own copy.
+    pub fn load_signed(&self, now: SystemTime) -> Option<SignedManifest> {
         let fetched: u64 = std::fs::read_to_string(self.path("manifest.fetched_at"))
             .ok()?
             .trim()
@@ -535,6 +548,11 @@ impl ManifestCache {
         }
         let bytes = std::fs::read(self.path("manifest.json")).ok()?;
         let sig = std::fs::read_to_string(self.path("manifest.json.minisig")).ok()?;
-        verify_and_parse(&bytes, &sig, &self.pubkey, &self.app_version).ok()
+        let manifest = verify_and_parse(&bytes, &sig, &self.pubkey, &self.app_version).ok()?;
+        Some(SignedManifest {
+            bytes,
+            sig,
+            manifest,
+        })
     }
 }

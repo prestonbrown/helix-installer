@@ -1305,3 +1305,32 @@ async fn a_committing_ask_commits_only_on_a_listed_choice() {
     ));
     assert!(r.state().committed);
 }
+
+#[tokio::test]
+async fn secrets_are_the_login_held_in_memory() {
+    let f = Fakes::new();
+    let m = manifest(json!([
+        { "type": "info", "text": "before" },
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "info", "text": "after" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("sec", json!({})))
+        .with_handler("ssh_login", Arc::new(TestLogin));
+    r.advance(None).await;
+    assert!(r.secrets().is_empty());
+    assert!(matches!(
+        r.advance(Some(Input::Next)).await,
+        Event::NeedInput(Prompt::Info { .. })
+    ));
+    assert_eq!(r.secrets(), vec![PASSWORD.to_string()]);
+}
+
+/// The app runs `advance` on a multi-threaded runtime, so its future must be `Send`.
+#[test]
+fn advance_can_run_on_another_thread() {
+    fn assert_send<T: Send>(_: &T) {}
+    let f = Fakes::new();
+    let mut r = Runner::new(f.env(), manifest(json!([])), state("send", json!({})));
+    let fut = r.advance(None);
+    assert_send(&fut);
+}

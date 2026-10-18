@@ -331,3 +331,18 @@ fn regenerate_test_keypair() {
     )
     .unwrap();
 }
+
+#[test]
+fn cache_hands_back_the_signed_bytes_it_verified() {
+    let td = tempdir();
+    let dir = td.path().to_path_buf();
+    let bytes = manifest_bytes();
+    let sig = sign(&bytes);
+    let c = cache(&dir);
+    c.store(&bytes, &sig, at(1_000_000)).unwrap();
+    let signed = c.load_signed(at(1_000_000 + DAY)).unwrap();
+    assert_eq!(signed.bytes, bytes);
+    assert_eq!(signed.sig, sig);
+    assert_eq!(signed.manifest.min_app_version, "0.1.0");
+    assert!(c.load_signed(at(1_000_000 + 31 * DAY)).is_none());
+}

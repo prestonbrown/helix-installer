@@ -176,6 +176,21 @@ impl Runner {
         &self.state
     }
 
+    /// The passwords this run holds in memory, for `bundle::support_bundle` to strip.
+    pub fn secrets(&self) -> Vec<String> {
+        self.session.secrets()
+    }
+
+    /// The manifest the run is pinned to: its own verified copy, not the newest one.
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// The printer's install guide from the run's own manifest, else the generic one.
+    pub fn guide(&self) -> String {
+        self.printer_doc()
+    }
+
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         run_state::save(&self.state, dir)
     }
