@@ -93,6 +93,7 @@ fn name(target: WaitTarget) -> String {
     match target {
         WaitTarget::Port(p) => format!("port {p}"),
         WaitTarget::Moonraker => "Moonraker".into(),
+        WaitTarget::KlipperReady => "Klipper".into(),
         WaitTarget::Ssh => "SSH".into(),
         WaitTarget::HelixService => "HelixScreen".into(),
     }
@@ -104,6 +105,10 @@ async fn poll(ctx: &mut StepCtx<'_>, target: WaitTarget) -> Poll {
     let up = |b: bool| if b { Poll::Up } else { Poll::NotYet };
     match target {
         WaitTarget::Moonraker => up(env.moonraker.printer_info(host).await.is_ok()),
+        WaitTarget::KlipperReady => match env.moonraker.printer_info(host).await {
+            Ok(info) => up(info.get("state").and_then(|s| s.as_str()) == Some("ready")),
+            Err(_) => Poll::NotYet,
+        },
         WaitTarget::Port(p) => up(env.net.tcp_banner(host, p, CONNECT_TIMEOUT).await.is_ok()),
         WaitTarget::Ssh => up(matches!(
             env.net.tcp_banner(host, host.ssh_port, CONNECT_TIMEOUT).await,

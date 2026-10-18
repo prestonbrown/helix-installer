@@ -62,10 +62,35 @@ pub struct Printer {
     #[serde(with = "rule_list")]
     pub identify: Vec<IdentifyRule>,
     pub recipes: Vec<RecipeChoice>,
-    pub restore: String,
+    /// Absent only on a refused printer.
+    #[serde(default)]
+    pub restore: Option<RestoreSel>,
     pub fallback: Fallback,
     #[serde(default)]
     pub verified: Option<Verified>,
+    /// A printer the installer knows and turns away: when its identify rules match, the
+    /// printer is refused with its `fallback.doc`, whatever else the facts also match.
+    #[serde(default)]
+    pub refused: bool,
+}
+
+/// One restore recipe, or a list chosen by the facts (first match), for a printer whose way
+/// back depends on what it runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RestoreSel {
+    Recipe(String),
+    ByFacts(Vec<RecipeChoice>),
+}
+
+impl RestoreSel {
+    /// Every recipe this can name.
+    pub fn recipes(&self) -> Vec<&str> {
+        match self {
+            RestoreSel::Recipe(r) => vec![r.as_str()],
+            RestoreSel::ByFacts(choices) => choices.iter().map(|c| c.recipe.as_str()).collect(),
+        }
+    }
 }
 
 /// All conditions must hold against the gathered facts.
@@ -274,6 +299,8 @@ pub enum Probe {
 pub enum WaitTarget {
     Port(u16),
     Moonraker,
+    /// Moonraker answers and reports Klipper `ready`.
+    KlipperReady,
     Ssh,
     HelixService,
 }

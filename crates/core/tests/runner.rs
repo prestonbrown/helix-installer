@@ -309,6 +309,27 @@ async fn wait_for_announces_its_message_before_waiting() {
 }
 
 #[tokio::test]
+async fn wait_for_klipper_ready_waits_past_a_moonraker_that_answers_early() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "startup" }));
+    let m = manifest(json!([
+        { "type": "wait_for", "target": "klipper_ready", "timeout_s": 6, "message": "Waiting" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(
+        settle(&mut r, None).await,
+        Event::Failed {
+            committed: false,
+            ..
+        }
+    ));
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+}
+
+#[tokio::test]
 async fn a_failed_step_is_retried_by_the_next_advance() {
     let f = Fakes::new();
     let m = manifest(json!([

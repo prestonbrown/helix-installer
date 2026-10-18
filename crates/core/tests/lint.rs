@@ -339,6 +339,33 @@ fn a_require_without_range_or_equals_is_flagged() {
 }
 
 #[test]
+fn a_refused_printer_needs_no_recipes_restore_or_verified_record() {
+    let mut v = base();
+    v["printers"].as_array_mut().unwrap().push(json!({
+        "id": "u1", "name": "Snapmaker U1", "refused": true,
+        "identify": [{"klipper_objects": {"contains": "machine_state_manager"}}],
+        "recipes": [], "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/u1"}
+    }));
+    assert_eq!(run(v.clone(), false), vec![]);
+    v["printers"][1]["recipes"] = json!([{"when": {"state": "stock"}, "recipe": "install"}]);
+    assert!(run(v, false)
+        .iter()
+        .any(|e| e.message.contains("refused printer")));
+}
+
+#[test]
+fn restore_choices_must_name_known_recipes() {
+    let mut v = base();
+    v["printers"][0]["restore"] = json!([
+        {"when": {"os": "a"}, "recipe": "restore"},
+        {"when": {"os": "b"}, "recipe": "missing"}
+    ]);
+    let errs = run(v, false);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("missing"), "{errs:?}");
+}
+
+#[test]
 fn binary_exits_2_on_unparseable_json() {
     let dir = assets();
     let path = dir.path().join("m.json");

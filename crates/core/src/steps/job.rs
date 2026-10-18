@@ -4,10 +4,12 @@
 //! the moment it exits, dies or goes silent.
 
 use super::{StepCtx, StepOutcome};
+use crate::transport::ssh_russh::sh_quote;
 use crate::transport::{RemoteJob, TransportError};
 use std::time::{Duration, SystemTime};
 
 const POLL: Duration = Duration::from_secs(2);
+const KILL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Output lines quoted in a failure.
 const TAIL_LINES: usize = 10;
 
@@ -143,6 +145,42 @@ pub(crate) fn tail(ctx: &StepCtx<'_>, keep: fn(&str) -> bool) -> String {
         String::new()
     } else {
         format!(":\n{}", last.join("\n"))
+    }
+}
+
+/// Stops a running job: its whole process group (a `setsid` job leads one), else the job's
+/// shell alone. A job started through sudo is stopped through sudo with the same password.
+/// `Err` says why it could not be stopped.
+pub(crate) async fn kill(
+    ctx: &mut StepCtx<'_>,
+    job: &RemoteJob,
+    sudo_password: Option<&str>,
+) -> Result<(), String> {
+    let Some(pid) = job.pid else {
+        return Err("its process id is unknown".into());
+    };
+    let kill = format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}");
+    let (cmd, stdin) = match sudo_password {
+        Some(pw) => (
+            format!("sudo -S -p '' sh -c {}", sh_quote(&kill)),
+            Some(format!("{pw}\n")),
+        ),
+        None => (kill, None),
+    };
+    let ran = match ctx.ssh().await {
+        Ok(s) => {
+            s.exec(&cmd, stdin.as_deref().map(str::as_bytes), KILL_TIMEOUT)
+                .await
+        }
+        Err(e) => Err(e),
+    };
+    match ran {
+        Ok(out) if out.exit == 0 => Ok(()),
+        Ok(out) => Err(format!("kill exited with {}", out.exit)),
+        Err(e) => {
+            ctx.drop_ssh();
+            Err(e.to_string())
+        }
     }
 }
 

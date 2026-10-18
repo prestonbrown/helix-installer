@@ -104,6 +104,11 @@ pub fn moonraker_facts(kind: MoonrakerProbe, v: &Value) -> Facts {
                 "cpu_arch",
                 str_at(v, &["system_info", "cpu_info", "processor"]),
             );
+            // The board's device-tree model ("Raspberry Pi 4 Model B Rev 1.4").
+            put(
+                "cpu_model",
+                str_at(v, &["system_info", "cpu_info", "model"]),
+            );
             put(
                 "os_distribution",
                 str_at(v, &["system_info", "distribution", "name"]),

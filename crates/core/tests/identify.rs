@@ -410,3 +410,99 @@ fn prefix_and_not_round_trip_through_serde() {
     let back = serde_json::to_value(&m.printers[0].identify[0]).unwrap();
     assert_eq!(back, rule);
 }
+
+fn with_refused_and_generic() -> Manifest {
+    serde_json::from_value(serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "artifacts": {}, "recipes": {"r": []},
+        "printers": [
+            {
+                "id": "generic", "name": "Klipper host", "identify": [{"cpu_model": {"prefix": "BigTreeTech"}}],
+                "recipes": [{"when": {"state": "modded:moonraker"}, "recipe": "r"}],
+                "restore": "r", "fallback": {"refuse": true, "doc": "https://d/generic"}
+            },
+            {
+                "id": "sovol", "name": "Sovol SV08", "refused": true,
+                "identify": [{"klipper_objects": {"contains": "probe_pressure"}}],
+                "recipes": [], "fallback": {"refuse": true, "doc": "https://d/sovol"}
+            }
+        ]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_refused_printer_wins_over_every_other_match() {
+    let m = with_refused_and_generic();
+    let f: Facts = serde_json::from_value(serde_json::json!({
+        "has_moonraker": true, "cpu_model": "BigTreeTech CB1", "klipper_objects": ["probe_pressure"]
+    }))
+    .unwrap();
+    for got in [identify(&m, &f), identify_as(&m, "generic", &f)] {
+        match got {
+            Identified::Refuse {
+                printer_id,
+                doc,
+                reason,
+            } => {
+                assert_eq!(printer_id.as_deref(), Some("sovol"));
+                assert_eq!(doc, "https://d/sovol");
+                assert!(reason.contains("Sovol SV08"), "{reason}");
+            }
+            other => panic!("expected the Sovol refusal, got {other:?}"),
+        }
+    }
+    let mut plain = f.clone();
+    plain.insert("klipper_objects".into(), serde_json::json!(["probe"]));
+    assert!(matches!(identify(&m, &plain), Identified::Recipe { .. }));
+}
+
+#[test]
+fn a_picked_refused_model_is_refused_with_its_doc() {
+    let m = with_refused_and_generic();
+    assert!(matches!(
+        identify_as(&m, "sovol", &Facts::new()),
+        Identified::Refuse { doc, .. } if doc == "https://d/sovol"
+    ));
+}
+
+#[test]
+fn restore_follows_the_facts_when_it_is_chosen_by_them() {
+    use helix_installer_core::identify::restore_for;
+    let m: Manifest = serde_json::from_value(serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "artifacts": {},
+        "recipes": {"a": [], "b": [], "c": []},
+        "printers": [
+            {"id": "one", "name": "One", "identify": [{"model": "one"}], "recipes": [],
+             "restore": "c", "fallback": {"refuse": true, "doc": "https://d"}},
+            {"id": "two", "name": "Two", "identify": [{"model": "two"}], "recipes": [],
+             "restore": [
+                {"when": {"os_distribution": {"prefix": "Forge-X"}}, "recipe": "a"},
+                {"when": {"klipper_objects": {"contains": "zmod"}}, "recipe": "b"}
+             ],
+             "fallback": {"refuse": true, "doc": "https://d"}}
+        ]
+    }))
+    .unwrap();
+    let f = |v: serde_json::Value| -> Facts { serde_json::from_value(v).unwrap() };
+    assert_eq!(restore_for(&m, "one", &Facts::new()).as_deref(), Some("c"));
+    assert_eq!(
+        restore_for(
+            &m,
+            "two",
+            &f(serde_json::json!({"os_distribution": "Forge-X 1.4.2"}))
+        )
+        .as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        restore_for(
+            &m,
+            "two",
+            &f(serde_json::json!({"klipper_objects": ["zmod"]}))
+        )
+        .as_deref(),
+        Some("b")
+    );
+    assert_eq!(restore_for(&m, "two", &Facts::new()), None);
+    assert_eq!(restore_for(&m, "nope", &Facts::new()), None);
+}

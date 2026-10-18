@@ -378,6 +378,33 @@ async fn install_sh_artifact(env: &Env, tag: &str) -> Result<Artifact, StepOutco
     })
 }
 
+/// Kills the installer that named `found`, then removes the uploads; a job that could not be
+/// killed keeps its files, since it may still be reading them.
+async fn stop_wrong_platform(
+    ctx: &mut StepCtx<'_>,
+    running: &RemoteJob,
+    found: &str,
+    platform: &str,
+) -> StepOutcome {
+    let sudo_password = match sudo::plan(ctx).await {
+        Ok(SudoPlan::WithPassword(pw)) => Some(pw),
+        Ok(_) => None,
+        Err(stop) => return stop,
+    };
+    let killed = job::kill(ctx, running, sudo_password.as_deref()).await;
+    job::forget(ctx);
+    let reason = format!("the installer found platform {found}, but this printer needs {platform}");
+    match killed {
+        Ok(()) => {
+            remove_uploaded(ctx).await;
+            StepOutcome::failed(format!("{reason}; it was stopped before installing"))
+        }
+        Err(why) => StepOutcome::failed(format!(
+            "{reason}, and it could not be stopped ({why}); it may still be running on the printer"
+        )),
+    }
+}
+
 fn is_progress(line: &str) -> bool {
     parse_progress_line(line).is_some()
 }
@@ -406,6 +433,14 @@ async fn follow(
         _ => None,
     });
     let tail = job::tail(ctx, |l| !is_progress(l));
+
+    // install.sh names its platform before it changes anything, so a wrong one is stopped
+    // there rather than left to install a build this printer does not run.
+    if let (Some(p), None) = (&reported, &result) {
+        if p != platform {
+            return stop_wrong_platform(ctx, running, p, platform).await;
+        }
+    }
 
     if let Some((ok, reason)) = result {
         job::forget(ctx);

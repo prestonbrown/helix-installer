@@ -118,6 +118,7 @@ struct SshState {
     drop_next_session_after: Option<u32>,
     connects: u32,
     sudo_password: Option<String>,
+    job_pid: Option<u32>,
 }
 
 /// Shared by every session it hands out, so a reconnect sees the same job logs.
@@ -164,6 +165,10 @@ impl FakeSsh {
     /// sudo does after a wrong password. Without this any password is taken.
     pub fn sudo_accepts(&self, password: &str) {
         lock(&self.state).sudo_password = Some(password.into());
+    }
+    /// Jobs started from now on report `pid` (by default the pid is unknown).
+    pub fn job_pid(&self, pid: u32) {
+        lock(&self.state).job_pid = Some(pid);
     }
     /// The next session to connect fails every call from its n-th (1-based)
     /// onward with `Unreachable`; later sessions are unaffected.
@@ -302,7 +307,7 @@ impl SshSession for FakeSshSession {
         );
         Ok(RemoteJob {
             log_path,
-            pid: None,
+            pid: st.job_pid,
         })
     }
 

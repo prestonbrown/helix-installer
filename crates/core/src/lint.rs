@@ -34,7 +34,12 @@ pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec
         })
     };
 
-    let restores: BTreeSet<&str> = m.printers.iter().map(|p| p.restore.as_str()).collect();
+    let restores: BTreeSet<&str> = m
+        .printers
+        .iter()
+        .filter_map(|p| p.restore.as_ref())
+        .flat_map(|r| r.recipes())
+        .collect();
 
     for (id, a) in &m.artifacts {
         if a.sha256.len() != 64
@@ -80,14 +85,29 @@ fn lint_printer(
     if p.fallback.doc.trim().is_empty() {
         err(&p.id, "fallback.doc is empty".into());
     }
-    if !m.recipes.contains_key(&p.restore) {
-        err(
-            &p.id,
-            format!("restore names unknown recipe {:?}", p.restore),
-        );
-    }
     if let Some(photo) = &p.photo {
         check_image(&p.id, photo, asset_root, err);
+    }
+    // A refused printer only turns printers away: nothing installs, so nothing to restore
+    // or verify.
+    if p.refused {
+        if !p.recipes.is_empty() || p.restore.is_some() {
+            err(
+                &p.id,
+                "a refused printer has no recipes and no restore".into(),
+            );
+        }
+        return;
+    }
+    match &p.restore {
+        None => err(&p.id, "printer has no restore recipe".into()),
+        Some(r) => {
+            for name in r.recipes() {
+                if !m.recipes.contains_key(name) {
+                    err(&p.id, format!("restore names unknown recipe {name:?}"));
+                }
+            }
+        }
     }
     if p.verified.is_none() && !allow_unverified {
         err(&p.id, "printer has no verified record".into());

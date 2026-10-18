@@ -7,26 +7,33 @@
       "name": "Klipper host (Voron, MainsailOS, FluiddPi, KIAUH)",
       "identify": [
         {
-          "os_distribution": {
-            "prefix": "Debian GNU/Linux"
-          },
-          "klipper_hostname": {
-            "not": "linaro-alip"
+          "cpu_model": {
+            "prefix": "Raspberry Pi"
           }
         },
         {
-          "os_distribution": {
-            "prefix": "Raspbian GNU/Linux"
+          "cpu_model": {
+            "prefix": "BigTreeTech"
           }
         },
         {
-          "os_distribution": {
-            "prefix": "Armbian"
+          "cpu_model": {
+            "prefix": "BTT"
           }
         },
         {
-          "os_distribution": {
-            "prefix": "Ubuntu"
+          "cpu_model": {
+            "prefix": "Xunlong Orange Pi"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "OrangePi"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "Radxa"
           }
         }
       ],
@@ -70,6 +77,12 @@
       "id": "qidi",
       "name": "QIDI Q2 / Max 4 / Plus 5",
       "identify": [
+        {
+          "cpu_arch": "aarch64",
+          "klipper_objects": {
+            "contains": "temperature_sensor Chamber_Thermal_Protection_Sensor"
+          }
+        },
         {
           "klipper_hostname": "linaro-alip",
           "cpu_arch": "aarch64"
@@ -270,7 +283,24 @@
           "recipe": "ad5m_forgex"
         }
       ],
-      "restore": "ad5m_restore",
+      "restore": [
+        {
+          "when": {
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_restore"
+        },
+        {
+          "when": {
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_restore"
+        }
+      ],
       "fallback": {
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-ad5m"
@@ -344,10 +374,165 @@
           "recipe": "ad5m_pro_forgex"
         }
       ],
-      "restore": "ad5m_restore",
+      "restore": [
+        {
+          "when": {
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_restore"
+        },
+        {
+          "when": {
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_restore"
+        }
+      ],
       "fallback": {
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-ad5m"
+      }
+    },
+    {
+      "id": "snapmaker_u1",
+      "name": "Snapmaker U1",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "machine_state_manager"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains": "homing_precise_corexy"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-snapmaker-u1"
+      }
+    },
+    {
+      "id": "qidi_tjc",
+      "name": "QIDI X-Smart 3 / X-Plus 3 / X-Max 3 / Q1 Pro / Plus 4",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_hostname": "mkspi"
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-qidi-tjc"
+      }
+    },
+    {
+      "id": "sovol",
+      "name": "Sovol SV08",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "probe_pressure"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-sovol"
+      }
+    },
+    {
+      "id": "elegoo_neptune4",
+      "name": "Elegoo Neptune 4",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_hostname": {
+            "prefix": "neptune"
+          }
+        },
+        {
+          "klipper_hostname": {
+            "prefix": "Neptune"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-elegoo-neptune4"
+      }
+    },
+    {
+      "id": "elegoo_cc1",
+      "name": "Elegoo Centauri Carbon",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "gcode_macro _COSMOS_SETTINGS"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-elegoo-cc1"
+      }
+    },
+    {
+      "id": "flashforge_creator5",
+      "name": "FlashForge Creator 5 / 5 Pro",
+      "refused": true,
+      "identify": [
+        {
+          "flashforge_udp.model": "Creator5"
+        },
+        {
+          "flashforge_udp.model": "Creator5Pro"
+        },
+        {
+          "klipper_objects": {
+            "contains": "ff_toolchange"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains": "gcode_button extruder_grab1"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-flashforge-creator5"
+      }
+    },
+    {
+      "id": "anycubic_kobra",
+      "name": "Anycubic Kobra",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "filament_hub"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-anycubic-kobra"
       }
     }
   ],
@@ -608,7 +793,7 @@
       },
       {
         "type": "info",
-        "text": "Before you start: the installer first puts Simple AF, a community firmware, on this printer, then HelixScreen. Going back to Creality's own software later takes a factory reset or Creality's recovery firmware; removing only HelixScreen is quick and leaves Simple AF's screen."
+        "text": "Before you start: the installer first puts Simple AF, a community firmware, on this printer, then HelixScreen. Going back to Creality's own software later takes a factory reset or Creality's recovery firmware; removing only HelixScreen is quick and leaves Simple AF's screen. Simple AF's installer turns off certificate checking for git on the printer, and it stays off."
       },
       {
         "type": "user_action",
@@ -628,6 +813,18 @@
           }
         ],
         "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "case \"$(/usr/bin/get_sn_mac.sh model 2>/dev/null)\" in CR-K1|K1C|\"CR-K1 Max\") echo yes;; *) echo no;; esac",
+        "fact": "k1_model_ok"
+      },
+      {
+        "type": "require",
+        "fact": "k1_model_ok",
+        "equals": "true",
+        "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
+        "doc": "https://helixscreen.org/docs/install-k1"
       },
       {
         "type": "probe",
@@ -665,7 +862,7 @@
       },
       {
         "type": "ssh_run",
-        "command": "git config --global http.sslVerify false; git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp && sh /usr/data/pellcorp/k1/installer.sh --install loadcells",
+        "command": "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells",
         "timeout_s": 1800,
         "commits": true
       },
@@ -699,6 +896,18 @@
       },
       {
         "type": "probe",
+        "ssh": "case \"$(/usr/bin/get_sn_mac.sh model 2>/dev/null)\" in CR-K1|K1C|\"CR-K1 Max\") echo yes;; *) echo no;; esac",
+        "fact": "k1_model_ok"
+      },
+      {
+        "type": "require",
+        "fact": "k1_model_ok",
+        "equals": "true",
+        "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
+        "doc": "https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "probe",
         "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
         "fact": "helix_installed"
       },
@@ -722,6 +931,18 @@
       },
       {
         "type": "probe",
+        "ssh": "case \"$(/usr/bin/get_sn_mac.sh model 2>/dev/null)\" in CR-K1|K1C|\"CR-K1 Max\") echo yes;; *) echo no;; esac",
+        "fact": "k1_model_ok"
+      },
+      {
+        "type": "require",
+        "fact": "k1_model_ok",
+        "equals": "true",
+        "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
+        "doc": "https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "probe",
         "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
         "fact": "helix_installed"
       },
@@ -736,7 +957,7 @@
     "k1_restore": [
       {
         "type": "info",
-        "text": "This removes HelixScreen and puts back the screen the printer had before it: GrumpyScreen on Simple AF. Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/docs/install-k1"
+        "text": "This removes HelixScreen and puts back the screen the printer had before it (GrumpyScreen on Simple AF, or the one your Helper Script setup used). Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/docs/install-k1"
       },
       {
         "type": "ssh_login",
@@ -818,7 +1039,7 @@
       },
       {
         "type": "info",
-        "text": "ZMOD's own guide asks for the printer to be reset to factory settings before the mod goes on. If you have changed settings or installed anything since the firmware was last flashed, reset it from the printer's Settings first. Then press Next to copy ZMOD onto a USB stick."
+        "text": "ZMOD installs only on a printer reset to factory settings: its own guide makes this a requirement. Reset the printer from its Settings now if it has not been reset since its firmware was last flashed. Then press Next to copy ZMOD onto a USB stick."
       },
       {
         "type": "download",
@@ -838,7 +1059,7 @@
       },
       {
         "type": "wait_for",
-        "target": "moonraker",
+        "target": "klipper_ready",
         "timeout_s": 2400,
         "message": "ZMOD is installing; this can take up to 40 minutes. Do not power off the printer. Remove the USB stick afterwards.",
         "help": "If the printer's screen shows an error or stays on one message for a long time, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
@@ -1089,7 +1310,7 @@
       },
       {
         "type": "probe",
-        "ssh": "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
         "fact": "helix_installed"
       },
       {
@@ -1116,7 +1337,7 @@
       },
       {
         "type": "probe",
-        "ssh": "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
         "fact": "helix_installed"
       },
       {
@@ -1173,6 +1394,17 @@
         "uninstall": true,
         "commits": true,
         "dir": "/data"
+      }
+    ],
+    "ad5m_zmod_restore": [
+      {
+        "type": "info",
+        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5M guide explains it: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_ON",
+        "commits": true
       }
     ]
   }

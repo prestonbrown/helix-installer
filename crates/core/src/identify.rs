@@ -3,7 +3,7 @@
 //! Maps the facts gathered about a printer to a recipe, or refuses.
 
 use crate::facts::Facts;
-use crate::manifest::{Cond, Manifest, Printer};
+use crate::manifest::{Cond, Manifest, Printer, RestoreSel};
 use crate::version::FwVersion;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -134,7 +134,25 @@ fn refuse(printer: &Printer) -> Identified {
     }
 }
 
+/// The first refused printer the facts match: it wins over every other match.
+fn refused_match<'a>(m: &'a Manifest, f: &Facts) -> Option<&'a Printer> {
+    m.printers
+        .iter()
+        .find(|p| p.refused && printer_matches(p, f))
+}
+
+fn turned_away(p: &Printer) -> Identified {
+    Identified::Refuse {
+        printer_id: Some(p.id.clone()),
+        doc: p.fallback.doc.clone(),
+        reason: format!("this installer cannot put HelixScreen on a {}", p.name),
+    }
+}
+
 pub fn identify(m: &Manifest, f: &Facts) -> Identified {
+    if let Some(p) = refused_match(m, f) {
+        return turned_away(p);
+    }
     let matched: Vec<&Printer> = m
         .printers
         .iter()
@@ -153,11 +171,36 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
     choose_recipe(printer, f)
 }
 
+/// The restore recipe for the manifest's printer `printer_id` given the facts: its single
+/// recipe, or the first choice whose `when` the facts (with `state`) match. `None` when the
+/// printer is unknown, refused or no choice matches.
+pub fn restore_for(m: &Manifest, printer_id: &str, f: &Facts) -> Option<String> {
+    let printer = m.printers.iter().find(|p| p.id == printer_id)?;
+    match printer.restore.as_ref()? {
+        RestoreSel::Recipe(r) => Some(r.clone()),
+        RestoreSel::ByFacts(choices) => {
+            let facts = with_state(f);
+            choices
+                .iter()
+                .find(|c| !c.when.is_empty() && all_match(&c.when, &facts))
+                .map(|c| c.recipe.clone())
+        }
+    }
+}
+
+fn with_state(f: &Facts) -> Facts {
+    let mut facts = f.clone();
+    facts.insert("state".to_string(), Value::String(start_state(f).as_fact()));
+    facts
+}
+
 /// Picks the recipe for `printer` from the facts' starting state, or refuses.
 fn choose_recipe(printer: &Printer, f: &Facts) -> Identified {
+    if printer.refused {
+        return turned_away(printer);
+    }
     let state = start_state(f);
-    let mut facts = f.clone();
-    facts.insert("state".to_string(), Value::String(state.as_fact()));
+    let facts = with_state(f);
     match printer
         .recipes
         .iter()
@@ -189,6 +232,9 @@ pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
     let Some(printer) = m.printers.iter().find(|p| p.id == printer_id) else {
         return not_recognised();
     };
+    if let Some(p) = refused_match(m, f) {
+        return turned_away(p);
+    }
     let matched_any = m.printers.iter().any(|p| printer_matches(p, f));
     if !f.is_empty() && !matched_any {
         return not_recognised();

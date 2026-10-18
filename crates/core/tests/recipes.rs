@@ -4,7 +4,9 @@
 //! recorded on real printers (`tests/fixtures/fleet`).
 
 use helix_installer_core::facts::Facts;
-use helix_installer_core::identify::{identify, identify_as, Identified, StartState};
+use helix_installer_core::identify::{
+    identify, identify_as, restore_for, Identified, StartState, GENERIC_REFUSE_DOC,
+};
 use helix_installer_core::lint::lint_with;
 use helix_installer_core::manifest::{Channel, Login, Manifest};
 use helix_installer_core::run_state::RunState;
@@ -40,6 +42,19 @@ fn fleet(name: &str) -> Facts {
         .join("tests/fixtures/fleet")
         .join(format!("{name}.json"));
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// A fleet record plus the board model Moonraker reports (`cpu_info.model`), which the
+/// recordings predate. ASSUMED values until the pi3 and the CB1 Voron are recorded again.
+fn fleet_sbc(name: &str) -> Facts {
+    let model = match name {
+        "pi3_mainsailos" => "Raspberry Pi 3 Model B Rev 1.2",
+        "cb1_voron" => "BigTreeTech CB1",
+        other => panic!("no board model for {other}"),
+    };
+    let mut f = fleet(name);
+    f.insert("cpu_model".into(), model.into());
+    f
 }
 
 fn sha(bytes: &[u8]) -> String {
@@ -264,7 +279,7 @@ fn the_voron_and_the_pi_are_generic_hosts_with_helix_installed() {
     let m = staging();
     for host in ["pi3_mainsailos", "cb1_voron"] {
         assert_eq!(
-            identify(&m, &fleet(host)),
+            identify(&m, &fleet_sbc(host)),
             recipe(
                 "generic_klipper",
                 StartState::Helix("v1.0.0".into()),
@@ -277,7 +292,7 @@ fn the_voron_and_the_pi_are_generic_hosts_with_helix_installed() {
 
 #[test]
 fn a_generic_host_without_helix_gets_the_install_recipe() {
-    let mut f = fleet("pi3_mainsailos");
+    let mut f = fleet_sbc("pi3_mainsailos");
     f.remove("helix_installed");
     f.remove("helix_version");
     assert_eq!(
@@ -288,7 +303,7 @@ fn a_generic_host_without_helix_gets_the_install_recipe() {
 
 #[test]
 fn a_generic_host_on_a_cpu_without_a_build_is_refused() {
-    let mut f = fleet("cb1_voron");
+    let mut f = fleet_sbc("cb1_voron");
     f.insert("cpu_arch".into(), "x86_64".into());
     assert!(matches!(
         identify(&staging(), &f),
@@ -307,7 +322,7 @@ async fn generic_install_asks_for_the_login_and_installs_for_the_cpu() {
     });
     rig.installer_succeeds("pi");
     let m = staging();
-    let mut f = fleet("pi3_mainsailos");
+    let mut f = fleet_sbc("pi3_mainsailos");
     f.remove("helix_installed");
     let picked = identify(&m, &f);
     let mut r = rig.runner(&m, &picked, f);
@@ -339,8 +354,8 @@ async fn generic_update_on_the_voron_passes_update() {
     });
     rig.installer_succeeds("pi");
     let m = staging();
-    let picked = identify(&m, &fleet("cb1_voron"));
-    let mut r = rig.runner(&m, &picked, fleet("cb1_voron"));
+    let picked = identify(&m, &fleet_sbc("cb1_voron"));
+    let mut r = rig.runner(&m, &picked, fleet_sbc("cb1_voron"));
 
     let trace = drive(&mut r, |p, _| match p {
         Prompt::Login { .. } => login("biqu", "biqu"),
@@ -365,7 +380,7 @@ async fn generic_install_stops_after_three_wrong_logins_without_changing_anythin
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "pi", "raspberry");
     let m = staging();
-    let mut f = fleet("pi3_mainsailos");
+    let mut f = fleet_sbc("pi3_mainsailos");
     f.remove("helix_installed");
     let picked = identify(&m, &f);
     let mut r = rig.runner(&m, &picked, f);
@@ -391,14 +406,13 @@ async fn generic_restore_runs_the_uninstaller() {
     rig.ssh.accept(ADDR, "pi", "raspberry");
     rig.installer_succeeds("pi");
     let m = staging();
-    let restore = &m
-        .printers
-        .iter()
-        .find(|p| p.id == "generic_klipper")
-        .unwrap()
-        .restore;
-    let picked = recipe("generic_klipper", StartState::Helix(String::new()), restore);
-    let mut r = rig.runner(&m, &picked, fleet("pi3_mainsailos"));
+    let restore = restore_for(&m, "generic_klipper", &fleet_sbc("pi3_mainsailos")).unwrap();
+    let picked = recipe(
+        "generic_klipper",
+        StartState::Helix(String::new()),
+        &restore,
+    );
+    let mut r = rig.runner(&m, &picked, fleet_sbc("pi3_mainsailos"));
 
     let trace = drive(&mut r, |p, _| match p {
         Prompt::Login { .. } => login("pi", "raspberry"),
@@ -637,7 +651,8 @@ async fn k2_restore_runs_the_uninstaller() {
 
 // ---------------------------------------------------------------- Creality K1
 
-const SIMPLE_AF: &str = "git config --global http.sslVerify false; git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
+const SIMPLE_AF: &str = "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
+const K1_MODEL_PROBE: &str = r#"case "$(/usr/bin/get_sn_mac.sh model 2>/dev/null)" in CR-K1|K1C|"CR-K1 Max") echo yes;; *) echo no;; esac"#;
 const OTA_PROBE: &str = r"sed -n 's/^ota_version=6\.//p' /etc/ota_info";
 const LEFTOVERS_PROBE: &str = r#"if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ] || { [ -d /opt ] && [ ! -L /opt ] && [ -n "$(ls -1 /opt)" ]; }; then echo yes; else echo no; fi"#;
 
@@ -645,12 +660,14 @@ struct K1 {
     firmware: &'static str,
     helix_there: bool,
     leftovers: bool,
+    is_k1: bool,
 }
 
 const STOCK_K1: K1 = K1 {
     firmware: "1.3.3.46",
     helix_there: false,
     leftovers: false,
+    is_k1: true,
 };
 
 /// A K1 on root/creality_2023 whose Moonraker, once it answers, lists the fleet K1C's objects.
@@ -664,6 +681,7 @@ fn k1_rig(k1: K1) -> Rig {
     rig.ssh
         .on_command(OTA_PROBE, out(&format!("{}\n", k1.firmware), 0));
     rig.ssh.on_command(LEFTOVERS_PROBE, yes_no(k1.leftovers));
+    rig.ssh.on_command(K1_MODEL_PROBE, yes_no(k1.is_k1));
     let objects = fleet("k1c_helper_script")["klipper_objects"].clone();
     rig.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "K1C-0000" }));
@@ -1183,14 +1201,13 @@ fn forgex_objects() -> serde_json::Value {
     json!({ "objects": fleet("ad5m_forgex")["klipper_objects"].clone() })
 }
 
+const INIT_SCRIPTS_PROBE: &str = "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no";
+
 /// A Forge-X AD5M on root/root after the flash, without HelixScreen.
 fn forgex_rig() -> Rig {
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "root", "root");
-    rig.ssh.on_command(
-        "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
-        out("no\n", 0),
-    );
+    rig.ssh.on_command(INIT_SCRIPTS_PROBE, out("no\n", 0));
     rig.installer_succeeds("ad5m");
     rig
 }
@@ -1259,10 +1276,7 @@ async fn the_forgex_ad5m_picked_as_a_pro_installs_over_ssh() {
 #[tokio::test]
 async fn a_forgex_ad5m_with_helixscreen_switches_to_the_update() {
     let rig = forgex_rig();
-    rig.ssh.on_command(
-        "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
-        out("yes\n", 0),
-    );
+    rig.ssh.on_command(INIT_SCRIPTS_PROBE, out("yes\n", 0));
     let m = staging();
     let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
     let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
@@ -1312,6 +1326,242 @@ async fn ad5m_restore_uninstalls_and_points_at_forgex_for_fully_stock() {
     );
 }
 
+// ---------------------------------------------------------------- refused printers
+
+fn facts(v: serde_json::Value) -> Facts {
+    serde_json::from_value(v).unwrap()
+}
+
+fn refused_as(f: &Facts) -> Option<(String, String)> {
+    match identify(&staging(), f) {
+        Identified::Refuse {
+            printer_id: Some(p),
+            doc,
+            ..
+        } => Some((p, doc)),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_recording_without_the_board_model_is_refused_with_the_manual_install_guide() {
+    for host in ["pi3_mainsailos", "cb1_voron"] {
+        assert_eq!(
+            identify(&staging(), &fleet(host)),
+            Identified::Refuse {
+                printer_id: None,
+                doc: GENERIC_REFUSE_DOC.into(),
+                reason: "printer not recognised".into(),
+            },
+            "{host}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_board_on_debian_is_refused_not_given_the_pi_build() {
+    let mut f = fleet_sbc("pi3_mainsailos");
+    f.insert("cpu_model".into(), "Rockchip RK3562 EVB".into());
+    assert!(matches!(
+        identify(&staging(), &f),
+        Identified::Refuse {
+            printer_id: None,
+            ..
+        }
+    ));
+}
+
+/// Synthetic facts for the printers the spec refuses. Each also carries a board model the
+/// generic rule accepts, so the refusal must win over it.
+#[test]
+fn the_printers_the_spec_refuses_are_refused_with_their_own_guide() {
+    let base = |objects: serde_json::Value, hostname: &str| {
+        facts(json!({
+            "has_moonraker": true, "cpu_arch": "aarch64", "cpu_model": "BigTreeTech CB1",
+            "os_distribution": "Debian GNU/Linux 12 (bookworm)", "klipper_hostname": hostname,
+            "klipper_objects": objects,
+        }))
+    };
+    let cases = [
+        (
+            "snapmaker_u1",
+            base(json!(["machine_state_manager", "extruder"]), "u1"),
+        ),
+        (
+            "snapmaker_u1",
+            base(json!(["homing_precise_corexy"]), "lava"),
+        ),
+        (
+            "qidi_tjc",
+            base(
+                json!([
+                    "temperature_sensor Chamber_Thermal_Protection_Sensor",
+                    "heater_generic chamber"
+                ]),
+                "mkspi",
+            ),
+        ),
+        (
+            "sovol",
+            base(json!(["probe_pressure", "quad_gantry_level"]), "SV08"),
+        ),
+        (
+            "elegoo_cc1",
+            base(json!(["gcode_macro _COSMOS_SETTINGS"]), "cosmos"),
+        ),
+        (
+            "flashforge_creator5",
+            base(json!(["ff_toolchange", "zmod"]), "creator5"),
+        ),
+        (
+            "anycubic_kobra",
+            base(json!(["filament_hub", "extruder"]), "kobra"),
+        ),
+        ("elegoo_neptune4", base(json!(["extruder"]), "neptune4")),
+    ];
+    let m = staging();
+    for (want, f) in cases {
+        let (got, doc) = refused_as(&f).unwrap_or_else(|| panic!("{want}: {:?}", identify(&m, &f)));
+        assert_eq!(got, want);
+        let p = m.printers.iter().find(|p| p.id == want).unwrap();
+        assert_eq!(doc, p.fallback.doc);
+        assert!(p.refused && p.recipes.is_empty(), "{want}");
+    }
+    let creator: Facts =
+        facts(json!({ "flashforge_udp.model": "Creator5Pro", "model": "Creator5Pro" }));
+    assert_eq!(
+        refused_as(&creator).map(|r| r.0).as_deref(),
+        Some("flashforge_creator5")
+    );
+}
+
+#[test]
+fn no_fleet_printer_is_caught_by_a_refusal() {
+    let m = staging();
+    let refused: Vec<&str> = m
+        .printers
+        .iter()
+        .filter(|p| p.refused)
+        .map(|p| p.id.as_str())
+        .collect();
+    for name in ["qidi_box", "k2_plus", "k1c_helper_script", "ad5m_forgex"] {
+        if let Identified::Refuse {
+            printer_id: Some(p),
+            ..
+        } = identify(&m, &fleet(name))
+        {
+            assert!(!refused.contains(&p.as_str()), "{name} refused as {p}");
+        }
+    }
+    for name in ["pi3_mainsailos", "cb1_voron"] {
+        assert!(
+            matches!(identify(&m, &fleet_sbc(name)), Identified::Recipe { .. }),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_qidi_plus_5_is_a_qidi_by_its_chamber_sensor() {
+    let plus5 = facts(json!({
+        "has_moonraker": true, "cpu_arch": "aarch64", "klipper_hostname": "qidi-plus5",
+        "os_distribution": "Debian GNU/Linux 11 (bullseye)",
+        "klipper_objects": ["temperature_sensor Chamber_Thermal_Protection_Sensor", "extruder"],
+    }));
+    assert_eq!(
+        identify(&staging(), &plus5),
+        recipe("qidi", modded(), "qidi_install")
+    );
+}
+
+#[tokio::test]
+async fn a_creality_ke_on_helper_script_is_refused_before_anything_changes() {
+    let rig = k1_rig(K1 {
+        is_k1: false,
+        ..STOCK_K1
+    });
+    rig.installer_succeeds("k1");
+    let mut f = fleet("k1c_helper_script");
+    f.remove("helix_installed");
+    f.remove("helix_version");
+    f.insert("services".into(), json!(["klipper", "moonraker"]));
+    let m = staging();
+    let picked = identify(&m, &f);
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, next_only).await;
+    match &trace.end {
+        Event::Refused { reason, .. } => assert!(reason.contains("K1C"), "{reason}"),
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(rig.installs().is_empty());
+}
+
+#[tokio::test]
+async fn a_grid_picked_stock_creality_that_is_no_k1_is_refused_before_simple_af() {
+    let rig = k1_rig(K1 {
+        is_k1: false,
+        ..STOCK_K1
+    });
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(
+        matches!(trace.end, Event::Refused { .. }),
+        "{:?}",
+        trace.end
+    );
+    assert!(!ran(&rig, SIMPLE_AF));
+}
+
+#[test]
+fn simple_af_reuses_its_own_checkout_and_refuses_anything_else() {
+    let m = staging();
+    let cmd = m.recipes["k1_stock"]
+        .iter()
+        .find_map(|s| match s {
+            helix_installer_core::manifest::Step::SshRun { command, .. } => Some(command.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(cmd, SIMPLE_AF);
+}
+
+#[test]
+fn an_ad5m_restores_by_the_mod_it_runs() {
+    let m = staging();
+    let zmod = facts(json!({ "cpu_arch": "armv7l", "klipper_objects": ["zmod", "mcu eboard"] }));
+    for printer in ["ad5m", "ad5m_pro"] {
+        assert_eq!(
+            restore_for(&m, printer, &fleet("ad5m_forgex")).as_deref(),
+            Some("ad5m_restore")
+        );
+        assert_eq!(
+            restore_for(&m, printer, &zmod).as_deref(),
+            Some("ad5m_zmod_restore")
+        );
+        assert_eq!(restore_for(&m, printer, &Facts::new()), None);
+    }
+}
+
+#[tokio::test]
+async fn a_zmod_ad5m_restore_switches_the_screen_back() {
+    let rig = Rig::new();
+    let m = staging();
+    let picked = recipe(
+        "ad5m",
+        StartState::Helix(String::new()),
+        "ad5m_zmod_restore",
+    );
+    let mut r = rig.runner(&m, &picked, Facts::new());
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_ON");
+    assert!(rig.ssh.commands().is_empty());
+}
+
 // ---------------------------------------------------------------- the fleet
 
 /// Each recorded printer identifies as exactly the printer it is.
@@ -1319,12 +1569,16 @@ async fn ad5m_restore_uninstalls_and_points_at_forgex_for_fully_stock() {
 fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
     let m = staging();
     let expect: &[(&str, Option<&str>)] = &[
-        ("pi3_mainsailos", Some("generic_klipper")),
-        ("cb1_voron", Some("generic_klipper")),
         ("qidi_box", Some("qidi")),
         ("k2_plus", Some("k2")),
         ("k1c_helper_script", Some("k1")),
     ];
+    for host in ["pi3_mainsailos", "cb1_voron"] {
+        assert!(
+            matches!(identify(&m, &fleet_sbc(host)), Identified::Recipe { ref printer_id, .. } if printer_id == "generic_klipper"),
+            "{host}"
+        );
+    }
     for (name, want) in expect {
         let got = identify(&m, &fleet(name));
         match (want, &got) {

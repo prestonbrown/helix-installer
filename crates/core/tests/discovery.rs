@@ -358,3 +358,17 @@ fn the_surviving_host_does_not_depend_on_order() {
     }]);
     assert_eq!(with_mr[0].host.addr, "10.0.0.9");
 }
+
+#[test]
+fn system_info_gives_the_board_model() {
+    let f = moonraker_facts(
+        MoonrakerProbe::SystemInfo,
+        &json!({"system_info": {"cpu_info": {"processor": "aarch64", "model": "Raspberry Pi 4 Model B Rev 1.4"}}}),
+    );
+    assert_eq!(f["cpu_model"], json!("Raspberry Pi 4 Model B Rev 1.4"));
+    let f = moonraker_facts(
+        MoonrakerProbe::SystemInfo,
+        &json!({"system_info": {"cpu_info": {}}}),
+    );
+    assert!(!f.contains_key("cpu_model"));
+}

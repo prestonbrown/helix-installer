@@ -414,6 +414,63 @@ async fn uninstall_uploads_only_install_sh_and_runs_it_with_uninstall() {
 }
 
 #[tokio::test]
+async fn a_platform_the_printer_does_not_need_stops_the_installer_at_once() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.job_pid(4242);
+    f.ssh.on_command(
+        "kill -TERM -- -4242 2>/dev/null || kill -TERM 4242",
+        ExecOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "snapmaker-u1"]), None),
+        (&pl(&["step", "1", "5", "start", "Extracting", ""]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(
+        reason.contains("snapmaker-u1") && reason.contains("pi"),
+        "{reason}"
+    );
+    let cmds = f.ssh.commands();
+    let kill = cmds.iter().position(|c| c.contains("kill -TERM -- -4242"));
+    let rm = cmds.iter().position(|c| c.starts_with("rm -f "));
+    assert!(kill.is_some() && rm.is_some() && kill < rm, "{cmds:?}");
+    assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn a_wrong_platform_from_a_job_run_through_sudo_is_killed_through_sudo() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.job_pid(77);
+    f.ssh.set_fallback(|cmd| ExecOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit: if cmd == "sudo -n true" { 1 } else { 0 },
+    });
+    f.ssh
+        .script_job(vec![(&pl(&["platform", "pi32"]), None), ("", None)]);
+    let mut r = f.runner("pi", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("pi32"));
+    let kill = f
+        .ssh
+        .calls()
+        .into_iter()
+        .find(|(c, _)| c.contains("kill -TERM -- -77"))
+        .expect("a kill");
+    assert!(kill.0.starts_with("sudo -S -p '' sh -c "), "{kill:?}");
+    assert_eq!(kill.1.as_deref(), Some(format!("{PASSWORD}\n").as_bytes()));
+}
+
+#[tokio::test]
 async fn an_installer_reporting_another_platform_fails() {
     let f = Fakes::standard(&["pi"]);
     f.ssh.script_job(vec![
