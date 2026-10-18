@@ -10,9 +10,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build manifest-lint
         run: cargo build --release -p helix_installer_core --bin manifest-lint
       - name: Lint the manifest
@@ -40,24 +42,50 @@ jobs:
             exit 1
           fi
 
-  publish:
-    needs: lint
+  # Whether this push to main changed what gets signed, so a push that did not neither asks for
+  # approval nor re-uploads the same list.
+  changed:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      manifest: ${{ steps.diff.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A push whose previous head is unknown (a new branch, a force push) counts as changed.
+          if git cat-file -e "${BEFORE}^{commit}" 2>/dev/null \
+            && git diff --quiet "$BEFORE" HEAD -- manifest/ crates/core/src/keys.rs; then
+            echo "manifest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "manifest=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: [lint, changed]
+    if: needs.changed.outputs.manifest == 'true'
+    runs-on: ubuntu-latest
     # Required reviewer on this environment gates every publish; the secrets below live in it.
+    # Each secret is given only to the step that uses it, never to the build or a third-party
+    # action.
     environment: manifest-publish
     concurrency: manifest-publish
     env:
-      MANIFEST_SIGNING_KEY: ${{ secrets.MANIFEST_SIGNING_KEY }}
-      MANIFEST_SIGNING_KEY_PASSWORD: ${{ secrets.MANIFEST_SIGNING_KEY_PASSWORD }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       R2_BUCKET: ${{ vars.R2_BUCKET_NAME || 'helixscreen-releases' }}
       R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Require signing and upload configuration
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.MANIFEST_SIGNING_KEY }}
+          MANIFEST_SIGNING_KEY_PASSWORD: ${{ secrets.MANIFEST_SIGNING_KEY_PASSWORD }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           missing=""
           for v in MANIFEST_SIGNING_KEY MANIFEST_SIGNING_KEY_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
@@ -74,8 +102,10 @@ jobs:
             exit 1
           fi
           echo "MANIFEST_PUBKEY=$key" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build manifest-lint
         run: cargo build --release -p helix_installer_core --bin manifest-lint
       - name: Lint the manifest
@@ -85,6 +115,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y minisign
       - name: Sign
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.MANIFEST_SIGNING_KEY }}
+          MANIFEST_SIGNING_KEY_PASSWORD: ${{ secrets.MANIFEST_SIGNING_KEY_PASSWORD }}
         run: |
           umask 077
           key=$RUNNER_TEMP/manifest.key
@@ -94,6 +127,10 @@ jobs:
           # The app verifies against the key compiled into it; a signature it would refuse is not published.
           target/release/manifest-lint --verify manifest/manifest.json --sig manifest/manifest.json.minisig --pubkey "$MANIFEST_PUBKEY"
       - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -e
           dest="s3://${R2_BUCKET}/installer"

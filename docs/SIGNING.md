@@ -41,7 +41,14 @@ gh api -X PUT repos/prestonbrown/helix-installer/environments/manifest-publish \
   -F "deployment_branch_policy[custom_branch_policies]=true"
 gh api -X POST repos/prestonbrown/helix-installer/environments/manifest-publish/deployment-branch-policies \
   -f name=main
+gh api -X POST repos/prestonbrown/helix-installer/environments/manifest-publish/deployment-branch-policies \
+  -f name='v*' -f type=tag
 ```
+
+The `main` policy admits the printer-list publish. The `v*` tag policy admits the release
+workflow's `publish-updater` job, which runs from the release tag (`refs/tags/v...`), not a
+branch; without it that job is never allowed to deploy. The printer-list job still runs only on
+a push to `main` (its own `if:`), so the tag policy opens the environment to nothing else.
 
 ## 4. Add the secrets to that environment
 
@@ -83,6 +90,12 @@ cargo run -p helix_installer_core --bin manifest-lint -- --verify manifest.json 
 when its secrets exist; with none set the build still succeeds and each job's summary lists
 what came out unsigned. Nothing below is required to build.
 
+The signing secrets reach only the step that checks which of them are set and the Tauri build
+step itself, through `scripts/tauri-signed.cjs`, which passes on only the ones switched on. No
+dependency install, cache or toolchain action runs with them in its environment. The Rust and
+npm builds that run inside the Tauri step do see them; `Cargo.lock` and `package-lock.json` pin
+what those are. Every third-party action is pinned to a commit.
+
 Set repository secrets with `gh secret set NAME -R prestonbrown/helix-installer`.
 
 ## In-app updater
@@ -108,9 +121,26 @@ Changing it later strands every installed copy, so treat it as permanent and bac
 key up offline.
 
 With `TAURI_SIGNING_PRIVATE_KEY` set the release builds updater bundles and `.sig` files, and
-the `publish-updater` job writes `latest.json` plus the bundles to `installer/app/` in the
-release bucket, after you approve the `manifest-publish` deployment (same environment and R2
-secrets as the printer list above).
+the `publish-updater` job writes `latest.json` plus the bundles to `installer/app/<version>/` in
+the release bucket, after you approve the `manifest-publish` deployment (same environment and R2
+secrets as the printer list above; the environment needs the `v*` tag policy from step 3). The
+version comes from `crates/app/tauri.conf.json`, and the job refuses a tag that does not name it
+(`v0.2.0` for `"version": "0.2.0"`). Bump the version before tagging.
+
+Two things to know before approving that deployment:
+
+- **Approving it ships the update.** Every installed copy sees `latest.json` within minutes,
+  even though the GitHub release is still a draft. Check the draft first and approve only when
+  you mean to release.
+- **The updater does not check the version signature** (`requireSignedVersion`, unset under
+  `plugins.updater` in `crates/app/tauri.conf.json`, is off by default). It verifies the downloaded bundle's signature, but anyone able
+  to serve a forged `latest.json` could pair a higher version number with an older, genuinely
+  signed bundle. Set it to `true` once every release users can update from was signed by a
+  Tauri CLI that records the version in the signature.
+
+The updater key is a repository secret, so any run of the release workflow (a tag, a manual
+dispatch on any branch) produces validly signed bundles; only `latest.json`, behind the
+environment, decides what users get.
 
 ## Apple (on hold)
 
