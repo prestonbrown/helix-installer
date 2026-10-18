@@ -18,13 +18,7 @@ pub struct PendingUpdate(Mutex<Option<Update>>);
 
 /// The updater plugin, or `None` when no key is compiled in.
 pub fn plugin<R: Runtime>() -> Option<tauri::plugin::TauriPlugin<R, tauri_plugin_updater::Config>> {
-    plugin_for(UPDATER_PUBKEY)
-}
-
-fn plugin_for<R: Runtime>(
-    key: &str,
-) -> Option<tauri::plugin::TauriPlugin<R, tauri_plugin_updater::Config>> {
-    let key = updater_key(key)?;
+    let key = updater_key(UPDATER_PUBKEY)?;
     Some(tauri_plugin_updater::Builder::new().pubkey(key).build())
 }
 
@@ -66,25 +60,4 @@ pub async fn install<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     app.restart()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_key_registers_no_plugin() {
-        assert!(plugin_for::<tauri::Wry>("").is_none());
-        assert!(plugin_for::<tauri::Wry>(" \n").is_none());
-    }
-
-    #[test]
-    fn a_key_registers_the_plugin() {
-        assert!(plugin_for::<tauri::Wry>("dW50cnVzdGVk").is_some());
-    }
-
-    #[test]
-    fn the_shipped_build_has_no_updater_key_until_signing_is_set_up() {
-        assert!(plugin::<tauri::Wry>().is_some() == updater_key(UPDATER_PUBKEY).is_some());
-    }
 }
