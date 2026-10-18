@@ -162,9 +162,207 @@
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-k1"
       }
+    },
+    {
+      "id": "ad5x",
+      "name": "FlashForge Adventurer 5X",
+      "identify": [
+        {
+          "flashforge_udp.model": "AD5X"
+        },
+        {
+          "klipper_objects": {
+            "contains": "zmod_ifs"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "ad5x_helix_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker"
+          },
+          "recipe": "ad5x_enable_helix"
+        },
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "ad5x_zmod"
+        }
+      ],
+      "restore": "ad5x_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-ad5x"
+      }
+    },
+    {
+      "id": "ad5m",
+      "name": "FlashForge Adventurer 5M",
+      "identify": [
+        {
+          "flashforge_udp.model": "Adventurer5M"
+        },
+        {
+          "klipper_objects": {
+            "contains": "gcode_macro SUPPORT_FORGE_X"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Forge-X"
+          }
+        },
+        {
+          "cpu_arch": "armv7l",
+          "klipper_objects": {
+            "contains": "zmod"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_update"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_install"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_enable"
+        },
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "ad5m_forgex"
+        }
+      ],
+      "restore": "ad5m_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-ad5m"
+      }
+    },
+    {
+      "id": "ad5m_pro",
+      "name": "FlashForge Adventurer 5M Pro",
+      "identify": [
+        {
+          "flashforge_udp.model": "Adventurer5MPro"
+        },
+        {
+          "klipper_objects": {
+            "contains": "gcode_macro SUPPORT_FORGE_X"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Forge-X"
+          }
+        },
+        {
+          "cpu_arch": "armv7l",
+          "klipper_objects": {
+            "contains": "zmod"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_update"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_install"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_enable"
+        },
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "ad5m_pro_forgex"
+        }
+      ],
+      "restore": "ad5m_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-ad5m"
+      }
     }
   ],
-  "artifacts": {},
+  "artifacts": {
+    "zmod_1.7.4_ad5x": {
+      "url": "https://github.com/ghzserg/zmod/releases/download/1.7.4/AD5X-zmod-1.7.4.tgz",
+      "sha256": "6f230debd47343a3bec1284e009ea341f34f8d2cdd96b896588349eef4e7f565",
+      "filename": "AD5X-zmod-1.7.4.tgz"
+    },
+    "forgex_1.4.1": {
+      "url": "https://github.com/DrA1ex/ff5m/releases/download/1.4.1/Adventurer5M-ForgeX-1.4.1.tgz",
+      "sha256": "ba9c0745a84f299b52342cadd3ca4146177ecc552ac9ee27157e0ef39aef43b4",
+      "filename": "Adventurer5M-ForgeX-1.4.1.tgz"
+    }
+  },
   "recipes": {
     "generic_install": [
       {
@@ -556,6 +754,425 @@
         "uninstall": true,
         "dir": "/usr/data",
         "commits": true
+      }
+    ],
+    "ad5x_zmod": [
+      {
+        "type": "info",
+        "text": "Find the printer's firmware version: on its screen open Settings, then the About page. The installer asks for it next.",
+        "image": "ad5x/about-screen.png"
+      },
+      {
+        "type": "ask",
+        "fact": "stock_version",
+        "question": "Which firmware version does the About page show?",
+        "choices": [
+          {
+            "value": "1.1.7",
+            "label": "1.1.7"
+          },
+          {
+            "value": "1.1.9",
+            "label": "1.1.9"
+          },
+          {
+            "value": "1.2.0",
+            "label": "1.2.0"
+          },
+          {
+            "value": "1.2.1",
+            "label": "1.2.1"
+          },
+          {
+            "value": "1.2.2",
+            "label": "1.2.2"
+          },
+          {
+            "value": "1.2.3",
+            "label": "1.2.3"
+          },
+          {
+            "value": "3.0.3",
+            "label": "3.0.3"
+          },
+          {
+            "value": "3.0.9",
+            "label": "3.0.9"
+          },
+          {
+            "value": "3.1.0",
+            "label": "3.1.0"
+          },
+          {
+            "value": "0",
+            "label": "Another version"
+          }
+        ]
+      },
+      {
+        "type": "require",
+        "fact": "stock_version",
+        "range": "=1.1.7 || =1.1.9 || =1.2.0 || =1.2.1 || =1.2.2 || =1.2.3 || =3.0.3 || =3.0.9 || =3.1.0",
+        "reason": "ZMOD installs only over stock firmware 1.1.7 to 1.2.3 (not 1.1.8), 3.0.3, 3.0.9 or 3.1.0. The AD5X guide explains how to put a supported version on first.",
+        "doc": "https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "info",
+        "text": "ZMOD's own guide asks for the printer to be reset to factory settings before the mod goes on. If you have changed settings or installed anything since the firmware was last flashed, reset it from the printer's Settings first. Then press Next to copy ZMOD onto a USB stick."
+      },
+      {
+        "type": "download",
+        "artifact": "zmod_1.7.4_ad5x"
+      },
+      {
+        "type": "write_stick",
+        "artifacts": [
+          "zmod_1.7.4_ad5x"
+        ]
+      },
+      {
+        "type": "user_action",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs ZMOD by itself, which can take up to 40 minutes. Press Next once the printer is on.",
+        "image": "ad5x/usb-port.png",
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "moonraker",
+        "timeout_s": 2400,
+        "message": "ZMOD is installing; this can take up to 40 minutes. Do not power off the printer. Remove the USB stick afterwards.",
+        "help": "If the printer's screen shows an error or stays on one message for a long time, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "user_action",
+        "text": "Remove the USB stick from the printer now. Left in, it installs ZMOD again on the next start."
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_OFF HELIX=1"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 600,
+        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+      }
+    ],
+    "ad5x_enable_helix": [
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_OFF HELIX=1",
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 600,
+        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+      }
+    ],
+    "ad5x_helix_update": [
+      {
+        "type": "moonraker_update",
+        "name": "helixscreen",
+        "commits": true
+      }
+    ],
+    "ad5x_restore": [
+      {
+        "type": "info",
+        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5X guide explains it: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_ON",
+        "commits": true
+      }
+    ],
+    "ad5m_forgex": [
+      {
+        "type": "info",
+        "text": "Find the printer's firmware version: on its screen open Settings, then the About page. The installer asks for it next.",
+        "image": "ad5m/about-screen.png"
+      },
+      {
+        "type": "ask",
+        "fact": "stock_version",
+        "question": "Which firmware version does the About page show?",
+        "choices": [
+          {
+            "value": "2.6.4",
+            "label": "Older than 2.6.5"
+          },
+          {
+            "value": "2.6.5",
+            "label": "2.6.5 to 3.1.4"
+          },
+          {
+            "value": "3.1.5",
+            "label": "3.1.5"
+          },
+          {
+            "value": "3.1.6",
+            "label": "3.1.6 to 5.1.x"
+          },
+          {
+            "value": "5.2",
+            "label": "5.2 or newer"
+          }
+        ]
+      },
+      {
+        "type": "require",
+        "fact": "stock_version",
+        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
+        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
+        "doc": "https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "download",
+        "artifact": "forgex_1.4.1"
+      },
+      {
+        "type": "write_stick",
+        "artifacts": [
+          "forgex_1.4.1"
+        ]
+      },
+      {
+        "type": "user_action",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press Next once the printer is on.",
+        "image": "ad5m/usb-port.png",
+        "commits": true
+      },
+      {
+        "type": "user_action",
+        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press Next."
+      },
+      {
+        "type": "wait_for",
+        "target": "moonraker",
+        "timeout_s": 1200,
+        "message": "Waiting for the printer to start with Forge-X. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "dir": "/data"
+      }
+    ],
+    "ad5m_pro_forgex": [
+      {
+        "type": "info",
+        "text": "Find the printer's firmware version: on its screen open Settings, then the About page. The installer asks for it next.",
+        "image": "ad5m/about-screen.png"
+      },
+      {
+        "type": "ask",
+        "fact": "stock_version",
+        "question": "Which firmware version does the About page show?",
+        "choices": [
+          {
+            "value": "2.6.4",
+            "label": "Older than 2.6.5"
+          },
+          {
+            "value": "2.6.5",
+            "label": "2.6.5 to 3.1.4"
+          },
+          {
+            "value": "3.1.5",
+            "label": "3.1.5"
+          },
+          {
+            "value": "3.1.6",
+            "label": "3.1.6 to 5.1.x"
+          },
+          {
+            "value": "5.2",
+            "label": "5.2 or newer"
+          }
+        ]
+      },
+      {
+        "type": "require",
+        "fact": "stock_version",
+        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
+        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
+        "doc": "https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "download",
+        "artifact": "forgex_1.4.1"
+      },
+      {
+        "type": "write_stick",
+        "artifacts": [
+          "forgex_1.4.1"
+        ],
+        "rename": {
+          "forgex_1.4.1": "Adventurer5MPro-ForgeX-1.4.1.tgz"
+        }
+      },
+      {
+        "type": "user_action",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press Next once the printer is on.",
+        "image": "ad5m/usb-port.png",
+        "commits": true
+      },
+      {
+        "type": "user_action",
+        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press Next."
+      },
+      {
+        "type": "wait_for",
+        "target": "moonraker",
+        "timeout_s": 1200,
+        "message": "Waiting for the printer to start with Forge-X. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "dir": "/data"
+      }
+    ],
+    "ad5m_forgex_install": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          },
+          {
+            "user": "root",
+            "password": "klipper"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "commits": true,
+        "dir": "/data"
+      }
+    ],
+    "ad5m_forgex_update": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          },
+          {
+            "user": "root",
+            "password": "klipper"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "update": true,
+        "commits": true,
+        "dir": "/data"
+      }
+    ],
+    "ad5m_zmod_enable": [
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_OFF HELIX=1",
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 600,
+        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      }
+    ],
+    "ad5m_zmod_update": [
+      {
+        "type": "moonraker_update",
+        "name": "helixscreen",
+        "commits": true
+      }
+    ],
+    "ad5m_restore": [
+      {
+        "type": "info",
+        "text": "This removes HelixScreen from Forge-X and brings back Forge-X's own screen. To make the printer fully stock, flash Forge-X's uninstall image from a USB stick afterwards; the AD5M guide links it: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          },
+          {
+            "user": "root",
+            "password": "klipper"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "uninstall": true,
+        "commits": true,
+        "dir": "/data"
       }
     ]
   }

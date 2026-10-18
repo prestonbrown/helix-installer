@@ -897,6 +897,421 @@ async fn k1_restore_says_how_far_it_goes_then_uninstalls() {
     );
 }
 
+// ---------------------------------------------------------------- FlashForge AD5X and AD5M
+
+const FIRMWARE: &[u8] = b"mod firmware image bytes";
+
+fn stick_drive() -> helix_installer_core::transport::Drive {
+    helix_installer_core::transport::Drive {
+        id: "usb1".into(),
+        label: "STICK".into(),
+        mount: PathBuf::from("/media/stick"),
+        fs: "vfat".into(),
+        size_bytes: 8_000_000_000,
+        free_bytes: 7_000_000_000,
+        removable: true,
+        system: false,
+    }
+}
+
+/// The staging manifest with `artifact` pointing at test bytes, served by the rig at its own URL
+/// (the real file is far too large for a test), and a FAT32 stick plugged in.
+fn with_test_firmware(rig: &Rig, artifact: &str) -> Manifest {
+    let mut m = staging();
+    let a = m.artifacts.get_mut(artifact).unwrap();
+    a.sha256 = sha(FIRMWARE);
+    rig.fetch.add(&a.url, FIRMWARE.to_vec());
+    rig.drives.add(stick_drive());
+    m
+}
+
+/// Objects a ZMOD AD5X lists. Not recorded from a printer: our AD5X was unplugged.
+fn zmod_ad5x_objects() -> serde_json::Value {
+    json!({ "objects": ["webhooks", "configfile", "mcu", "mcu eboard", "zmod", "zmod_ifs", "zmod_color", "extruder"] })
+}
+
+fn moonraker_answers(rig: &Rig, objects: serde_json::Value) {
+    rig.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "printer" }));
+    rig.moonraker.set_objects_list(ADDR, objects);
+    rig.moonraker
+        .set_system_info(ADDR, json!({ "system_info": { "available_services": [] } }));
+}
+
+/// Answers a FlashForge flash: the version `version`, the stick, Next on every screen, and the
+/// printer's Moonraker comes up (listing `objects`) once the user says the stick is in.
+fn flash_answers<'a>(
+    rig: &'a Rig,
+    version: &'a str,
+    objects: serde_json::Value,
+) -> impl FnMut(&Prompt, usize) -> Input + 'a {
+    move |p, _| match p {
+        Prompt::Ask { question, .. } if question.contains("version") => {
+            Input::Choice(version.into())
+        }
+        Prompt::Ask { question, .. } if question.contains("HelixScreen showing") => {
+            Input::Choice("yes".into())
+        }
+        Prompt::ChooseDrive { drives, .. } => Input::Drive(drives[0].id.clone()),
+        Prompt::UserAction { text, .. } if text.contains("USB stick in") => {
+            moonraker_answers(rig, objects.clone());
+            Input::Next
+        }
+        Prompt::Info { .. } | Prompt::UserAction { .. } => Input::Next,
+        other => panic!("unexpected prompt {other:?}"),
+    }
+}
+
+#[test]
+fn ad5x_zmod_artifact_is_the_upstream_release_file() {
+    let m = staging();
+    let a = &m.artifacts["zmod_1.7.4_ad5x"];
+    assert_eq!(
+        a.url,
+        "https://github.com/ghzserg/zmod/releases/download/1.7.4/AD5X-zmod-1.7.4.tgz"
+    );
+    assert_eq!(
+        a.sha256,
+        "6f230debd47343a3bec1284e009ea341f34f8d2cdd96b896588349eef4e7f565"
+    );
+}
+
+#[tokio::test]
+async fn a_stock_ad5x_picked_from_the_grid_gets_zmod_then_helixscreen() {
+    let rig = Rig::new();
+    let m = with_test_firmware(&rig, "zmod_1.7.4_ad5x");
+    let picked = identify_as(&m, "ad5x", &Facts::new());
+    assert_eq!(picked, recipe("ad5x", StartState::Stock, "ad5x_zmod"));
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, flash_answers(&rig, "1.1.7", zmod_ad5x_objects())).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(
+        rig.drives.file("usb1", "AD5X-zmod-1.7.4.tgz").as_deref(),
+        Some(FIRMWARE)
+    );
+    assert_eq!(
+        rig.moonraker.gcodes(),
+        vec![(ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())]
+    );
+    let texts = trace.texts();
+    assert!(
+        texts.iter().any(|t| t.contains("Remove the USB stick")),
+        "{texts:?}"
+    );
+    assert!(r.state().committed);
+}
+
+#[tokio::test]
+async fn an_ad5x_outside_the_zmod_window_is_refused_before_the_stick() {
+    for version in ["0"] {
+        let rig = Rig::new();
+        let m = with_test_firmware(&rig, "zmod_1.7.4_ad5x");
+        let picked = identify_as(&m, "ad5x", &Facts::new());
+        let mut r = rig.runner(&m, &picked, Facts::new());
+
+        let trace = drive(&mut r, flash_answers(&rig, version, zmod_ad5x_objects())).await;
+        assert!(
+            matches!(trace.end, Event::Refused { .. }),
+            "{version}: {:?}",
+            trace.end
+        );
+        assert_eq!(rig.drives.file("usb1", "AD5X-zmod-1.7.4.tgz"), None);
+    }
+}
+
+/// The version each FlashForge stock recipe asks for, and the range its `require` accepts.
+fn asked_versions(recipe_id: &str) -> (Vec<String>, helix_installer_core::version::VersionRange) {
+    let m = staging();
+    let steps = &m.recipes[recipe_id];
+    let choices = steps
+        .iter()
+        .find_map(|s| match s {
+            helix_installer_core::manifest::Step::Ask { choices, .. } => {
+                Some(choices.iter().map(|c| c.value.clone()).collect())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let range = steps
+        .iter()
+        .find_map(|s| match s {
+            helix_installer_core::manifest::Step::Require { range, .. } => range.clone(),
+            _ => None,
+        })
+        .unwrap();
+    (choices, range)
+}
+
+#[test]
+fn the_ad5x_window_is_zmods_list_and_nothing_between() {
+    use helix_installer_core::version::FwVersion;
+    let (choices, range) = asked_versions("ad5x_zmod");
+    let ok = |v: &str| range.matches(&FwVersion::parse(v).unwrap());
+    for v in [
+        "1.1.7", "1.1.9", "1.2.0", "1.2.3", "3.0.3", "3.0.9", "3.1.0",
+    ] {
+        assert!(ok(v), "{v}");
+        assert!(choices.iter().any(|c| c == v), "{v} is offered");
+    }
+    for v in [
+        "1.1.6", "1.1.8", "1.2.4", "3.0.4", "3.1.1", "3.1.4", "3.1.5", "0",
+    ] {
+        assert!(!ok(v), "{v}");
+    }
+}
+
+#[test]
+fn the_ad5m_window_is_forgexs_minus_the_factory_image_version() {
+    use helix_installer_core::version::FwVersion;
+    for recipe_id in ["ad5m_forgex", "ad5m_pro_forgex"] {
+        let (choices, range) = asked_versions(recipe_id);
+        let ok = |v: &str| range.matches(&FwVersion::parse(v).unwrap());
+        for v in [
+            "2.6.5", "2.7.8", "3.1.3", "3.1.4", "3.1.6", "3.2.3", "5.0.3", "5.1.7",
+        ] {
+            assert!(ok(v), "{v}");
+        }
+        for v in ["2.6.4", "3.1.5", "5.2", "5.2.1", "6.0"] {
+            assert!(!ok(v), "{v}");
+        }
+        assert!(
+            choices.iter().all(|c| FwVersion::parse(c).is_some()),
+            "{choices:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_ad5x_that_answers_as_something_else_after_the_flash_stops() {
+    let rig = Rig::new();
+    let m = with_test_firmware(&rig, "zmod_1.7.4_ad5x");
+    let picked = identify_as(&m, "ad5x", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let other = json!({ "objects": fleet("k1c_helper_script")["klipper_objects"].clone() });
+    let trace = drive(&mut r, flash_answers(&rig, "1.2.3", other)).await;
+    match &trace.end {
+        Event::Failed {
+            committed: true,
+            reason,
+            ..
+        } => assert!(reason.contains("not the printer"), "{reason}"),
+        other => panic!("expected a committed failure, got {other:?}"),
+    }
+    assert!(rig.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn an_ad5x_found_by_its_udp_reply_gets_the_zmod_recipe() {
+    let f: Facts = serde_json::from_value(
+        json!({ "flashforge_udp.model": "AD5X", "model": "AD5X", "serial": "SERIAL" }),
+    )
+    .unwrap();
+    assert_eq!(
+        identify(&staging(), &f),
+        recipe("ad5x", StartState::Stock, "ad5x_zmod")
+    );
+}
+
+#[tokio::test]
+async fn an_ad5x_with_zmod_only_switches_the_screen() {
+    let rig = Rig::new();
+    moonraker_answers(&rig, zmod_ad5x_objects());
+    let f: Facts = serde_json::from_value(json!({
+        "has_moonraker": true, "cpu_arch": "mips",
+        "klipper_objects": zmod_ad5x_objects()["objects"].clone(),
+    }))
+    .unwrap();
+    let m = staging();
+    let picked = identify(&m, &f);
+    assert_eq!(picked, recipe("ad5x", modded(), "ad5x_enable_helix"));
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, flash_answers(&rig, "", json!(null))).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_OFF HELIX=1");
+}
+
+#[tokio::test]
+async fn an_ad5x_with_helixscreen_updates_through_zmods_update_manager() {
+    let rig = Rig::new();
+    let f: Facts = serde_json::from_value(json!({
+        "has_moonraker": true, "helix_installed": true, "helix_version": "v1.0.4",
+        "klipper_objects": zmod_ad5x_objects()["objects"].clone(),
+    }))
+    .unwrap();
+    let m = staging();
+    let picked = identify(&m, &f);
+    let mut r = rig.runner(&m, &picked, f);
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(rig.moonraker.upgrades(), vec!["helixscreen".to_string()]);
+}
+
+#[tokio::test]
+async fn ad5x_restore_switches_back_to_the_stock_screen() {
+    let rig = Rig::new();
+    let m = staging();
+    let picked = recipe("ad5x", StartState::Helix(String::new()), "ad5x_restore");
+    let mut r = rig.runner(&m, &picked, Facts::new());
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(
+        trace.texts()[0].contains("REMOVE_ZMOD"),
+        "{:?}",
+        trace.texts()
+    );
+    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_ON");
+}
+
+#[test]
+fn forgex_artifact_is_the_upstream_release_file() {
+    let m = staging();
+    let a = &m.artifacts["forgex_1.4.1"];
+    assert_eq!(
+        a.url,
+        "https://github.com/DrA1ex/ff5m/releases/download/1.4.1/Adventurer5M-ForgeX-1.4.1.tgz"
+    );
+    assert_eq!(
+        a.sha256,
+        "ba9c0745a84f299b52342cadd3ca4146177ecc552ac9ee27157e0ef39aef43b4"
+    );
+}
+
+fn forgex_objects() -> serde_json::Value {
+    json!({ "objects": fleet("ad5m_forgex")["klipper_objects"].clone() })
+}
+
+/// A Forge-X AD5M on root/root after the flash, without HelixScreen.
+fn forgex_rig() -> Rig {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "root", "root");
+    rig.ssh.on_command(
+        "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        out("no\n", 0),
+    );
+    rig.installer_succeeds("ad5m");
+    rig
+}
+
+#[tokio::test]
+async fn a_stock_ad5m_gets_forgex_under_its_own_name_then_helixscreen_in_data() {
+    for (printer, stick_name) in [
+        ("ad5m", "Adventurer5M-ForgeX-1.4.1.tgz"),
+        ("ad5m_pro", "Adventurer5MPro-ForgeX-1.4.1.tgz"),
+    ] {
+        let rig = forgex_rig();
+        let m = with_test_firmware(&rig, "forgex_1.4.1");
+        let picked = identify_as(&m, printer, &Facts::new());
+        let mut r = rig.runner(&m, &picked, Facts::new());
+
+        let trace = drive(&mut r, flash_answers(&rig, "2.6.5", forgex_objects())).await;
+        assert!(trace.done(), "{printer}: {:?}", trace.end);
+        assert_eq!(
+            rig.drives.file("usb1", stick_name).as_deref(),
+            Some(FIRMWARE),
+            "{printer}"
+        );
+        assert_eq!(
+            rig.installs()[0].0,
+            "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.0.5.tar.gz' --progress"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_ad5m_on_a_firmware_forgex_cannot_take_is_refused_before_the_stick() {
+    for version in ["2.6.4", "3.1.5", "5.2"] {
+        let rig = forgex_rig();
+        let m = with_test_firmware(&rig, "forgex_1.4.1");
+        let picked = identify_as(&m, "ad5m", &Facts::new());
+        let mut r = rig.runner(&m, &picked, Facts::new());
+
+        let trace = drive(&mut r, flash_answers(&rig, version, forgex_objects())).await;
+        assert!(
+            matches!(trace.end, Event::Refused { .. }),
+            "{version}: {:?}",
+            trace.end
+        );
+        assert!(rig
+            .drives
+            .file("usb1", "Adventurer5M-ForgeX-1.4.1.tgz")
+            .is_none());
+    }
+}
+
+#[tokio::test]
+async fn the_forgex_ad5m_picked_as_a_pro_installs_over_ssh() {
+    let rig = forgex_rig();
+    let m = staging();
+    let picked = identify_as(&m, "ad5m_pro", &fleet("ad5m_forgex"));
+    assert_eq!(picked, recipe("ad5m_pro", modded(), "ad5m_forgex_install"));
+    let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(rig.installs()[0]
+        .0
+        .starts_with("sh '/data/install.sh' --local"));
+}
+
+#[tokio::test]
+async fn a_forgex_ad5m_with_helixscreen_switches_to_the_update() {
+    let rig = forgex_rig();
+    rig.ssh.on_command(
+        "test -e /etc/init.d/S90helixscreen && echo yes || echo no",
+        out("yes\n", 0),
+    );
+    let m = staging();
+    let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
+    let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(r.state().recipe_id, "ad5m_forgex_update");
+    assert!(rig.installs()[0].0.ends_with("--progress --update"));
+}
+
+#[tokio::test]
+async fn a_zmod_ad5m_takes_the_macro_step() {
+    let rig = Rig::new();
+    let f: Facts = serde_json::from_value(json!({
+        "has_moonraker": true, "cpu_arch": "armv7l",
+        "klipper_objects": ["mcu", "mcu eboard", "zmod", "zmod_color", "fan_generic fanM106"],
+    }))
+    .unwrap();
+    rig.moonraker
+        .set_system_info(ADDR, json!({ "system_info": { "available_services": [] } }));
+    let m = staging();
+    let picked = identify_as(&m, "ad5m", &f);
+    assert_eq!(picked, recipe("ad5m", modded(), "ad5m_zmod_enable"));
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, flash_answers(&rig, "", json!(null))).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_OFF HELIX=1");
+}
+
+#[tokio::test]
+async fn ad5m_restore_uninstalls_and_points_at_forgex_for_fully_stock() {
+    let rig = forgex_rig();
+    let m = staging();
+    let picked = recipe("ad5m", StartState::Helix(String::new()), "ad5m_restore");
+    let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(
+        trace.texts()[0].contains("uninstall image"),
+        "{:?}",
+        trace.texts()
+    );
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/data/install.sh' --uninstall --progress"
+    );
+}
+
 // ---------------------------------------------------------------- the fleet
 
 /// Each recorded printer identifies as exactly the printer it is.
@@ -909,7 +1324,6 @@ fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
         ("qidi_box", Some("qidi")),
         ("k2_plus", Some("k2")),
         ("k1c_helper_script", Some("k1")),
-        ("ad5m_forgex", None),
     ];
     for (name, want) in expect {
         let got = identify(&m, &fleet(name));
@@ -924,6 +1338,13 @@ fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
             _ => panic!("{name}: {got:?}"),
         }
     }
+    // Moonraker cannot tell a 5M from a 5M Pro, so the user is asked; both get one recipe.
+    assert_eq!(
+        identify(&m, &fleet("ad5m_forgex")),
+        Identified::Ambiguous {
+            candidates: vec!["ad5m".into(), "ad5m_pro".into()]
+        }
+    );
 }
 
 #[test]
