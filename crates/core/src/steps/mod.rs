@@ -249,7 +249,8 @@ impl StepCtx<'_> {
             .unwrap_or_default()
     }
 
-    /// Asks for a login, suggesting the user that last worked, else `fallback_user`.
+    /// Asks for a login, suggesting the user that last worked, else `fallback_user`, with the
+    /// password hint of the recipe's first `ssh_login` step.
     pub(crate) fn login_prompt(&self, fallback_user: Option<&str>) -> Prompt {
         let user_hint = self
             .facts
@@ -257,7 +258,14 @@ impl StepCtx<'_> {
             .and_then(|v| v.as_str())
             .or(fallback_user)
             .map(str::to_string);
-        Prompt::Login { user_hint }
+        let password_hint = self.recipe.iter().find_map(|s| match s {
+            Step::SshLogin { password_hint, .. } => password_hint.clone(),
+            _ => None,
+        });
+        Prompt::Login {
+            user_hint,
+            password_hint,
+        }
     }
 
     /// The open SSH session to the run's host, connecting with the held login if none is open.

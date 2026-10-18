@@ -175,6 +175,9 @@
         The installer needs your printer's user name and password to install HelixScreen. It uses them only
         for this install and never saves them.
       </p>
+      {#if ev.password_hint}
+        <p>The password is {ev.password_hint}.</p>
+      {/if}
       {#if loginRefused}
         <div class="notice danger" role="alert">The printer didn't accept that password. Check it and try again.</div>
       {/if}

@@ -56,7 +56,7 @@ export type Prompt =
   | { prompt: "info"; text: string; image: string | null }
   | { prompt: "user_action"; text: string; image: string | null }
   | { prompt: "ask"; question: string; choices: Choice[] }
-  | { prompt: "login"; user_hint: string | null }
+  | { prompt: "login"; user_hint: string | null; password_hint: string | null }
   | { prompt: "choose_drive"; drives: Drive[]; needed_bytes: number; message: string | null }
   | { prompt: "ambiguous"; candidates: string[] };
 

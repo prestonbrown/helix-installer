@@ -16,7 +16,8 @@ pub fn info(text: &str, image: &Option<String>, input: Option<Input>) -> StepOut
     }
 }
 
-/// Done once the user confirms and, when the step has one, the `verify` probe answers.
+/// Done once the user confirms and, when the step has one, the `verify` probe answers. A
+/// `tcp_port` verify needs the port open: the action is what was meant to open it.
 pub async fn user_action(
     ctx: &mut StepCtx<'_>,
     text: &str,
@@ -36,6 +37,14 @@ pub async fn user_action(
             StepOutcome::Failed { reason, help } => StepOutcome::Failed {
                 reason: format!("the printer did not respond as expected: {reason}"),
                 help,
+            },
+            StepOutcome::Done => match p {
+                Probe::TcpPort { tcp_port, fact } if ctx.facts.get(fact) != Some(&true.into()) => {
+                    StepOutcome::failed(format!(
+                        "the printer did not respond as expected: port {tcp_port} is not open"
+                    ))
+                }
+                _ => StepOutcome::Done,
             },
             other => other,
         },

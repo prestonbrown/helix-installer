@@ -6,60 +6,346 @@
       "id": "generic_klipper",
       "name": "Klipper host (Voron, MainsailOS, FluiddPi, KIAUH)",
       "identify": [
-        { "os_distribution": { "prefix": "Debian GNU/Linux" }, "klipper_hostname": { "not": "linaro-alip" } },
-        { "os_distribution": { "prefix": "Raspbian GNU/Linux" } },
-        { "os_distribution": { "prefix": "Armbian" } },
-        { "os_distribution": { "prefix": "Ubuntu" } }
+        {
+          "os_distribution": {
+            "prefix": "Debian GNU/Linux"
+          },
+          "klipper_hostname": {
+            "not": "linaro-alip"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Raspbian GNU/Linux"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Armbian"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Ubuntu"
+          }
+        }
       ],
       "recipes": [
-        { "when": { "state": "helix", "cpu_arch": "aarch64" }, "recipe": "generic_update" },
-        { "when": { "state": "helix", "cpu_arch": "armv7l" }, "recipe": "generic_update" },
-        { "when": { "state": "modded:moonraker", "cpu_arch": "aarch64" }, "recipe": "generic_install" },
-        { "when": { "state": "modded:moonraker", "cpu_arch": "armv7l" }, "recipe": "generic_install" }
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "aarch64"
+          },
+          "recipe": "generic_update"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "armv7l"
+          },
+          "recipe": "generic_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "cpu_arch": "aarch64"
+          },
+          "recipe": "generic_install"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "cpu_arch": "armv7l"
+          },
+          "recipe": "generic_install"
+        }
       ],
       "restore": "generic_restore",
-      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-generic" }
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-generic"
+      }
     },
     {
       "id": "qidi",
       "name": "QIDI Q2 / Max 4 / Plus 5",
       "identify": [
-        { "klipper_hostname": "linaro-alip", "cpu_arch": "aarch64" }
+        {
+          "klipper_hostname": "linaro-alip",
+          "cpu_arch": "aarch64"
+        }
       ],
       "recipes": [
-        { "when": { "state": "helix" }, "recipe": "qidi_update" },
-        { "when": { "state": "modded:moonraker" }, "recipe": "qidi_install" }
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "qidi_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker"
+          },
+          "recipe": "qidi_install"
+        }
       ],
       "restore": "qidi_restore",
-      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-qidi" }
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-qidi"
+      }
+    },
+    {
+      "id": "k2",
+      "name": "Creality K2 / K2 Plus / K2 Pro",
+      "identify": [
+        {
+          "cpu_arch": "armv7l",
+          "klipper_objects": {
+            "contains": "motor_control"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "k2_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker"
+          },
+          "recipe": "k2_install"
+        }
+      ],
+      "restore": "k2_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-k2"
+      }
     }
   ],
   "artifacts": {},
   "recipes": {
     "generic_install": [
-      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
-      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "commits": true }
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "commits": true
+      }
     ],
     "generic_update": [
-      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
-      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "update": true, "commits": true }
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
+        "commits": true
+      }
     ],
     "generic_restore": [
-      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
-      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "uninstall": true, "commits": true }
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "uninstall": true,
+        "commits": true
+      }
     ],
     "qidi_install": [
-      { "type": "info", "text": "HelixScreen replaces QIDI's own screen program. While HelixScreen runs, QIDI Studio cannot see the QIDI Box or send prints to this printer, QIDI cloud is unavailable, and filament changes made for the Box do not stick. Prints can still be sent through Moonraker (Fluidd, Mainsail or a slicer's Klipper connection). Removing HelixScreen later brings all of this back." },
-      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
-      { "type": "helix_install", "platform": "pi", "commits": true }
+      {
+        "type": "info",
+        "text": "HelixScreen replaces QIDI's own screen program. While HelixScreen runs, QIDI Studio cannot see the QIDI Box or send prints to this printer, QIDI cloud is unavailable, and filament changes made for the Box do not stick. Prints can still be sent through Moonraker (Fluidd, Mainsail or a slicer's Klipper connection). Removing HelixScreen later brings all of this back."
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "qidi",
+            "password": "qiditech"
+          },
+          {
+            "user": "mks",
+            "password": "makerbase"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "commits": true
+      }
     ],
     "qidi_update": [
-      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
-      { "type": "helix_install", "platform": "pi", "update": true, "commits": true }
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "qidi",
+            "password": "qiditech"
+          },
+          {
+            "user": "mks",
+            "password": "makerbase"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "update": true,
+        "commits": true
+      }
     ],
     "qidi_restore": [
-      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
-      { "type": "helix_install", "platform": "pi", "uninstall": true, "commits": true }
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "qidi",
+            "password": "qiditech"
+          },
+          {
+            "user": "mks",
+            "password": "makerbase"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "uninstall": true,
+        "commits": true
+      }
+    ],
+    "k2_install": [
+      {
+        "type": "user_action",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "image": "k2/root-account.png",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2024"
+          }
+        ],
+        "ask_if_failed": true,
+        "password_hint": "the password shown on the printer's root screen"
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "dir": "/mnt/UDISK",
+        "commits": true
+      }
+    ],
+    "k2_update": [
+      {
+        "type": "user_action",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "image": "k2/root-account.png",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2024"
+          }
+        ],
+        "ask_if_failed": true,
+        "password_hint": "the password shown on the printer's root screen"
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "update": true,
+        "dir": "/mnt/UDISK",
+        "commits": true
+      }
+    ],
+    "k2_restore": [
+      {
+        "type": "user_action",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "image": "k2/root-account.png",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2024"
+          }
+        ],
+        "ask_if_failed": true,
+        "password_hint": "the password shown on the printer's root screen"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "uninstall": true,
+        "dir": "/mnt/UDISK",
+        "commits": true
+      }
     ]
   }
 }

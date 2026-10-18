@@ -144,7 +144,7 @@ async fn every_default_refused_asks_when_the_recipe_allows_it() {
         )]),
     );
     match r.advance(None).await {
-        Event::NeedInput(Prompt::Login { user_hint }) => {
+        Event::NeedInput(Prompt::Login { user_hint, .. }) => {
             assert_eq!(user_hint.as_deref(), Some("root"))
         }
         e => panic!("expected a login prompt, got {e:?}"),

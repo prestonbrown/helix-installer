@@ -136,7 +136,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     run: run({ printer_name: "FlashForge Adventurer 5X", step: 1, total_steps: 8, step_kind: "ask" }),
   },
   login: {
-    event: { event: "need_input", prompt: "login", user_hint: "root" },
+    event: { event: "need_input", prompt: "login", user_hint: "root", password_hint: null },
     run: run({ step: 3, step_kind: "ssh_login" }),
   },
   drive: {

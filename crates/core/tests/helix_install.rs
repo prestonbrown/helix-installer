@@ -789,7 +789,7 @@ async fn a_reopened_run_asks_for_the_login_then_follows_its_recorded_job() {
         .with_cache_dir(f.cache.path().to_path_buf());
 
     match r.advance(None).await {
-        Event::NeedInput(Prompt::Login { user_hint }) => {
+        Event::NeedInput(Prompt::Login { user_hint, .. }) => {
             assert_eq!(user_hint.as_deref(), Some("root"))
         }
         e => panic!("expected a login prompt, got {e:?}"),

@@ -385,6 +385,9 @@ pub enum Step {
         logins: Vec<Login>,
         #[serde(default)]
         ask_if_failed: bool,
+        /// Shown when the user is asked for a login: where to find this printer's password.
+        #[serde(default)]
+        password_hint: Option<String>,
         #[serde(default)]
         commits: bool,
     },

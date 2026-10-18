@@ -32,8 +32,10 @@ pub enum Prompt {
         question: String,
         choices: Vec<Choice>,
     },
+    /// `password_hint` says where this printer shows its password, when the recipe knows.
     Login {
         user_hint: Option<String>,
+        password_hint: Option<String>,
     },
     /// `message` says why `drives` is empty, when it is.
     ChooseDrive {

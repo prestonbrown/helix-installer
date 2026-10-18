@@ -186,7 +186,7 @@ impl Trace {
             .map(|p| match p {
                 Prompt::Info { text, .. } | Prompt::UserAction { text, .. } => text.clone(),
                 Prompt::Ask { question, .. } => question.clone(),
-                Prompt::Login { user_hint } => format!("login {user_hint:?}"),
+                Prompt::Login { user_hint, .. } => format!("login {user_hint:?}"),
                 Prompt::ChooseDrive { .. } => "choose drive".into(),
                 Prompt::Ambiguous { .. } => "ambiguous".into(),
             })
@@ -483,7 +483,7 @@ async fn a_qidi_refusing_both_logins_asks_for_one() {
 
     let trace = drive(&mut r, |p, _| match p {
         Prompt::Info { .. } => Input::Next,
-        Prompt::Login { user_hint } => {
+        Prompt::Login { user_hint, .. } => {
             assert_eq!(user_hint.as_deref(), Some("qidi"));
             login("root", "secret")
         }
@@ -491,6 +491,148 @@ async fn a_qidi_refusing_both_logins_asks_for_one() {
     })
     .await;
     assert!(trace.done(), "{:?}", trace.end);
+}
+
+// ---------------------------------------------------------------- Creality K2
+
+const S99_PROBE: &str = "test -e /etc/init.d/S99helixscreen && echo yes || echo no";
+
+/// A K2 whose root login is `password`, SSH open, and `S99helixscreen` present or not.
+fn k2_rig(password: &'static str, helix_there: bool) -> Rig {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "root", password);
+    rig.net.answer(ADDR, 22, Some("SSH-2.0-dropbear"));
+    rig.ssh.on_command(
+        S99_PROBE,
+        out(if helix_there { "yes\n" } else { "no\n" }, 0),
+    );
+    rig.installer_succeeds("k2");
+    rig
+}
+
+#[test]
+fn the_k2_plus_identifies_as_a_k2_on_stock_moonraker() {
+    assert_eq!(
+        identify(&staging(), &fleet("k2_plus")),
+        recipe("k2", modded(), "k2_install")
+    );
+}
+
+#[tokio::test]
+async fn k2_install_has_root_turned_on_then_installs_with_the_fixed_password() {
+    let rig = k2_rig("creality_2024", false);
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    match &trace.prompts[..] {
+        [Prompt::UserAction { text, image }] => {
+            assert!(text.contains("Root account information"), "{text}");
+            assert_eq!(image.as_deref(), Some("k2/root-account.png"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/mnt/UDISK/install.sh' --local '/mnt/UDISK/helixscreen-k2-v1.0.5.tar.gz' --progress"
+    );
+}
+
+#[tokio::test]
+async fn k2_with_ssh_still_closed_fails_the_root_step_and_retries_it() {
+    let rig = k2_rig("creality_2024", false);
+    let net_closed = Arc::new(FakeNet::new());
+    let mut env = rig.env();
+    env.net = net_closed.clone();
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let Identified::Recipe { recipe_id, .. } = &picked else {
+        unreachable!()
+    };
+    let state = RunState::new("run", "k2", recipe_id, Host::new(ADDR), fleet("k2_plus"));
+    let mut r = Runner::new(env, Arc::new(m), state).with_cache_dir(rig.cache.path().into());
+
+    let ev = r.advance(None).await;
+    assert!(
+        matches!(ev, Event::NeedInput(Prompt::UserAction { .. })),
+        "{ev:?}"
+    );
+    let ev = r.advance(Some(Input::Next)).await;
+    match ev {
+        Event::Failed {
+            committed: false,
+            step: 0,
+            ..
+        } => {}
+        other => panic!("expected a retryable failure at the root step, got {other:?}"),
+    }
+    net_closed.answer(ADDR, 22, Some("SSH-2.0-dropbear"));
+    let ev = r.advance(None).await;
+    assert!(
+        matches!(ev, Event::NeedInput(Prompt::UserAction { .. })),
+        "{ev:?}"
+    );
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+}
+
+#[tokio::test]
+async fn k2_with_a_per_unit_password_asks_for_the_one_on_the_root_screen() {
+    let rig = k2_rig("unit-pw-123", false);
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let mut hint = None;
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::UserAction { .. } => Input::Next,
+        Prompt::Login {
+            user_hint,
+            password_hint,
+        } => {
+            assert_eq!(user_hint.as_deref(), Some("root"));
+            hint = password_hint.clone();
+            login("root", "unit-pw-123")
+        }
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(
+        hint.as_deref(),
+        Some("the password shown on the printer's root screen")
+    );
+}
+
+#[tokio::test]
+async fn a_k2_that_already_runs_helixscreen_switches_to_the_update() {
+    let rig = k2_rig("creality_2024", true);
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(r.state().recipe_id, "k2_update");
+    assert_eq!(trace.prompts.len(), 1, "the root step is not asked twice");
+    assert!(rig.installs()[0].0.ends_with("--progress --update"));
+}
+
+#[tokio::test]
+async fn k2_restore_runs_the_uninstaller() {
+    let rig = k2_rig("creality_2024", true);
+    let m = staging();
+    let picked = recipe("k2", StartState::Helix(String::new()), "k2_restore");
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/mnt/UDISK/install.sh' --uninstall --progress"
+    );
 }
 
 // ---------------------------------------------------------------- the fleet
@@ -503,7 +645,7 @@ fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
         ("pi3_mainsailos", Some("generic_klipper")),
         ("cb1_voron", Some("generic_klipper")),
         ("qidi_box", Some("qidi")),
-        ("k2_plus", None),
+        ("k2_plus", Some("k2")),
         ("k1c_helper_script", None),
         ("ad5m_forgex", None),
     ];
