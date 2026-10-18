@@ -348,3 +348,65 @@ fn a_picked_model_never_names_an_unknown_moonraker_host() {
     assert_eq!(identify_as(&manifest(), "pi5", &f), not_recognised());
     assert_eq!(identify_as(&manifest(), "k1", &f), not_recognised());
 }
+
+fn one_printer(rule: serde_json::Value) -> Manifest {
+    serde_json::from_value(serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "artifacts": {}, "recipes": {},
+        "printers": [{
+            "id": "p", "name": "P", "identify": [rule],
+            "recipes": [{"when": {"state": "modded:moonraker"}, "recipe": "r"}],
+            "restore": "r", "fallback": {"refuse": true, "doc": "https://d"}
+        }]
+    }))
+    .unwrap()
+}
+
+fn matches_p(m: &Manifest, facts: serde_json::Value) -> bool {
+    let f: Facts = serde_json::from_value(facts).unwrap();
+    matches!(identify(m, &f), Identified::Recipe { ref printer_id, .. } if printer_id == "p")
+}
+
+#[test]
+fn prefix_matches_the_start_of_a_text_fact_only() {
+    let m = one_printer(serde_json::json!({"os_distribution": {"prefix": "Debian GNU/Linux"}}));
+    let mr =
+        |os: serde_json::Value| serde_json::json!({"has_moonraker": true, "os_distribution": os});
+    assert!(matches_p(&m, mr("Debian GNU/Linux 13 (trixie)".into())));
+    assert!(matches_p(&m, mr("Debian GNU/Linux".into())));
+    assert!(!matches_p(&m, mr("Raspbian Debian GNU/Linux".into())));
+    assert!(!matches_p(&m, mr("debian gnu/linux 13".into())));
+    assert!(!matches_p(
+        &m,
+        mr(serde_json::json!(["Debian GNU/Linux 13"]))
+    ));
+    assert!(!matches_p(&m, serde_json::json!({"has_moonraker": true})));
+}
+
+#[test]
+fn not_needs_the_fact_and_rejects_the_value_or_list_element() {
+    let m = one_printer(serde_json::json!({"klipper_hostname": {"not": "linaro-alip"}}));
+    let host =
+        |h: serde_json::Value| serde_json::json!({"has_moonraker": true, "klipper_hostname": h});
+    assert!(matches_p(&m, host("mainsailos".into())));
+    assert!(!matches_p(&m, host("linaro-alip".into())));
+    assert!(
+        !matches_p(&m, serde_json::json!({"has_moonraker": true})),
+        "a missing fact never matches"
+    );
+    let m = one_printer(serde_json::json!({"klipper_objects": {"not": "led chamber_light"}}));
+    let objs =
+        |o: serde_json::Value| serde_json::json!({"has_moonraker": true, "klipper_objects": o});
+    assert!(matches_p(&m, objs(serde_json::json!(["mcu", "probe"]))));
+    assert!(!matches_p(
+        &m,
+        objs(serde_json::json!(["mcu", "led chamber_light"]))
+    ));
+}
+
+#[test]
+fn prefix_and_not_round_trip_through_serde() {
+    let rule = serde_json::json!({"a": {"prefix": "x"}, "b": {"not": "y"}});
+    let m = one_printer(rule.clone());
+    let back = serde_json::to_value(&m.printers[0].identify[0]).unwrap();
+    assert_eq!(back, rule);
+}

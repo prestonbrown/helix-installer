@@ -302,6 +302,32 @@ fn contains_conditions_on_one_key_overlap() {
 }
 
 #[test]
+fn prefix_and_not_conditions_overlap_only_when_one_fact_can_satisfy_both() {
+    let pair = |a: Value, b: Value| {
+        let mut v = base();
+        v["printers"][0]["recipes"] = json!([
+            {"when": {"os": a}, "recipe": "install"},
+            {"when": {"os": b}, "recipe": "restore"}
+        ]);
+        run(v, false)
+    };
+    let p = |s: &str| json!({"prefix": s});
+    let n = |s: &str| json!({"not": s});
+    let overlap = |errs: Vec<LintError>| errs.iter().any(|e| e.message.contains("same facts"));
+    assert!(overlap(pair(p("Debian"), json!("Debian 13"))));
+    assert!(!overlap(pair(p("Debian"), json!("Armbian 26"))));
+    assert!(overlap(pair(p("Debian"), p("Debian GNU"))));
+    assert!(!overlap(pair(p("Debian"), p("Armbian"))));
+    assert!(overlap(pair(n("x"), json!("y"))));
+    assert!(!overlap(pair(n("x"), json!("x"))));
+    assert!(overlap(pair(n("x"), p("Debian"))));
+    assert!(
+        overlap(pair(n("Debian"), p("Debian"))),
+        "Debian 13 satisfies both"
+    );
+}
+
+#[test]
 fn binary_exits_2_on_unparseable_json() {
     let dir = assets();
     let path = dir.path().join("m.json");

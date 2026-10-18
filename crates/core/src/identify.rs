@@ -83,6 +83,13 @@ fn cond_matches(cond: &Cond, fact: Option<&Value>) -> bool {
             .as_str()
             .and_then(FwVersion::parse)
             .is_some_and(|v| range.matches(&v)),
+        Cond::Prefix { prefix } => fact
+            .as_str()
+            .is_some_and(|s| s.starts_with(prefix.as_str())),
+        Cond::Not { not } => match fact {
+            Value::Array(items) => !items.iter().any(|i| i.as_str() == Some(not)),
+            other => !cond_matches(&Cond::Exact(not.clone()), Some(other)),
+        },
     }
 }
 

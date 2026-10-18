@@ -134,10 +134,21 @@ fn choices_overlap(a: &RecipeChoice, b: &RecipeChoice) -> bool {
         .all(|(k, ca)| jointly_satisfiable(ca, &b.when[k]))
 }
 
+/// Pairs this cannot decide (a range against text conditions, say) count as satisfiable, so an
+/// overlap is reported rather than missed.
 fn jointly_satisfiable(a: &Cond, b: &Cond) -> bool {
     match (a, b) {
         (Cond::Contains { .. }, _) | (_, Cond::Contains { .. }) => true,
         (Cond::Exact(x), Cond::Exact(y)) => x == y,
+        (Cond::Prefix { prefix }, Cond::Exact(x)) | (Cond::Exact(x), Cond::Prefix { prefix }) => {
+            x.starts_with(prefix.as_str())
+        }
+        (Cond::Prefix { prefix: p }, Cond::Prefix { prefix: q }) => {
+            p.starts_with(q.as_str()) || q.starts_with(p.as_str())
+        }
+        (Cond::Not { not }, Cond::Exact(x)) | (Cond::Exact(x), Cond::Not { not }) => x != not,
+        (Cond::Not { .. }, _) | (_, Cond::Not { .. }) => true,
+        (Cond::Prefix { .. }, Cond::Range(_)) | (Cond::Range(_), Cond::Prefix { .. }) => true,
         (Cond::Range(x), Cond::Range(y)) => x
             .sample_versions()
             .into_iter()

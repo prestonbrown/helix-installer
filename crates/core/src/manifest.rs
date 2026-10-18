@@ -87,6 +87,15 @@ pub enum Cond {
         contains: String,
     },
     Range(VersionRange),
+    /// Matches a text fact that starts with this text (case-sensitive).
+    Prefix {
+        prefix: String,
+    },
+    /// Matches a text fact that differs from this text, or a list fact without this element.
+    /// A missing fact still never matches.
+    Not {
+        not: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -95,11 +104,25 @@ struct ContainsRepr {
     contains: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefixRepr {
+    prefix: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotRepr {
+    not: String,
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum CondRepr {
     Text(String),
     Contains(ContainsRepr),
+    Prefix(PrefixRepr),
+    Not(NotRepr),
 }
 
 impl Cond {
@@ -112,6 +135,8 @@ impl Cond {
             CondRepr::Contains(c) => Ok(Cond::Contains {
                 contains: c.contains,
             }),
+            CondRepr::Prefix(p) => Ok(Cond::Prefix { prefix: p.prefix }),
+            CondRepr::Not(n) => Ok(Cond::Not { not: n.not }),
         }
     }
 }
@@ -125,6 +150,11 @@ impl Serialize for Cond {
                 contains: contains.clone(),
             }
             .serialize(s),
+            Cond::Prefix { prefix } => PrefixRepr {
+                prefix: prefix.clone(),
+            }
+            .serialize(s),
+            Cond::Not { not } => NotRepr { not: not.clone() }.serialize(s),
         }
     }
 }
@@ -380,6 +410,9 @@ pub enum Step {
         channel: Channel,
         #[serde(default)]
         update: bool,
+        /// Runs `install.sh --uninstall` instead of installing; uploads no release.
+        #[serde(default)]
+        uninstall: bool,
         #[serde(default)]
         dir: Option<String>,
         #[serde(default)]
@@ -504,6 +537,18 @@ pub fn verify_and_parse(
             if matches!(step, Step::Probe { .. }) && step.probe().is_none() {
                 return Err(ManifestError::Malformed(format!(
                     "recipe {name} step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"
+                )));
+            }
+            if matches!(
+                step,
+                Step::HelixInstall {
+                    update: true,
+                    uninstall: true,
+                    ..
+                }
+            ) {
+                return Err(ManifestError::Malformed(format!(
+                    "recipe {name} step {i}: helix_install cannot both update and uninstall"
                 )));
             }
         }

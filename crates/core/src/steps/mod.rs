@@ -383,9 +383,17 @@ pub(crate) async fn run_builtin(
             platform,
             channel,
             update,
+            uninstall,
             dir,
             ..
-        } => helix_install::run(ctx, platform, *channel, *update, dir.as_deref(), input).await,
+        } => {
+            let mode = match (*uninstall, *update) {
+                (true, _) => helix_install::Mode::Uninstall,
+                (false, true) => helix_install::Mode::Update,
+                (false, false) => helix_install::Mode::Install,
+            };
+            helix_install::run(ctx, platform, *channel, mode, dir.as_deref(), input).await
+        }
         Step::WriteStick {
             artifacts, rename, ..
         } => write_stick::run(ctx, artifacts, rename, input).await,

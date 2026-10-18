@@ -381,6 +381,39 @@ async fn a_fixed_platform_installs_into_the_recipe_dir_as_an_update() {
 }
 
 #[tokio::test]
+async fn uninstall_uploads_only_install_sh_and_runs_it_with_uninstall() {
+    let f = Fakes::standard(&["k1"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "k1"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "k1", "uninstall": true, "dir": "/usr/data" }]);
+    let mut r = f.runner("root", steps, json!({}));
+
+    let (ev, titles) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(
+        titles.iter().any(|t| t.contains("remove HelixScreen")),
+        "{titles:?}"
+    );
+    let paths: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, vec!["/usr/data/install.sh".to_string()]);
+    assert!(!f.fetch.requests().contains(&tarball_url("k1")));
+    assert_eq!(
+        spawned(&f)[0].0,
+        "sh '/usr/data/install.sh' --uninstall --progress"
+    );
+    assert!(
+        f.ssh
+            .commands()
+            .iter()
+            .any(|c| c == "rm -f '/usr/data/install.sh'"),
+        "{:?}",
+        f.ssh.commands()
+    );
+}
+
+#[tokio::test]
 async fn an_installer_reporting_another_platform_fails() {
     let f = Fakes::standard(&["pi"]);
     f.ssh.script_job(vec![

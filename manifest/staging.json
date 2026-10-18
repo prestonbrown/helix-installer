@@ -1,0 +1,65 @@
+{
+  "manifest_version": 1,
+  "min_app_version": "0.1.0",
+  "printers": [
+    {
+      "id": "generic_klipper",
+      "name": "Klipper host (Voron, MainsailOS, FluiddPi, KIAUH)",
+      "identify": [
+        { "os_distribution": { "prefix": "Debian GNU/Linux" }, "klipper_hostname": { "not": "linaro-alip" } },
+        { "os_distribution": { "prefix": "Raspbian GNU/Linux" } },
+        { "os_distribution": { "prefix": "Armbian" } },
+        { "os_distribution": { "prefix": "Ubuntu" } }
+      ],
+      "recipes": [
+        { "when": { "state": "helix", "cpu_arch": "aarch64" }, "recipe": "generic_update" },
+        { "when": { "state": "helix", "cpu_arch": "armv7l" }, "recipe": "generic_update" },
+        { "when": { "state": "modded:moonraker", "cpu_arch": "aarch64" }, "recipe": "generic_install" },
+        { "when": { "state": "modded:moonraker", "cpu_arch": "armv7l" }, "recipe": "generic_install" }
+      ],
+      "restore": "generic_restore",
+      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-generic" }
+    },
+    {
+      "id": "qidi",
+      "name": "QIDI Q2 / Max 4 / Plus 5",
+      "identify": [
+        { "klipper_hostname": "linaro-alip", "cpu_arch": "aarch64" }
+      ],
+      "recipes": [
+        { "when": { "state": "helix" }, "recipe": "qidi_update" },
+        { "when": { "state": "modded:moonraker" }, "recipe": "qidi_install" }
+      ],
+      "restore": "qidi_restore",
+      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-qidi" }
+    }
+  ],
+  "artifacts": {},
+  "recipes": {
+    "generic_install": [
+      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
+      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "commits": true }
+    ],
+    "generic_update": [
+      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
+      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "update": true, "commits": true }
+    ],
+    "generic_restore": [
+      { "type": "ssh_login", "logins": [], "ask_if_failed": true },
+      { "type": "helix_install", "platform": { "from_arch": { "aarch64": "pi", "armv7l": "pi32" } }, "uninstall": true, "commits": true }
+    ],
+    "qidi_install": [
+      { "type": "info", "text": "HelixScreen replaces QIDI's own screen program. While HelixScreen runs, QIDI Studio cannot see the QIDI Box or send prints to this printer, QIDI cloud is unavailable, and filament changes made for the Box do not stick. Prints can still be sent through Moonraker (Fluidd, Mainsail or a slicer's Klipper connection). Removing HelixScreen later brings all of this back." },
+      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
+      { "type": "helix_install", "platform": "pi", "commits": true }
+    ],
+    "qidi_update": [
+      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
+      { "type": "helix_install", "platform": "pi", "update": true, "commits": true }
+    ],
+    "qidi_restore": [
+      { "type": "ssh_login", "logins": [ { "user": "qidi", "password": "qiditech" }, { "user": "mks", "password": "makerbase" } ], "ask_if_failed": true },
+      { "type": "helix_install", "platform": "pi", "uninstall": true, "commits": true }
+    ]
+  }
+}

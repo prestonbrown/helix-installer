@@ -346,3 +346,17 @@ fn cache_hands_back_the_signed_bytes_it_verified() {
     assert_eq!(signed.manifest.min_app_version, "0.1.0");
     assert!(c.load_signed(at(1_000_000 + 31 * DAY)).is_none());
 }
+
+#[test]
+fn an_install_step_cannot_both_update_and_uninstall() {
+    let m = serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "printers": [], "artifacts": {},
+        "recipes": { "r": [{ "type": "helix_install", "platform": "pi", "update": true, "uninstall": true }] }
+    });
+    let bytes = serde_json::to_vec(&m).unwrap();
+    let err = verify_and_parse(&bytes, &sign(&bytes), &pubkey(), "1.0.0").unwrap_err();
+    assert!(
+        matches!(&err, ManifestError::Malformed(m) if m.contains("both update and uninstall")),
+        "{err:?}"
+    );
+}

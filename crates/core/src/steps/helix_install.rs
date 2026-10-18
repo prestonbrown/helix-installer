@@ -2,7 +2,8 @@
 
 //! `helix_install`: downloads the current HelixScreen release and its `install.sh` on the PC,
 //! verifies both, uploads them to the printer and runs `install.sh --progress` there, following
-//! its `HELIX-PROGRESS` lines to the result.
+//! its `HELIX-PROGRESS` lines to the result. The uninstall mode uploads and runs only
+//! `install.sh --uninstall`.
 
 use super::download::fetch_artifact;
 use super::job::{self, Followed};
@@ -38,6 +39,24 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const UPLOADED_FACT: &str = "helix_install_uploaded";
 const TOO_OLD: &str = "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer.";
 const TITLE: &str = "Installing HelixScreen";
+const UNINSTALL_TITLE: &str = "Removing HelixScreen";
+
+/// What `install.sh` is asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Install,
+    Update,
+    Uninstall,
+}
+
+impl Mode {
+    fn title(self) -> &'static str {
+        match self {
+            Mode::Uninstall => UNINSTALL_TITLE,
+            Mode::Install | Mode::Update => TITLE,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct ReleaseManifest {
@@ -68,7 +87,7 @@ pub async fn run(
     ctx: &mut StepCtx<'_>,
     platform: &PlatformSel,
     channel: Channel,
-    update: bool,
+    mode: Mode,
     dir: Option<&str>,
     input: Option<Input>,
 ) -> StepOutcome {
@@ -80,20 +99,25 @@ pub async fn run(
         Err(stop) => return stop,
     };
     if let Some(running) = ctx.job.clone() {
-        return follow(ctx, &running, &platform).await;
+        return follow(ctx, &running, &platform, mode).await;
     }
     if ctx.calls == 0 {
+        let verb = if mode == Mode::Uninstall {
+            "remove"
+        } else {
+            "install"
+        };
         return progress(
-            format!("Preparing to install HelixScreen ({platform})"),
+            format!("Preparing to {verb} HelixScreen ({platform})"),
             None,
         );
     }
     // The run-wide override (testing, beta testers) wins over the recipe.
     let channel = ctx.channel_override.unwrap_or(channel);
-    match launch(ctx, &platform, channel, update, dir.unwrap_or(DEFAULT_DIR)).await {
+    match launch(ctx, &platform, channel, mode, dir.unwrap_or(DEFAULT_DIR)).await {
         Ok(started) => {
             *ctx.job = Some(started);
-            progress(TITLE.into(), None)
+            progress(mode.title().into(), None)
         }
         Err(stop) => stop,
     }
@@ -140,7 +164,7 @@ async fn launch(
     ctx: &mut StepCtx<'_>,
     platform: &str,
     channel: Channel,
-    update: bool,
+    mode: Mode,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
     let sudo_password = sudo_password(ctx).await?;
@@ -149,42 +173,46 @@ async fn launch(
     };
     let list_url = releases_manifest_url(channel);
     let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
-    let Some(asset) = release.assets.get(platform) else {
-        return Err(StepOutcome::failed(format!(
-            "HelixScreen {} has no build for platform {platform}",
-            release.tag
-        )));
-    };
-    let tarball_name = asset.url.rsplit('/').next().unwrap_or_default().to_string();
-    if !safe_name(&tarball_name) {
-        return Err(StepOutcome::failed(format!(
-            "the release list names an unusable file: {}",
-            asset.url
-        )));
-    }
-    let tarball = Artifact {
-        url: asset.url.clone(),
-        sha256: asset.sha256.clone(),
-        filename: Some(tarball_name.clone()),
+    // Uninstalling needs only the installer, so a release without this platform's build still
+    // serves.
+    let tarball = match mode {
+        Mode::Uninstall => None,
+        Mode::Install | Mode::Update => Some(release_tarball(&release, platform)?),
     };
     let script = install_sh_artifact(ctx.env, &release.tag).await?;
 
-    let tarball_local = fetch_artifact(ctx.env, &tarball, &cache, &|_, _| {})
-        .await
-        .map_err(|e| StepOutcome::failed(format!("{tarball_name}: {e}")))?;
+    let tarball_local = match &tarball {
+        Some(t) => {
+            let name = t.filename.clone().unwrap_or_default();
+            let local = fetch_artifact(ctx.env, t, &cache, &|_, _| {})
+                .await
+                .map_err(|e| StepOutcome::failed(format!("{name}: {e}")))?;
+            Some((local, name))
+        }
+        None => None,
+    };
     let script_local = fetch_artifact(ctx.env, &script, &cache, &|_, _| {})
         .await
         .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
 
     let dir = dir.trim_end_matches('/');
     let script_remote = format!("{dir}/install.sh");
-    let tarball_remote = format!("{dir}/{tarball_name}");
-    let command = format!(
-        "sh {} --local {} --progress{}",
-        sh_quote(&script_remote),
-        sh_quote(&tarball_remote),
-        if update { " --update" } else { "" }
-    );
+    let tarball_remote = tarball_local
+        .as_ref()
+        .map(|(_, name)| format!("{dir}/{name}"));
+    let command = match &tarball_remote {
+        Some(remote) => format!(
+            "sh {} --local {} --progress{}",
+            sh_quote(&script_remote),
+            sh_quote(remote),
+            if mode == Mode::Update {
+                " --update"
+            } else {
+                ""
+            }
+        ),
+        None => format!("sh {} --uninstall --progress", sh_quote(&script_remote)),
+    };
     // install.sh only understands --progress in newer releases; an older one prints its usage
     // and exits, after the upload has already filled the printer's /tmp.
     let script_text = std::fs::read(&script_local)
@@ -192,13 +220,18 @@ async fn launch(
     if !handles_progress(&String::from_utf8_lossy(&script_text)) {
         return Err(StepOutcome::failed(TOO_OLD));
     }
-    ctx.facts.insert(
-        UPLOADED_FACT.into(),
-        serde_json::json!([tarball_remote, script_remote]),
-    );
+    let uploaded: Vec<&str> = tarball_remote
+        .iter()
+        .map(String::as_str)
+        .chain([script_remote.as_str()])
+        .collect();
+    ctx.facts
+        .insert(UPLOADED_FACT.into(), serde_json::json!(uploaded));
     let sent = async {
         let ssh = ctx.ssh().await?;
-        ssh.upload(&tarball_local, &tarball_remote).await?;
+        if let (Some((local, _)), Some(remote)) = (&tarball_local, &tarball_remote) {
+            ssh.upload(local, remote).await?;
+        }
         ssh.upload(&script_local, &script_remote).await?;
         ssh.spawn_detached(&command, sudo_password.as_deref()).await
     }
@@ -216,6 +249,28 @@ async fn launch(
             })
         }
     }
+}
+
+/// The release's build for `platform`, named for upload.
+fn release_tarball(release: &ReleaseManifest, platform: &str) -> Result<Artifact, StepOutcome> {
+    let Some(asset) = release.assets.get(platform) else {
+        return Err(StepOutcome::failed(format!(
+            "HelixScreen {} has no build for platform {platform}",
+            release.tag
+        )));
+    };
+    let name = asset.url.rsplit('/').next().unwrap_or_default().to_string();
+    if !safe_name(&name) {
+        return Err(StepOutcome::failed(format!(
+            "the release list names an unusable file: {}",
+            asset.url
+        )));
+    }
+    Ok(Artifact {
+        url: asset.url.clone(),
+        sha256: asset.sha256.clone(),
+        filename: Some(name),
+    })
 }
 
 /// Whether `install.sh` has a case arm for `--progress`.
@@ -328,7 +383,12 @@ fn is_progress(line: &str) -> bool {
 }
 
 /// Success needs `result ok` and the installer's own platform equal to the chosen one.
-async fn follow(ctx: &mut StepCtx<'_>, running: &RemoteJob, platform: &str) -> StepOutcome {
+async fn follow(
+    ctx: &mut StepCtx<'_>,
+    running: &RemoteJob,
+    platform: &str,
+    mode: Mode,
+) -> StepOutcome {
     let followed = match job::follow(ctx, running, HELIX_INSTALL_SILENCE, is_progress).await {
         Ok(f) => f,
         Err(e) => return job::lost(ctx, "the installer", e),
@@ -387,7 +447,7 @@ async fn follow(ctx: &mut StepCtx<'_>, running: &RemoteJob, platform: &str) -> S
                         fraction: (total > 0).then(|| (done as f32 / total as f32).min(1.0)),
                     }
                 }
-                None => progress(TITLE.into(), None),
+                None => progress(mode.title().into(), None),
             }
         }
         Followed::Exited(code) => {

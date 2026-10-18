@@ -15,6 +15,9 @@ jobs:
         run: cargo build --release -p helix_installer_core --bin manifest-lint
       - name: Lint the manifest
         run: target/release/manifest-lint manifest/manifest.json manifest/img
+      # Recipes not yet run on hardware: linted like the published list, never signed or uploaded.
+      - name: Lint the staging manifest
+        run: target/release/manifest-lint manifest/staging.json manifest/img --allow-unverified
       - name: Install minisign
         run: |
           sudo apt-get update
