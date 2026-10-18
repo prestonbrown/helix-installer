@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use helix_installer_core::discovery::sweep::{subnet_targets, sweep, Iface};
+use helix_installer_core::discovery::sweep::{order_ifaces, subnet_targets, sweep, Iface};
 use helix_installer_core::discovery::{
     manual_host, merge, parse_flashforge_reply, probe_host, Candidate,
 };
@@ -229,6 +229,75 @@ fn subnet_targets_stay_within_one_slash_24() {
     assert_eq!(*t28.last().unwrap(), Ipv4Addr::new(192, 168, 1, 78));
 
     assert!(subnet_targets(iface([192, 168, 1, 70], 32)).is_empty());
+}
+
+fn named(name: &str, ip: [u8; 4], prefix: u32) -> (String, Iface) {
+    (name.to_string(), iface(ip, prefix))
+}
+
+/// The interfaces of a Linux desktop running Docker and libvirt, in the order the OS lists them.
+fn docker_box() -> Vec<(String, Iface)> {
+    vec![
+        named("docker0", [172, 17, 0, 1], 16),
+        named("br-3f2a9c", [172, 18, 0, 1], 16),
+        named("veth12ab", [172, 17, 0, 9], 24),
+        named("virbr0", [192, 168, 122, 1], 24),
+        named("wlan0", [192, 168, 30, 40], 24),
+        named("eth1", [10, 20, 0, 7], 16),
+        named("eth0", [192, 168, 1, 50], 24),
+    ]
+}
+
+#[test]
+fn the_default_route_interface_is_swept_first_and_bridges_are_skipped() {
+    let order = order_ifaces(&docker_box(), Some(Ipv4Addr::new(192, 168, 30, 40)));
+    assert_eq!(
+        order,
+        vec![iface([192, 168, 30, 40], 24), iface([192, 168, 1, 50], 24)]
+    );
+}
+
+#[test]
+fn a_wide_default_route_interface_is_still_swept() {
+    let order = order_ifaces(&docker_box(), Some(Ipv4Addr::new(10, 20, 0, 7)));
+    assert_eq!(
+        order,
+        vec![
+            iface([10, 20, 0, 7], 16),
+            iface([192, 168, 1, 50], 24),
+            iface([192, 168, 30, 40], 24),
+        ]
+    );
+}
+
+#[test]
+fn the_default_route_interface_is_kept_whatever_its_name() {
+    let order = order_ifaces(&docker_box(), Some(Ipv4Addr::new(192, 168, 122, 1)));
+    assert_eq!(order[0], iface([192, 168, 122, 1], 24));
+}
+
+#[test]
+fn without_a_default_route_only_the_bridge_names_are_skipped() {
+    let order = order_ifaces(&docker_box(), None);
+    assert_eq!(
+        order,
+        vec![
+            iface([10, 20, 0, 7], 16),
+            iface([192, 168, 1, 50], 24),
+            iface([192, 168, 30, 40], 24),
+        ]
+    );
+}
+
+#[test]
+fn a_default_route_off_every_private_interface_counts_as_known() {
+    // A public or CGNAT address on the default route: no LAN interface carries it, so the
+    // wide ones are still skipped.
+    let order = order_ifaces(&docker_box(), Some(Ipv4Addr::new(100, 64, 3, 2)));
+    assert_eq!(
+        order,
+        vec![iface([192, 168, 1, 50], 24), iface([192, 168, 30, 40], 24)]
+    );
 }
 
 #[tokio::test]

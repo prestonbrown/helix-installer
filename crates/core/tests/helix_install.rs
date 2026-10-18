@@ -187,6 +187,7 @@ impl Fakes {
         let ssh = FakeSsh::new();
         ssh.accept(ADDR, "root", PASSWORD);
         ssh.accept(ADDR, "pi", PASSWORD);
+        ssh.accept(ADDR, "mks", PASSWORD);
         Fakes {
             ssh,
             fetch,
@@ -212,12 +213,25 @@ impl Fakes {
 
     /// A runner for `steps`, logged in as `user` by a stand-in `ssh_login` first step.
     fn runner(&self, user: &str, steps: Value, facts: Value) -> Runner {
+        self.runner_with_password(user, PASSWORD, steps, facts)
+    }
+
+    fn runner_with_password(
+        &self,
+        user: &str,
+        password: &str,
+        steps: Value,
+        facts: Value,
+    ) -> Runner {
         let mut all = vec![json!({ "type": "ssh_login", "logins": [] })];
         all.extend(steps.as_array().unwrap().iter().cloned());
         let facts: Facts = serde_json::from_value(facts).unwrap();
         let state = RunState::new("run1", "k1", "r", Host::new(ADDR), facts);
         Runner::new(self.env(), manifest(Value::Array(all)), state)
-            .with_handler("ssh_login", Arc::new(TestLogin(user.into())))
+            .with_handler(
+                "ssh_login",
+                Arc::new(TestLogin(user.into(), password.into())),
+            )
             .with_cache_dir(self.cache.path().to_path_buf())
     }
 
@@ -249,14 +263,14 @@ fn manifest(steps: Value) -> Arc<Manifest> {
     Arc::new(m)
 }
 
-struct TestLogin(String);
+struct TestLogin(String, String);
 
 #[async_trait]
 impl StepHandler for TestLogin {
     async fn run(&self, ctx: &mut StepCtx<'_>, _step: &Step, _input: Option<Input>) -> StepOutcome {
         ctx.set_login(Login {
             user: self.0.clone(),
-            password: PASSWORD.into(),
+            password: self.1.clone(),
         });
         StepOutcome::Done
     }
@@ -525,9 +539,7 @@ async fn a_job_that_exits_without_a_result_fails() {
     assert!(reason.contains("syntax error"), "{reason}");
 }
 
-#[tokio::test]
-async fn a_non_root_login_without_passwordless_sudo_stops_before_uploading() {
-    let f = Fakes::standard(&["pi"]);
+fn sudo_needs_a_password(f: &Fakes) {
     f.ssh.on_command(
         "sudo -n true",
         ExecOutput {
@@ -536,7 +548,75 @@ async fn a_non_root_login_without_passwordless_sudo_stops_before_uploading() {
             exit: 1,
         },
     );
-    let mut r = f.runner("pi", install_step(json!("pi")), json!({}));
+}
+
+#[tokio::test]
+async fn a_non_root_login_without_passwordless_sudo_runs_the_installer_through_sudo() {
+    let f = Fakes::standard(&["pi"]);
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(PASSWORD);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("mks", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let s = spawned(&f);
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        s[0].1.as_deref(),
+        Some(PASSWORD.as_bytes()),
+        "the password goes to sudo's stdin"
+    );
+    assert!(f.ssh.commands().iter().all(|c| !c.contains(PASSWORD)));
+    let others: Vec<_> = f
+        .ssh
+        .calls()
+        .into_iter()
+        .filter(|(c, _)| !(c.starts_with("sh ") && c.contains("install.sh")))
+        .collect();
+    assert!(
+        others.iter().all(|(_, stdin)| stdin.is_none()),
+        "{others:?}"
+    );
+    let saved = serde_json::to_string(r.state()).unwrap();
+    assert!(!saved.contains(PASSWORD), "{saved}");
+}
+
+#[tokio::test]
+async fn sudo_refusing_the_login_password_fails_without_naming_it() {
+    let f = Fakes::standard(&["pi"]);
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts("another-password");
+    f.ssh.script_job(vec![(&pl(&["result", "ok"]), Some(0))]);
+    let mut r = f.runner("mks", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    match &ev {
+        Event::Failed { reason, help, .. } => {
+            assert!(reason.contains("sudo"), "{reason}");
+            assert!(reason.contains("mks"), "{reason}");
+            assert!(!reason.contains(PASSWORD), "{reason}");
+            assert!(!help.as_deref().unwrap_or("").contains(PASSWORD));
+        }
+        e => panic!("expected Failed, got {e:?}"),
+    }
+    assert!(
+        !rm_commands(&f).is_empty(),
+        "the uploaded files are removed"
+    );
+    let saved = serde_json::to_string(r.state()).unwrap();
+    assert!(!saved.contains(PASSWORD), "{saved}");
+}
+
+#[tokio::test]
+async fn a_non_root_login_with_no_password_and_no_passwordless_sudo_stops_before_uploading() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
 
     let (ev, _) = settle(&mut r).await;
     match &ev {

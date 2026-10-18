@@ -12,7 +12,7 @@ use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, Channel, PlatformSel};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
-use crate::transport::{Env, RemoteJob};
+use crate::transport::{Env, RemoteJob, TransportError};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -144,7 +144,7 @@ async fn launch(
     update: bool,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
-    check_sudo(ctx).await?;
+    let sudo_password = sudo_password(ctx).await?;
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
     };
@@ -201,8 +201,7 @@ async fn launch(
         let ssh = ctx.ssh().await?;
         ssh.upload(&tarball_local, &tarball_remote).await?;
         ssh.upload(&script_local, &script_remote).await?;
-        // install.sh calls sudo itself, so no password goes to the job.
-        ssh.spawn_detached(&command, None).await
+        ssh.spawn_detached(&command, sudo_password.as_deref()).await
     }
     .await;
     match sent {
@@ -210,9 +209,12 @@ async fn launch(
         Err(e) => {
             ctx.drop_ssh();
             remove_uploaded(ctx).await;
-            Err(StepOutcome::failed(format!(
-                "could not start the installer on the printer: {e}"
-            )))
+            Err(match e {
+                TransportError::Auth => sudo_refused(ctx),
+                e => StepOutcome::failed(format!(
+                    "could not start the installer on the printer: {e}"
+                )),
+            })
         }
     }
 }
@@ -256,19 +258,26 @@ async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
     }
 }
 
-/// install.sh runs as the login user and calls sudo itself, which cannot prompt from a
-/// detached job: a user other than root needs passwordless sudo.
-async fn check_sudo(ctx: &mut StepCtx<'_>) -> Result<(), StepOutcome> {
-    let user = ctx.login().map(|l| l.user.clone()).unwrap_or_default();
-    if user == "root" {
-        return Ok(());
+/// The password to start install.sh as root with, or `None` to start it as the login user.
+/// install.sh calls sudo itself, which cannot prompt from a detached job, so a login without
+/// passwordless sudo runs the whole installer through sudo with the held password. Run as
+/// root, install.sh still installs for the Klipper service user: it finds that user from the
+/// klipper service, the process table and /home, never from who started it.
+async fn sudo_password(ctx: &mut StepCtx<'_>) -> Result<Option<String>, StepOutcome> {
+    let Some(login) = ctx.login().cloned() else {
+        return Err(StepOutcome::failed("no SSH login is held"));
+    };
+    if login.user == "root" {
+        return Ok(None);
     }
+    let user = login.user;
     let ran = match ctx.ssh().await {
         Ok(s) => s.exec("sudo -n true", None, SUDO_CHECK_TIMEOUT).await,
         Err(e) => Err(e),
     };
     match ran {
-        Ok(out) if out.exit == 0 => Ok(()),
+        Ok(out) if out.exit == 0 => Ok(None),
+        Ok(_) if !login.password.is_empty() => Ok(Some(login.password)),
         Ok(_) => Err(StepOutcome::Failed {
             reason: format!(
                 "this printer's account ({user}) needs passwordless sudo to install HelixScreen"
@@ -283,6 +292,17 @@ async fn check_sudo(ctx: &mut StepCtx<'_>) -> Result<(), StepOutcome> {
                 "could not check sudo on the printer: {e}"
             )))
         }
+    }
+}
+
+/// sudo turned down the password the printer accepted for the login.
+fn sudo_refused(ctx: &StepCtx<'_>) -> StepOutcome {
+    let user = ctx.login().map(|l| l.user.as_str()).unwrap_or_default();
+    StepOutcome::Failed {
+        reason: format!("sudo on the printer refused the password of this printer's account ({user})"),
+        help: Some(format!(
+            "Allow {user} to run sudo with its login password, or without one, then retry: {SUDO_DOC}"
+        )),
     }
 }
 

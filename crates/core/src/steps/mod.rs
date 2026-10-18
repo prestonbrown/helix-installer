@@ -17,6 +17,7 @@ pub mod wait_for;
 pub mod write_stick;
 
 use crate::facts::Facts;
+use crate::identify;
 use crate::manifest::{Channel, Login, Manifest, Step};
 use crate::run_state::{LogEntry, IDENTITY_KEYS};
 use crate::runner::{unix_secs, Input, Prompt};
@@ -292,9 +293,25 @@ impl StepCtx<'_> {
         });
     }
 
-    /// Merges probe results into the facts. After the point of no return, a model or serial
-    /// that differs from the one recorded at the commit stops the run instead.
+    /// Merges probe results into the facts. After the point of no return the run stops instead
+    /// when the merged facts no longer match the run's printer by its identify rules, or a
+    /// model or serial differs from the one recorded at the commit.
     pub fn record_probe(&mut self, found: Facts) -> Result<(), StepOutcome> {
+        if self.committed {
+            let mut merged = self.facts.clone();
+            merged.extend(found.clone());
+            if !identify::answers_as(self.manifest, self.printer_id, &merged) {
+                let name = self
+                    .manifest
+                    .printers
+                    .iter()
+                    .find(|p| p.id == self.printer_id)
+                    .map_or(self.printer_id, |p| p.name.as_str());
+                return Err(StepOutcome::failed(format!(
+                    "this is not the printer the install started on: it no longer answers as a {name}"
+                )));
+            }
+        }
         if let Some(identity) = self.identity {
             for key in IDENTITY_KEYS {
                 if let (Some(was), Some(now)) = (identity.get(key), found.get(key)) {

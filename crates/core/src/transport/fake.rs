@@ -117,6 +117,7 @@ struct SshState {
     next_job: u32,
     drop_next_session_after: Option<u32>,
     connects: u32,
+    sudo_password: Option<String>,
 }
 
 /// Shared by every session it hands out, so a reconnect sees the same job logs.
@@ -158,6 +159,11 @@ impl FakeSsh {
             .map(|(t, e)| (t.to_string(), e))
             .collect();
         lock(&self.state).queued_jobs.push((chunks, dies));
+    }
+    /// `spawn_detached` with a sudo password other than `password` fails with `Auth`, as
+    /// sudo does after a wrong password. Without this any password is taken.
+    pub fn sudo_accepts(&self, password: &str) {
+        lock(&self.state).sudo_password = Some(password.into());
     }
     /// The next session to connect fails every call from its n-th (1-based)
     /// onward with `Unreachable`; later sessions are unaffected.
@@ -275,6 +281,11 @@ impl SshSession for FakeSshSession {
         let mut st = lock(&self.state);
         st.calls
             .push((cmd.into(), sudo_password.map(|p| p.as_bytes().to_vec())));
+        if let (Some(given), Some(want)) = (sudo_password, st.sudo_password.as_deref()) {
+            if given != want {
+                return Err(TransportError::Auth);
+            }
+        }
         if st.queued_jobs.is_empty() {
             return Err(TransportError::Protocol(format!("unscripted job: {cmd}")));
         }

@@ -23,23 +23,62 @@ pub struct Iface {
     pub mask: Ipv4Addr,
 }
 
-/// Private, non-loopback IPv4 interfaces.
+/// Private, non-loopback IPv4 interfaces in sweep order (see `order_ifaces`).
 pub fn local_private_ifaces() -> Vec<Iface> {
     let Ok(ifaces) = if_addrs::get_if_addrs() else {
         return Vec::new();
     };
-    let mut out: Vec<Iface> = ifaces
+    let named: Vec<(String, Iface)> = ifaces
         .iter()
         .filter(|i| !i.is_loopback())
         .filter_map(|i| match i.addr {
-            if_addrs::IfAddr::V4(ref v4) if v4.ip.is_private() => Some(Iface {
-                ip: v4.ip,
-                mask: v4.netmask,
-            }),
+            if_addrs::IfAddr::V4(ref v4) if v4.ip.is_private() => Some((
+                i.name.clone(),
+                Iface {
+                    ip: v4.ip,
+                    mask: v4.netmask,
+                },
+            )),
             _ => None,
         })
         .collect();
-    out.sort_by_key(|i| (i.ip, i.mask));
+    order_ifaces(&named, default_route_ip())
+}
+
+/// The local address the OS would send internet traffic from. Connecting a UDP socket only
+/// picks a route; nothing is sent. `None` when there is no default route.
+fn default_route_ip() -> Option<Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(1, 1, 1, 1), 53)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+
+/// Container and VM bridges: printers are never behind them, and Docker's sorts first.
+fn is_virtual_bridge(name: &str) -> bool {
+    name == "docker0"
+        || name.starts_with("br-")
+        || name.starts_with("veth")
+        || name.starts_with("virbr")
+}
+
+/// Orders the interfaces for the sweep, which covers only the first few. The interface
+/// holding `default_ip` (the default route's) comes first and is always kept; the rest follow
+/// by address, without virtual bridges and, once the default route is known, without any
+/// /16 or wider, which are rarely a printer's LAN. With no default route only the bridges go.
+pub fn order_ifaces(named: &[(String, Iface)], default_ip: Option<Ipv4Addr>) -> Vec<Iface> {
+    let is_default = |i: &Iface| Some(i.ip) == default_ip;
+    let mut rest: Vec<Iface> = named
+        .iter()
+        .filter(|(name, i)| !is_default(i) && !is_virtual_bridge(name))
+        .filter(|(_, i)| default_ip.is_none() || u32::from(i.mask).leading_ones() > 16)
+        .map(|(_, i)| *i)
+        .collect();
+    rest.sort_by_key(|i| (i.ip, i.mask));
+    let mut out: Vec<Iface> = named.iter().map(|(_, i)| *i).filter(is_default).collect();
+    out.extend(rest);
     out.dedup();
     out
 }

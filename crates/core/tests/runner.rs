@@ -506,6 +506,127 @@ async fn a_serial_change_after_a_resume_still_stops_the_recipe() {
     }
 }
 
+/// A K1C and an AD5M as the manifest would know them: neither answers with a model or serial,
+/// so only the identify rules can tell them apart.
+fn k1c_and_ad5m(steps: Value) -> Arc<Manifest> {
+    let m: Manifest = serde_json::from_value(json!({
+        "manifest_version": 1,
+        "min_app_version": "0.1.0",
+        "printers": [
+            {
+                "id": "k1c",
+                "name": "Creality K1C",
+                "identify": [{
+                    "cpu_arch": "mips",
+                    "klipper_objects": { "contains": "mcu leveling_mcu" }
+                }],
+                "recipes": [{ "when": { "state": "helix" }, "recipe": "r" }],
+                "restore": "r",
+                "fallback": { "refuse": true, "doc": PRINTER_DOC }
+            },
+            {
+                "id": "ad5m",
+                "name": "Flashforge Adventurer 5M",
+                "identify": [{ "os_distribution": "Forge-X 1.4.2" }],
+                "recipes": [{ "when": { "state": "modded:moonraker" }, "recipe": "r" }],
+                "restore": "r",
+                "fallback": { "refuse": true, "doc": PRINTER_DOC }
+            }
+        ],
+        "artifacts": {},
+        "recipes": { "r": steps }
+    }))
+    .unwrap();
+    Arc::new(m)
+}
+
+/// Moonraker's answers, shaped like the fleet's K1C (192.168.30.182) and AD5M (192.168.1.67).
+fn answer_as(f: &Fakes, printer: &str) {
+    let (arch, os, services, objects) = match printer {
+        "k1c" => (
+            "mips",
+            "Buildroot 2020.02.1",
+            json!(["klipper", "moonraker", "klipper_mcu", "helixscreen"]),
+            json!([
+                "webhooks",
+                "mcu",
+                "mcu nozzle_mcu",
+                "mcu leveling_mcu",
+                "toolhead"
+            ]),
+        ),
+        _ => (
+            "armv7l",
+            "Forge-X 1.4.2",
+            json!([]),
+            json!(["webhooks", "mcu", "mcu eboard", "toolhead"]),
+        ),
+    };
+    f.moonraker.set_system_info(
+        ADDR,
+        json!({ "system_info": {
+            "cpu_info": { "processor": arch },
+            "distribution": { "name": os },
+            "available_services": services
+        }}),
+    );
+    f.moonraker
+        .set_objects_list(ADDR, json!({ "objects": objects }));
+}
+
+/// A K1C run that commits, then probes Moonraker again answering as `after_commit`.
+async fn k1c_rechecked_as(after_commit: &str) -> Event {
+    let f = Fakes::new();
+    answer_as(&f, "k1c");
+    let m = k1c_and_ad5m(json!([
+        { "type": "probe", "moonraker": "system_info" },
+        { "type": "probe", "moonraker": "objects_list" },
+        { "type": "info", "text": "Install", "commits": true },
+        { "type": "probe", "moonraker": "system_info" },
+        { "type": "info", "text": "Installed" }
+    ]));
+    let facts: Facts = serde_json::from_value(json!({
+        "has_moonraker": true,
+        "cpu_arch": "mips",
+        "klipper_hostname": "K1C-1839",
+        "klipper_objects": ["webhooks", "mcu", "mcu nozzle_mcu", "mcu leveling_mcu", "toolhead"]
+    }))
+    .unwrap();
+    let state = RunState::new("run1", "k1c", "r", Host::new(ADDR), facts);
+    let mut r = Runner::new(f.env(), m, state);
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Info { .. })
+    ));
+    answer_as(&f, after_commit);
+    match r.advance(Some(Input::Next)).await {
+        Event::NeedInput(Prompt::Info { .. }) => r.advance(Some(Input::Next)).await,
+        other => other,
+    }
+}
+
+#[tokio::test]
+async fn a_moonraker_printer_answering_as_another_model_after_commit_stops() {
+    match k1c_rechecked_as("ad5m").await {
+        Event::Failed {
+            committed, reason, ..
+        } => {
+            assert!(committed);
+            assert!(
+                reason.contains("this is not the printer the install started on"),
+                "{reason}"
+            );
+            assert!(reason.contains("Creality K1C"), "{reason}");
+        }
+        e => panic!("expected Failed, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_moonraker_printer_answering_as_itself_after_commit_continues() {
+    assert!(matches!(k1c_rechecked_as("k1c").await, Event::Done));
+}
+
 #[tokio::test]
 async fn cancel_before_commit_refuses_with_the_printer_guide() {
     let f = Fakes::new();

@@ -97,6 +97,15 @@ fn printer_matches(p: &Printer, f: &Facts) -> bool {
         .any(|rule| !rule.is_empty() && all_match(rule, f))
 }
 
+/// Whether `f` still describes the manifest's printer `printer_id`, by the same rules
+/// `identify` matched it with. An id the manifest does not list matches nothing.
+pub fn answers_as(m: &Manifest, printer_id: &str, f: &Facts) -> bool {
+    m.printers
+        .iter()
+        .find(|p| p.id == printer_id)
+        .is_some_and(|p| printer_matches(p, f))
+}
+
 /// A printer with no matching choice always refuses; `fallback.refuse` is not consulted.
 fn refuse(printer: &Printer) -> Identified {
     Identified::Refuse {
