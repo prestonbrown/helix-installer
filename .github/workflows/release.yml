@@ -130,17 +130,22 @@ jobs:
       - name: Install UI dependencies
         working-directory: ui
         run: npm ci
+      - name: Build UI
+        working-directory: ui
+        run: npm run build
 
       - name: Install the Azure Artifact (Trusted) Signing client
         if: env.SIGN_AZURE == 'true'
         run: cargo install artifact-signing-cli --locked --version 0.12.0
 
-      # Per-run overrides for tauri.conf.json, so the checked-in config builds unsigned anywhere.
+      # Per-run overrides for tauri.conf.json, so the checked-in config builds unsigned anywhere. The
+      # UI is built above, so the bundler's own pre-build command is switched off.
       - name: Write the build configuration
         shell: bash
         run: |
           node -e '
             const bundle = {};
+            const build = { beforeBuildCommand: "" };
             if (process.env.SIGN_UPDATER === "true") bundle.createUpdaterArtifacts = true;
             if (process.env.SIGN_AZURE === "true") {
               bundle.windows = { signCommand: [
@@ -149,7 +154,7 @@ jobs:
                 "-d", "HelixScreen Installer", "%1"
               ].join(" ") };
             }
-            require("fs").writeFileSync("crates/app/ci-config.json", JSON.stringify({ bundle }));
+            require("fs").writeFileSync("crates/app/ci-config.json", JSON.stringify({ build, bundle }));
           '
 
       - uses: tauri-apps/tauri-action@action-v1.0.0
