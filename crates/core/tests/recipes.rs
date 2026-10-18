@@ -1401,6 +1401,7 @@ fn board_probe() -> String {
 
 /// Runs the board probe with a real `sh`, reading `armbian` and `dt_model` in place of
 /// /etc/armbian-release and /proc/device-tree/model.
+#[cfg(target_os = "linux")]
 fn run_board_probe(armbian: Option<&str>, dt_model: Option<&[u8]>) -> String {
     let dir = tempfile::tempdir().unwrap();
     let rel = dir.path().join("armbian-release");
@@ -1423,6 +1424,9 @@ fn run_board_probe(armbian: Option<&str>, dt_model: Option<&[u8]>) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
+// Runs the probe in the local `sh`: it is written for the printer's Linux userland (GNU or
+// BusyBox `timeout`, POSIX paths), which macOS and Windows runners do not have.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_board_probe_accepts_known_sbcs_and_nothing_else() {
     let armbian = |board: &str| format!("BOARD={board}\nBOARD_NAME=\"x\"\nBOARDFAMILY=sun50iw9\n");
