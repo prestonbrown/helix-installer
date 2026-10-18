@@ -65,14 +65,20 @@ pub struct ExecOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteJob {
     pub log_path: String,
+    /// The job's shell, from the line it writes first; `None` when it is unknown.
+    #[serde(default)]
+    pub pid: Option<u32>,
 }
 
-/// New log text from `from_offset`; `exit` is set once the job has finished.
+/// New log text from `from_offset`; `exit` is set once the job has finished. `alive` says
+/// whether the job's process still exists, when that was checked: a job that is not alive
+/// and has no `exit` died without finishing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobChunk {
     pub text: String,
     pub next_offset: u64,
     pub exit: Option<i32>,
+    pub alive: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

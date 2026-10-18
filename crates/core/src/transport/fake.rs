@@ -270,7 +270,10 @@ impl SshSession for FakeSshSession {
                 revealed: 0,
             },
         );
-        Ok(RemoteJob { log_path })
+        Ok(RemoteJob {
+            log_path,
+            pid: None,
+        })
     }
 
     async fn read_job(&mut self, job: &RemoteJob, from_offset: u64) -> Result<JobChunk> {
@@ -298,6 +301,7 @@ impl SshSession for FakeSshSession {
             text,
             next_offset: full.len() as u64,
             exit,
+            alive: None,
         })
     }
 }

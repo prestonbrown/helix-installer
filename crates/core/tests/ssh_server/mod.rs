@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! An in-process SSH server whose "shell" understands exactly the command shapes the
-//! transport sends (upload, size check, setsid probe, detached launch, sudo, `tail -c`)
+//! transport sends (upload, size check, detach-tool probes, detached launch, sudo, `tail -c`, liveness)
 //! plus a table of canned commands. Files live under a temp dir standing in for `/`, so
 //! uploads and job logs are real bytes on disk. It records every command line and every
 //! byte fed to sudo so tests can prove where a secret went.
@@ -13,7 +13,7 @@ use russh::keys::PrivateKey;
 use russh::server::{self, Auth, Msg, Response, Session};
 use russh::{Channel, ChannelId, ChannelMsg, MethodKind, MethodSet, Preferred};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +31,8 @@ pub enum JobStep {
     Bytes(Vec<u8>),
     /// Blocks the job until the test calls `notify_one` on it.
     Wait(Arc<Notify>),
+    /// The job's process dies here: no exit marker, and its pid stops answering.
+    Die,
 }
 
 #[derive(Clone)]
@@ -47,6 +49,12 @@ pub struct ServerCfg {
     pub kbd_interactive_only: bool,
     pub host_key_seed: u8,
     pub has_setsid: bool,
+    pub has_nohup: bool,
+    /// The launch line exits 0 but the job never starts: `Some("")` leaves no log at all,
+    /// `Some(text)` leaves a log holding only `text`.
+    pub broken_launch: Option<String>,
+    /// `mv` of an uploaded `.part` fails, leaving the `.part` for the cleanup to remove.
+    pub fail_mv: bool,
     pub sudo_password: String,
     /// sudo refuses without a tty (`Defaults requiretty`).
     pub sudo_requiretty: bool,
@@ -64,6 +72,9 @@ impl Default for ServerCfg {
             kbd_interactive_only: false,
             host_key_seed: 1,
             has_setsid: true,
+            has_nohup: true,
+            broken_launch: None,
+            fail_mv: false,
             sudo_password: "makerbase".into(),
             sudo_requiretty: false,
             truncate_uploads: false,
@@ -80,8 +91,9 @@ pub struct Records {
     pub pty_commands: Vec<String>,
     /// Lines sudo read from stdin.
     pub sudo_stdin: Vec<String>,
-    /// The detach tool (`setsid` / `nohup`) of each launch.
-    pub detach_tools: Vec<String>,
+    /// The detach tool (`setsid`, `nohup`, or `sh` for a bare background job) of each
+    /// launch, and whether its script ignores SIGHUP itself.
+    pub detach_tools: Vec<(String, bool)>,
     /// Commands started as detached jobs, and whether sudo started them.
     pub launched: Vec<(String, bool)>,
     /// Methods that authenticated a user: "password" or "keyboard-interactive".
@@ -94,6 +106,9 @@ pub struct ServerState {
     pub records: Mutex<Records>,
     pub canned: Mutex<HashMap<String, (String, String, u32)>>,
     pub jobs: Mutex<HashMap<String, Job>>,
+    /// Pids of jobs whose process is still running.
+    pub alive: Mutex<HashSet<u32>>,
+    next_pid: Mutex<u32>,
     sessions: Mutex<Vec<server::Handle>>,
 }
 
@@ -119,6 +134,8 @@ impl TestServer {
             records: Mutex::new(Records::default()),
             canned: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            alive: Mutex::new(HashSet::new()),
+            next_pid: Mutex::new(4242),
             sessions: Mutex::new(Vec::new()),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -305,7 +322,21 @@ async fn run_channel(mut channel: Channel<Msg>, state: Arc<ServerState>) {
         match channel.wait().await {
             Some(ChannelMsg::RequestPty { .. }) => pty = true,
             Some(ChannelMsg::Exec { command, .. }) => {
-                cmd = Some(String::from_utf8_lossy(&command).into_owned())
+                let c = String::from_utf8_lossy(&command).into_owned();
+                // A real `cat > dir/file` into a missing dir fails at once, without reading
+                // stdin, and the shell exits while the client may still be sending.
+                if let Some(dir) = upload_target_dir(&c) {
+                    if !local_path(&state, &dir).is_dir() {
+                        lock(&state.records).commands.push(c);
+                        let msg = format!("sh: can't create {dir}/...: nonexistent directory\n");
+                        let _ = channel.extended_data(1, msg.as_bytes()).await;
+                        let _ = channel.exit_status(1).await;
+                        let _ = channel.eof().await;
+                        let _ = channel.close().await;
+                        return;
+                    }
+                }
+                cmd = Some(c)
             }
             Some(ChannelMsg::Data { data }) => stdin.extend_from_slice(&data),
             Some(ChannelMsg::Eof) => break,
@@ -381,8 +412,24 @@ fn words(cmd: &str) -> Vec<String> {
     out
 }
 
-const JOB_PREFIX: &str = "(\n";
-const JOB_SUFFIX: &str = "\n)\necho HELIX-EXIT $?";
+const HUP_TRAP: &str = "trap '' HUP\n";
+const JOB_PREFIX: &str = "echo HELIX-STARTED $$\n(\n";
+const JOB_SUFFIX: &str = "\n)\nprintf '\\nHELIX-EXIT %s\\n' \"$?\"";
+
+/// The directory an upload command writes its `.part` into.
+fn upload_target_dir(cmd: &str) -> Option<String> {
+    let w = words(cmd);
+    if w.first().map(String::as_str) != Some("cat") || w.get(1).map(String::as_str) != Some(">") {
+        return None;
+    }
+    let part = w.get(2)?;
+    Some(
+        part.rsplit_once('/')
+            .map(|(d, _)| d)
+            .unwrap_or("")
+            .to_string(),
+    )
+}
 
 fn run_command(
     state: &Arc<ServerState>,
@@ -398,26 +445,37 @@ fn run_command(
     let w = words(cmd);
     let w: Vec<&str> = w.iter().map(String::as_str).collect();
     match w.as_slice() {
-        ["command", "-v", "setsid"] => {
-            if cfg.has_setsid {
-                (b"/usr/bin/setsid\n".to_vec(), String::new(), 0)
+        ["command", "-v", tool] if *tool == "setsid" || *tool == "nohup" => {
+            let present = if *tool == "setsid" {
+                cfg.has_setsid
+            } else {
+                cfg.has_nohup
+            };
+            if present {
+                (format!("/usr/bin/{tool}\n").into_bytes(), String::new(), 0)
             } else {
                 (Vec::new(), String::new(), 1)
             }
         }
+        ["kill", "-0", pid, "2>/dev/null", "||", "[", "-d", proc_dir, "]"]
+            if *proc_dir == format!("/proc/{pid}") =>
+        {
+            let alive = pid
+                .parse::<u32>()
+                .is_ok_and(|p| lock(&state.alive).contains(&p));
+            (Vec::new(), String::new(), if alive { 0 } else { 1 })
+        }
+        ["cat", ">", part, "&&", "mv", part2, dest, "||", "{", "rm", "-f", part3, ";", "false", ";", "}"]
+            if part == part2 && part == part3 =>
+        {
+            upload(state, &cfg, part, dest, stdin, true)
+        }
         ["cat", ">", part, "&&", "mv", part2, dest] if part == part2 => {
-            let mut bytes = stdin.to_vec();
-            if cfg.truncate_uploads {
-                bytes.pop();
-            }
-            let part_path = local_path(state, part);
-            if let Err(e) = std::fs::write(&part_path, &bytes) {
-                return (Vec::new(), format!("sh: can't create {part}: {e}\n"), 1);
-            }
-            match std::fs::rename(&part_path, local_path(state, dest)) {
-                Ok(()) => (Vec::new(), String::new(), 0),
-                Err(e) => (Vec::new(), format!("mv: {e}\n"), 1),
-            }
+            upload(state, &cfg, part, dest, stdin, false)
+        }
+        ["rm", "-f", path] => {
+            let _ = std::fs::remove_file(local_path(state, path));
+            (Vec::new(), String::new(), 0)
         }
         ["wc", "-c", "<", path] => match std::fs::metadata(local_path(state, path)) {
             Ok(m) => (format!("{}\n", m.len()).into_bytes(), String::new(), 0),
@@ -464,51 +522,125 @@ fn run_command(
             lock(&state.records).commands.push(inner.to_string());
             run_command(state, inner, b"", pty, true)
         }
-        [tool, "sh", "-c", script, ">", log, "2>&1", "<", "/dev/null", "&", "echo", "HELIX-PID", "$!"]
+        [tool, "sh", "-c", script, ">", log, "2>&1", "<", "/dev/null", "&"]
             if *tool == "setsid" || *tool == "nohup" =>
         {
-            if *tool == "setsid" && !cfg.has_setsid {
-                return (Vec::new(), "sh: setsid: not found\n".into(), 127);
-            }
-            let Some(job_cmd) = script
-                .strip_prefix(JOB_PREFIX)
-                .and_then(|s| s.strip_suffix(JOB_SUFFIX))
-            else {
-                return (Vec::new(), "unrecognised job script\n".into(), 2);
+            let present = if *tool == "setsid" {
+                cfg.has_setsid
+            } else {
+                cfg.has_nohup
             };
-            {
-                let mut r = lock(&state.records);
-                r.detach_tools.push(tool.to_string());
-                r.launched.push((job_cmd.to_string(), as_root));
+            if !present {
+                return (Vec::new(), format!("sh: {tool}: not found\n"), 127);
             }
-            let log_path = local_path(state, log);
-            if let Err(e) = std::fs::write(&log_path, b"") {
-                return (Vec::new(), format!("sh: can't create {log}: {e}\n"), 1);
-            }
-            let job = lock(&state.jobs).get(job_cmd).cloned().unwrap_or(Job {
-                steps: vec![JobStep::Write(format!("sh: {job_cmd}: not found\n"))],
-                exit: 127,
-            });
-            tokio::spawn(run_job(log_path, job));
-            (b"HELIX-PID 4242\n".to_vec(), String::new(), 0)
+            launch(state, &cfg, tool, script, log, as_root)
+        }
+        ["sh", "-c", script, ">", log, "2>&1", "<", "/dev/null", "&"] => {
+            launch(state, &cfg, "sh", script, log, as_root)
         }
         _ => (Vec::new(), format!("sh: {cmd}: not found\n"), 127),
     }
 }
 
-async fn run_job(log: PathBuf, job: Job) {
+/// `cat > part && mv part dest`, with `cleanup` the `|| { rm -f part; false; }` tail.
+fn upload(
+    state: &Arc<ServerState>,
+    cfg: &ServerCfg,
+    part: &str,
+    dest: &str,
+    stdin: &[u8],
+    cleanup: bool,
+) -> (Vec<u8>, String, u32) {
+    let mut bytes = stdin.to_vec();
+    if cfg.truncate_uploads {
+        bytes.pop();
+    }
+    let part_path = local_path(state, part);
+    if let Err(e) = std::fs::write(&part_path, &bytes) {
+        return (Vec::new(), format!("sh: can't create {part}: {e}\n"), 1);
+    }
+    let moved = if cfg.fail_mv {
+        Err("mv: cannot move".to_string())
+    } else {
+        std::fs::rename(&part_path, local_path(state, dest)).map_err(|e| format!("mv: {e}"))
+    };
+    match moved {
+        Ok(()) => (Vec::new(), String::new(), 0),
+        Err(e) => {
+            if cleanup {
+                let _ = std::fs::remove_file(&part_path);
+            }
+            (Vec::new(), format!("{e}\n"), 1)
+        }
+    }
+}
+
+fn launch(
+    state: &Arc<ServerState>,
+    cfg: &ServerCfg,
+    tool: &str,
+    script: &str,
+    log: &str,
+    as_root: bool,
+) -> (Vec<u8>, String, u32) {
+    let (hup_trap, rest) = match script.strip_prefix(HUP_TRAP) {
+        Some(rest) => (true, rest),
+        None => (false, script),
+    };
+    let Some(job_cmd) = rest
+        .strip_prefix(JOB_PREFIX)
+        .and_then(|s| s.strip_suffix(JOB_SUFFIX))
+    else {
+        return (Vec::new(), "unrecognised job script\n".into(), 2);
+    };
+    {
+        let mut r = lock(&state.records);
+        r.detach_tools.push((tool.to_string(), hup_trap));
+        r.launched.push((job_cmd.to_string(), as_root));
+    }
+    let log_path = local_path(state, log);
+    if let Some(left) = &cfg.broken_launch {
+        if !left.is_empty() {
+            let _ = std::fs::write(&log_path, left);
+        }
+        return (Vec::new(), String::new(), 0);
+    }
+    if let Err(e) = std::fs::write(&log_path, b"") {
+        return (Vec::new(), format!("sh: can't create {log}: {e}\n"), 1);
+    }
+    let job = lock(&state.jobs).get(job_cmd).cloned().unwrap_or(Job {
+        steps: vec![JobStep::Write(format!("sh: {job_cmd}: not found\n"))],
+        exit: 127,
+    });
+    let pid = {
+        let mut next = lock(&state.next_pid);
+        *next += 1;
+        *next - 1
+    };
+    lock(&state.alive).insert(pid);
+    tokio::spawn(run_job(state.clone(), log_path, job, pid));
+    (Vec::new(), String::new(), 0)
+}
+
+async fn run_job(state: Arc<ServerState>, log: PathBuf, job: Job, pid: u32) {
     use std::io::Write;
     let append = |b: &[u8]| {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log) {
             let _ = f.write_all(b);
         }
     };
+    append(format!("HELIX-STARTED {pid}\n").as_bytes());
     for step in job.steps {
         match step {
             JobStep::Write(s) => append(s.as_bytes()),
             JobStep::Bytes(b) => append(&b),
             JobStep::Wait(n) => n.notified().await,
+            JobStep::Die => {
+                lock(&state.alive).remove(&pid);
+                return;
+            }
         }
     }
-    append(format!("HELIX-EXIT {}\n", job.exit).as_bytes());
+    append(format!("\nHELIX-EXIT {}\n", job.exit).as_bytes());
+    lock(&state.alive).remove(&pid);
 }

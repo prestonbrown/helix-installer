@@ -12,7 +12,7 @@ use crate::fs_atomic::write_atomic;
 use crate::manifest::Login;
 use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
-use russh::{cipher, kex, mac, Channel, ChannelMsg, MethodKind, Preferred};
+use russh::{cipher, kex, mac, Channel, ChannelMsg, ChannelReadHalf, MethodKind, Preferred};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,7 +27,10 @@ const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
 /// login is treated as failed instead of looping forever.
 const MAX_KBD_ROUNDS: usize = 8;
 const EXIT_MARKER: &str = "HELIX-EXIT ";
-const PID_MARKER: &str = "HELIX-PID ";
+const STARTED_MARKER: &str = "HELIX-STARTED ";
+/// How long a launched job has to write its `HELIX-STARTED` line, and how often to look.
+const START_TIMEOUT: Duration = Duration::from_secs(5);
+const START_POLL: Duration = Duration::from_millis(100);
 
 /// Modern algorithms first, then the older ones a 2015-2019 dropbear or OpenSSH on a
 /// printer may be limited to (sha1 Diffie-Hellman, NIST ECDH, CBC ciphers, hmac-sha1).
@@ -170,6 +173,7 @@ pub struct SshRussh {
     known: Arc<KnownHosts>,
     config: Arc<client::Config>,
     connect_timeout: Duration,
+    start_timeout: Duration,
 }
 
 impl SshRussh {
@@ -195,7 +199,14 @@ impl SshRussh {
             }),
             config: Arc::new(config),
             connect_timeout: CONNECT_TIMEOUT,
+            start_timeout: START_TIMEOUT,
         }
+    }
+
+    /// How long `spawn_detached` waits for a job to confirm it started.
+    pub fn with_start_timeout(mut self, timeout: Duration) -> Self {
+        self.start_timeout = timeout;
+        self
     }
 
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
@@ -312,7 +323,10 @@ impl Ssh for SshRussh {
         tokio::time::timeout(self.connect_timeout, authenticate(&mut handle, login))
             .await
             .map_err(|_| TransportError::Timeout)??;
-        Ok(Box::new(RusshSession { handle }))
+        Ok(Box::new(RusshSession {
+            handle,
+            start_timeout: self.start_timeout,
+        }))
     }
 }
 
@@ -334,7 +348,7 @@ impl RawOutput {
 
 /// Reads a channel to its end. A channel that closes without an exit status means the
 /// connection died under the command.
-async fn collect(channel: &mut Channel<client::Msg>) -> Result<RawOutput> {
+async fn collect(channel: &mut ChannelReadHalf) -> Result<RawOutput> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit = None;
@@ -365,6 +379,35 @@ async fn collect(channel: &mut Channel<client::Msg>) -> Result<RawOutput> {
     })
 }
 
+/// Sends `stdin` (then EOF) while reading the command's output, so a command that fails
+/// before reading its input ends the exchange instead of leaving the sender waiting on a
+/// window that will never open again.
+async fn exchange<R>(
+    channel: Channel<client::Msg>,
+    stdin: Option<R>,
+) -> (Result<RawOutput>, Option<Result<()>>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let (mut read, write) = channel.split();
+    let send = async {
+        if let Some(input) = stdin {
+            write.data(input).await.map_err(russh_err)?;
+        }
+        write.eof().await.map_err(russh_err)
+    };
+    let recv = collect(&mut read);
+    tokio::pin!(send);
+    tokio::pin!(recv);
+    let mut sent = None;
+    loop {
+        tokio::select! {
+            r = &mut send, if sent.is_none() => sent = Some(r),
+            out = &mut recv => return (out, sent),
+        }
+    }
+}
+
 static JOB_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Unique per launch, so two runs never share a log.
@@ -377,22 +420,58 @@ fn job_log_path() -> String {
     format!("/tmp/helix-installer-{nanos:x}-{seq}.log")
 }
 
-/// The shell line that starts `cmd` in its own session with its output in `log`, then
-/// prints the child's pid. `cmd` runs in a subshell on its own lines, so an `exit` inside
-/// it or a trailing `# comment` still lets the exit marker line run.
-fn launcher(cmd: &str, log: &str, detach: &str) -> String {
-    let script = format!("(\n{cmd}\n)\necho {EXIT_MARKER}$?");
+/// How a job is cut loose from the SSH session, best first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Detach {
+    /// New session: no terminal or session teardown can signal it.
+    Setsid,
+    /// Ignores SIGHUP from the session ending.
+    Nohup,
+    /// A plain background job whose script ignores SIGHUP itself.
+    Background,
+}
+
+/// The shell line that starts `cmd` detached with its output in `log`. The script's first
+/// act is the `HELIX-STARTED <pid>` line that confirms the launch. `cmd` runs in a
+/// subshell on its own lines, so an `exit` inside it or a trailing `# comment` still lets
+/// the exit marker run; the marker starts with a newline so it begins a line even when
+/// `cmd`'s output does not end with one.
+fn launcher(cmd: &str, log: &str, detach: Detach) -> String {
+    let trap = if detach == Detach::Background {
+        "trap '' HUP\n"
+    } else {
+        ""
+    };
+    let script = format!(
+        "{trap}echo {STARTED_MARKER}$$\n(\n{cmd}\n)\nprintf '\\n{EXIT_MARKER}%s\\n' \"$?\""
+    );
+    let tool = match detach {
+        Detach::Setsid => "setsid ",
+        Detach::Nohup => "nohup ",
+        Detach::Background => "",
+    };
     format!(
-        "{detach} sh -c {} > {} 2>&1 < /dev/null & echo {PID_MARKER}$!",
+        "{tool}sh -c {} > {} 2>&1 < /dev/null &",
         sh_quote(&script),
         sh_quote(log)
     )
 }
 
-fn launched_pid(stdout: &[u8]) -> Option<u32> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .find_map(|l| l.trim().strip_prefix(PID_MARKER)?.trim().parse().ok())
+/// The pid on a complete `HELIX-STARTED <pid>` line.
+fn started_pid(line: &[u8]) -> Option<u32> {
+    std::str::from_utf8(line)
+        .ok()?
+        .trim_end_matches('\r')
+        .strip_prefix(STARTED_MARKER)?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// True when `partial` (an unfinished line) may yet turn out to be `marker`'s line.
+fn could_become(partial: &[u8], marker: &str) -> bool {
+    !partial.is_empty()
+        && (marker.as_bytes().starts_with(partial) || partial.starts_with(marker.as_bytes()))
 }
 
 fn sudo_wants_tty(text: &str) -> bool {
@@ -406,43 +485,59 @@ fn sudo_rejected_password(text: &str) -> bool {
 }
 
 /// Splits new log bytes into the text to show, how many bytes were consumed, and the exit
-/// status once the marker line has arrived. The marker line is consumed but not shown. A
-/// trailing fragment that could still grow into the marker, or a UTF-8 sequence cut off by
-/// the read, is left for the next read.
-fn parse_job_log(bytes: &[u8]) -> (String, u64, Option<i32>) {
+/// status once the marker line has arrived.
+///
+/// At the start of the log the `HELIX-STARTED` line is consumed unseen. The exit marker
+/// line is consumed with the one newline printed just before it. Left for the next read,
+/// because more bytes decide what they are: a trailing newline (it may be that marker's
+/// newline), an unfinished line that could become a marker, and a UTF-8 sequence cut off
+/// by the read.
+fn parse_job_log(bytes: &[u8], at_start: bool) -> (String, u64, Option<i32>) {
+    let mut pos = 0;
+    if at_start {
+        match bytes.iter().position(|&b| b == b'\n') {
+            Some(nl) if started_pid(&bytes[..nl]).is_some() => pos = nl + 1,
+            None if could_become(bytes, STARTED_MARKER) => return (String::new(), 0, None),
+            _ => {}
+        }
+    }
+    let body = &bytes[pos..];
     let mut line_start = 0;
-    while let Some(nl) = bytes[line_start..].iter().position(|&b| b == b'\n') {
+    while let Some(nl) = body[line_start..].iter().position(|&b| b == b'\n') {
         let line_end = line_start + nl;
-        let line = String::from_utf8_lossy(&bytes[line_start..line_end]);
+        let line = String::from_utf8_lossy(&body[line_start..line_end]);
         if let Some(code) = line
             .trim_end_matches('\r')
             .strip_prefix(EXIT_MARKER)
             .and_then(|c| c.trim().parse::<i32>().ok())
         {
-            let text = String::from_utf8_lossy(&bytes[..line_start]).into_owned();
-            return (text, (line_end + 1) as u64, Some(code));
+            let before = &body[..line_start];
+            let before = before.strip_suffix(b"\n").unwrap_or(before);
+            let text = String::from_utf8_lossy(before).into_owned();
+            return (text, (pos + line_end + 1) as u64, Some(code));
         }
         line_start = line_end + 1;
     }
-    let tail = &bytes[line_start..];
-    let mut keep = if !tail.is_empty()
-        && (EXIT_MARKER.as_bytes().starts_with(tail) || tail.starts_with(EXIT_MARKER.as_bytes()))
-    {
+    let mut keep = if could_become(&body[line_start..], EXIT_MARKER) {
         line_start
     } else {
-        bytes.len()
+        body.len()
     };
-    if let Err(e) = std::str::from_utf8(&bytes[..keep]) {
+    if keep > 0 && body[keep - 1] == b'\n' {
+        keep -= 1;
+    }
+    if let Err(e) = std::str::from_utf8(&body[..keep]) {
         if e.error_len().is_none() {
             keep = e.valid_up_to();
         }
     }
-    let text = String::from_utf8_lossy(&bytes[..keep]).into_owned();
-    (text, keep as u64, None)
+    let text = String::from_utf8_lossy(&body[..keep]).into_owned();
+    (text, (pos + keep) as u64, None)
 }
 
 struct RusshSession {
     handle: client::Handle<HostKeyCheck>,
+    start_timeout: Duration,
 }
 
 impl RusshSession {
@@ -464,7 +559,7 @@ impl RusshSession {
         stdin: Option<&[u8]>,
         pty: bool,
     ) -> Result<RawOutput> {
-        let mut channel = self
+        let channel = self
             .handle
             .channel_open_session()
             .await
@@ -476,11 +571,31 @@ impl RusshSession {
                 .map_err(russh_err)?;
         }
         channel.exec(true, cmd).await.map_err(russh_err)?;
-        if let Some(bytes) = stdin {
-            channel.data(bytes).await.map_err(russh_err)?;
+        let (out, sent) = exchange(channel, stdin).await;
+        let out = out?;
+        if let Some(Err(e)) = sent {
+            if out.exit == 0 {
+                return Err(e);
+            }
         }
-        channel.eof().await.map_err(russh_err)?;
-        collect(&mut channel).await
+        Ok(out)
+    }
+
+    async fn has_tool(&mut self, tool: &str) -> Result<bool> {
+        let out = self
+            .run(&format!("command -v {tool}"), None, SHORT_TIMEOUT, false)
+            .await?;
+        Ok(out.exit == 0 && !out.stdout.trim_ascii().is_empty())
+    }
+
+    async fn detach_tool(&mut self) -> Result<Detach> {
+        if self.has_tool("setsid").await? {
+            Ok(Detach::Setsid)
+        } else if self.has_tool("nohup").await? {
+            Ok(Detach::Nohup)
+        } else {
+            Ok(Detach::Background)
+        }
     }
 
     async fn launch_with_sudo(&mut self, launcher: &str, password: &str) -> Result<RawOutput> {
@@ -489,15 +604,83 @@ impl RusshSession {
         let first = self
             .run(&line, Some(stdin.as_bytes()), SHORT_TIMEOUT, false)
             .await?;
-        if launched_pid(&first.stdout).is_none() {
-            let said = String::from_utf8_lossy(&first.stderr);
-            if sudo_wants_tty(&said) || sudo_wants_tty(&String::from_utf8_lossy(&first.stdout)) {
+        if first.exit != 0 {
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&first.stdout),
+                String::from_utf8_lossy(&first.stderr)
+            );
+            if sudo_wants_tty(&said) {
                 return self
                     .run(&line, Some(stdin.as_bytes()), SHORT_TIMEOUT, true)
                     .await;
             }
         }
         Ok(first)
+    }
+
+    async fn read_log(&mut self, log: &str, from_offset: u64) -> Result<RawOutput> {
+        let cmd = format!(
+            "tail -c +{} {}",
+            from_offset.saturating_add(1),
+            sh_quote(log)
+        );
+        self.run(&cmd, None, SHORT_TIMEOUT, false).await
+    }
+
+    /// Waits for the job's `HELIX-STARTED` line and returns its pid.
+    async fn wait_started(&mut self, log: &str) -> Result<u32> {
+        let deadline = tokio::time::Instant::now() + self.start_timeout;
+        let mut first_line = None;
+        loop {
+            let out = self.read_log(log, 0).await?;
+            if out.exit == 0 {
+                let line = out.stdout.split(|&b| b == b'\n').next().unwrap_or(&[]);
+                let complete = out.stdout.contains(&b'\n');
+                if complete {
+                    if let Some(pid) = started_pid(line) {
+                        return Ok(pid);
+                    }
+                }
+                let text = String::from_utf8_lossy(line).trim().to_string();
+                if !text.is_empty() {
+                    first_line = Some(text);
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(START_POLL).await;
+        }
+        Err(TransportError::Protocol(format!(
+            "job did not start: {}",
+            first_line.as_deref().unwrap_or("no log")
+        )))
+    }
+
+    async fn is_alive(&mut self, pid: u32) -> Result<bool> {
+        // `kill -0` alone reads a root job as dead to a non-root user (EPERM), so a
+        // /proc entry also counts.
+        let cmd = format!("kill -0 {pid} 2>/dev/null || [ -d /proc/{pid} ]");
+        Ok(self.run(&cmd, None, SHORT_TIMEOUT, false).await?.exit == 0)
+    }
+
+    async fn read_chunk(&mut self, job: &RemoteJob, from_offset: u64) -> Result<JobChunk> {
+        let out = self.read_log(&job.log_path, from_offset).await?;
+        if out.exit != 0 {
+            return Err(TransportError::Protocol(format!(
+                "cannot read {}: {}",
+                job.log_path,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let (text, consumed, exit) = parse_job_log(&out.stdout, from_offset == 0);
+        Ok(JobChunk {
+            text,
+            next_offset: from_offset + consumed,
+            exit,
+            alive: None,
+        })
     }
 }
 
@@ -517,27 +700,40 @@ impl SshSession for RusshSession {
         let file = tokio::fs::File::open(local).await.map_err(io_err)?;
         let part = format!("{remote}.part");
         let cmd = format!(
-            "cat > {} && mv {} {}",
-            sh_quote(&part),
-            sh_quote(&part),
-            sh_quote(remote)
+            "cat > {p} && mv {p} {r} || {{ rm -f {p} ; false ; }}",
+            p = sh_quote(&part),
+            r = sh_quote(remote)
         );
-        let mut channel = self
+        let channel = self
             .handle
             .channel_open_session()
             .await
             .map_err(russh_err)?;
         channel.exec(true, cmd).await.map_err(russh_err)?;
-        let sent = channel.data(file).await;
-        let _ = channel.eof().await;
-        let out = collect(&mut channel).await?;
-        if out.exit != 0 {
-            return Err(TransportError::Protocol(format!(
+        let (out, sent) = exchange(channel, Some(file)).await;
+        let failure = match out {
+            Ok(out) if out.exit != 0 => Some(TransportError::Protocol(format!(
                 "upload to {remote} failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
-            )));
+            ))),
+            Ok(_) => match sent {
+                Some(Err(e)) => Some(e),
+                _ => None,
+            },
+            Err(e) => Some(e),
+        };
+        if let Some(e) = failure {
+            // The command's own cleanup cannot run if the transfer broke off mid-stream.
+            let _ = self
+                .run(
+                    &format!("rm -f {}", sh_quote(&part)),
+                    None,
+                    SHORT_TIMEOUT,
+                    false,
+                )
+                .await;
+            return Err(e);
         }
-        sent.map_err(russh_err)?;
 
         let size = self
             .run(
@@ -565,70 +761,56 @@ impl SshSession for RusshSession {
         cmd: &str,
         sudo_password: Option<&str>,
     ) -> Result<RemoteJob> {
-        let probe = self
-            .run("command -v setsid", None, SHORT_TIMEOUT, false)
-            .await?;
-        let detach = if probe.exit == 0 && !probe.stdout.trim_ascii().is_empty() {
-            "setsid"
-        } else {
-            "nohup"
-        };
+        let detach = self.detach_tool().await?;
         let log = job_log_path();
         let line = launcher(cmd, &log, detach);
         let out = match sudo_password {
             None => self.run(&line, None, SHORT_TIMEOUT, false).await?,
             Some(pw) => self.launch_with_sudo(&line, pw).await?,
         };
-        if launched_pid(&out.stdout).is_some() {
-            return Ok(RemoteJob { log_path: log });
-        }
-        let mut said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        // A PTY echoes typed input until sudo turns echo off, so the password can come
-        // back in the output; it must not reach an error message.
-        if let Some(pw) = sudo_password.filter(|p| !p.is_empty()) {
-            said = said.replace(pw, "<redacted>");
-            if sudo_rejected_password(&said) {
-                return Err(TransportError::Auth);
+        if out.exit != 0 {
+            let mut said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // A PTY echoes typed input until sudo turns echo off, so the password can come
+            // back in the output; it must not reach an error message.
+            if let Some(pw) = sudo_password.filter(|p| !p.is_empty()) {
+                said = said.replace(pw, "<redacted>");
+                if sudo_rejected_password(&said) {
+                    return Err(TransportError::Auth);
+                }
             }
+            return Err(TransportError::Protocol(format!(
+                "the job did not start (exit {}): {}",
+                out.exit,
+                said.trim()
+            )));
         }
-        Err(TransportError::Protocol(format!(
-            "the job did not start (exit {}): {}",
-            out.exit,
-            said.trim()
-        )))
+        let pid = self.wait_started(&log).await?;
+        Ok(RemoteJob {
+            log_path: log,
+            pid: Some(pid),
+        })
     }
 
     async fn read_job(&mut self, job: &RemoteJob, from_offset: u64) -> Result<JobChunk> {
-        let cmd = format!(
-            "tail -c +{} {}",
-            from_offset.saturating_add(1),
-            sh_quote(&job.log_path)
-        );
-        let out = self.run(&cmd, None, SHORT_TIMEOUT, false).await?;
-        if out.exit != 0 {
-            // The shell creates the log a moment after the launch returns.
-            if from_offset == 0 {
-                return Ok(JobChunk {
-                    text: String::new(),
-                    next_offset: 0,
-                    exit: None,
-                });
-            }
-            return Err(TransportError::Protocol(format!(
-                "cannot read {}: {}",
-                job.log_path,
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
+        let chunk = self.read_chunk(job, from_offset).await?;
+        let Some(pid) = job.pid.filter(|_| chunk.exit.is_none()) else {
+            return Ok(chunk);
+        };
+        if self.is_alive(pid).await? {
+            return Ok(JobChunk {
+                alive: Some(true),
+                ..chunk
+            });
         }
-        let (text, consumed, exit) = parse_job_log(&out.stdout);
+        // The job may have written its marker and exited between the two reads.
+        let chunk = self.read_chunk(job, from_offset).await?;
         Ok(JobChunk {
-            text,
-            next_offset: from_offset + consumed,
-            exit,
+            alive: Some(false),
+            ..chunk
         })
     }
 }
