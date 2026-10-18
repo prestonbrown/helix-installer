@@ -256,6 +256,33 @@ pub enum PlatformSel {
 }
 
 /// One recipe step. `commits` marks the point of no return.
+/// Which HelixScreen release list a `helix_install` step reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    #[default]
+    Stable,
+    Beta,
+}
+
+impl Channel {
+    /// The channel named `value` (`stable` or `beta`, lowercase); anything else is `None`.
+    pub fn parse(value: &str) -> Option<Channel> {
+        match value {
+            "stable" => Some(Channel::Stable),
+            "beta" => Some(Channel::Beta),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Beta => "beta",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Step {
@@ -349,6 +376,8 @@ pub enum Step {
     },
     HelixInstall {
         platform: PlatformSel,
+        #[serde(default)]
+        channel: Channel,
         #[serde(default)]
         update: bool,
         #[serde(default)]

@@ -3,6 +3,7 @@
 pub mod commands;
 
 use commands::{ipc, AppConfig, AppCore, LanDiscovery};
+use helix_installer_core::manifest::Channel;
 use helix_installer_core::transport::drives_sys::SysDrives;
 use helix_installer_core::transport::fetch_http::HttpFetch;
 use helix_installer_core::transport::moonraker_http::HttpMoonraker;
@@ -21,6 +22,19 @@ const MANIFEST_PUBKEY: &str = "";
 /// `<url or path>.minisig`) and the public key it is signed with (key text or a `.pub` path).
 const MANIFEST_ENV: &str = "HELIX_INSTALLER_MANIFEST";
 const PUBKEY_ENV: &str = "HELIX_INSTALLER_PUBKEY";
+/// `stable` or `beta`: the HelixScreen release channel every install reads, over the recipes'.
+const CHANNEL_ENV: &str = "HELIX_INSTALLER_CHANNEL";
+
+/// The channel `value` names; an unset or empty variable is no override, an invalid one is
+/// reported and ignored.
+fn channel_override(value: Option<String>) -> Option<Channel> {
+    let value = value.filter(|v| !v.is_empty())?;
+    let channel = Channel::parse(&value);
+    if channel.is_none() {
+        eprintln!("ignoring {CHANNEL_ENV}={value:?}: expected \"stable\" or \"beta\"");
+    }
+    channel
+}
 
 fn pubkey() -> String {
     match std::env::var(PUBKEY_ENV) {
@@ -48,6 +62,7 @@ fn app_core(data_dir: PathBuf) -> AppCore {
         discovery: Arc::new(LanDiscovery),
         pubkey: pubkey(),
         manifest_location: std::env::var(MANIFEST_ENV).ok().filter(|v| !v.is_empty()),
+        channel_override: channel_override(std::env::var(CHANNEL_ENV).ok()),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
     })
 }
@@ -74,4 +89,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running HelixScreen Installer");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_channel_variable_overrides_only_when_valid() {
+        assert_eq!(channel_override(Some("beta".into())), Some(Channel::Beta));
+        assert_eq!(
+            channel_override(Some("stable".into())),
+            Some(Channel::Stable)
+        );
+        assert_eq!(channel_override(Some("nightly".into())), None);
+        assert_eq!(channel_override(Some(String::new())), None);
+        assert_eq!(channel_override(None), None);
+    }
 }

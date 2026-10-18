@@ -9,7 +9,7 @@ use super::job::{self, Followed};
 use super::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use super::{StepCtx, StepOutcome};
 use crate::identify::GENERIC_REFUSE_DOC;
-use crate::manifest::{Artifact, PlatformSel};
+use crate::manifest::{Artifact, Channel, PlatformSel};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
 use crate::transport::{Env, RemoteJob};
@@ -18,7 +18,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const RELEASES_MANIFEST_URL: &str = "https://releases.helixscreen.org/stable/manifest.json";
+const RELEASES_BASE: &str = "https://releases.helixscreen.org";
+
+/// The release list of `channel`: `assets.<platform>` = `{url, sha256, size}` plus the `tag`.
+pub fn releases_manifest_url(channel: Channel) -> String {
+    format!("{RELEASES_BASE}/{}/manifest.json", channel.as_str())
+}
+
 /// `install.sh` is published only as a GitHub release asset; `/<tag>` follows.
 pub const GITHUB_RELEASE_API: &str =
     "https://api.github.com/repos/prestonbrown/helixscreen/releases/tags";
@@ -58,6 +64,7 @@ struct GithubAsset {
 pub async fn run(
     ctx: &mut StepCtx<'_>,
     platform: &PlatformSel,
+    channel: Channel,
     update: bool,
     dir: Option<&str>,
     input: Option<Input>,
@@ -78,7 +85,9 @@ pub async fn run(
             None,
         );
     }
-    match launch(ctx, &platform, update, dir.unwrap_or(DEFAULT_DIR)).await {
+    // The run-wide override (testing, beta testers) wins over the recipe.
+    let channel = ctx.channel_override.unwrap_or(channel);
+    match launch(ctx, &platform, channel, update, dir.unwrap_or(DEFAULT_DIR)).await {
         Ok(started) => {
             *ctx.job = Some(started);
             progress(TITLE.into(), None)
@@ -127,6 +136,7 @@ fn safe_name(name: &str) -> bool {
 async fn launch(
     ctx: &mut StepCtx<'_>,
     platform: &str,
+    channel: Channel,
     update: bool,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
@@ -134,8 +144,8 @@ async fn launch(
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
     };
-    let release: ReleaseManifest =
-        fetch_json(ctx.env, RELEASES_MANIFEST_URL, "the release list").await?;
+    let list_url = releases_manifest_url(channel);
+    let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
     let Some(asset) = release.assets.get(platform) else {
         return Err(StepOutcome::failed(format!(
             "HelixScreen {} has no build for platform {platform}",

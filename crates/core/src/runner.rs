@@ -6,7 +6,7 @@
 
 use crate::facts::Facts;
 use crate::identify::GENERIC_REFUSE_DOC;
-use crate::manifest::{verify_and_parse, Choice, Login, Manifest, Step};
+use crate::manifest::{verify_and_parse, Channel, Choice, Login, Manifest, Step};
 use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
 use crate::transport::{Drive, Env};
@@ -93,6 +93,7 @@ pub struct Runner {
     handlers: HashMap<String, Arc<dyn StepHandler>>,
     session: Session,
     cache_dir: Option<PathBuf>,
+    channel_override: Option<Channel>,
     autosave: Option<PathBuf>,
     /// Times the current step has run since it became current.
     calls: u32,
@@ -109,6 +110,7 @@ impl Runner {
             handlers: HashMap::new(),
             session: Session::default(),
             cache_dir: None,
+            channel_override: None,
             autosave: None,
             calls: 0,
             manifest_error: None,
@@ -165,6 +167,12 @@ impl Runner {
     /// Where `download` keeps verified artifacts.
     pub fn with_cache_dir(mut self, dir: PathBuf) -> Runner {
         self.cache_dir = Some(dir);
+        self
+    }
+
+    /// Makes every `helix_install` step read `channel`'s release list, whatever its recipe says.
+    pub fn with_channel_override(mut self, channel: Channel) -> Runner {
+        self.channel_override = Some(channel);
         self
     }
 
@@ -402,6 +410,7 @@ impl Runner {
             facts: &mut self.state.facts,
             job: &mut self.state.job,
             cache_dir: self.cache_dir.as_deref(),
+            channel_override: self.channel_override,
             calls: self.calls,
             committed: self.state.committed,
             identity: self.state.identity.as_ref(),

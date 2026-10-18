@@ -17,7 +17,7 @@ pub mod wait_for;
 pub mod write_stick;
 
 use crate::facts::Facts;
-use crate::manifest::{Login, Manifest, Step};
+use crate::manifest::{Channel, Login, Manifest, Step};
 use crate::run_state::{LogEntry, IDENTITY_KEYS};
 use crate::runner::{unix_secs, Input, Prompt};
 use crate::transport::{Env, Host, RemoteJob, SshSession, TransportError};
@@ -121,6 +121,8 @@ pub struct StepCtx<'a> {
     /// A detached job on the printer, saved with the run so a reopened app can follow it.
     pub job: &'a mut Option<RemoteJob>,
     pub cache_dir: Option<&'a Path>,
+    /// Replaces the release channel of every `helix_install` step in the run.
+    pub channel_override: Option<Channel>,
     /// Times this step has already run since it became current; 0 on its first run and again
     /// after a failure or a resume.
     pub calls: u32,
@@ -361,10 +363,11 @@ pub(crate) async fn run_builtin(
         } => ssh_run::run(ctx, command, *timeout_s, input).await,
         Step::HelixInstall {
             platform,
+            channel,
             update,
             dir,
             ..
-        } => helix_install::run(ctx, platform, *update, dir.as_deref(), input).await,
+        } => helix_install::run(ctx, platform, *channel, *update, dir.as_deref(), input).await,
         Step::WriteStick {
             artifacts, rename, ..
         } => write_stick::run(ctx, artifacts, rename, input).await,

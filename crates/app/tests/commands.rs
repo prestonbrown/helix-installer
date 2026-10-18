@@ -177,6 +177,7 @@ fn core(f: &Fakes, data: &Path, manifest: Option<String>) -> AppCore {
         discovery: Arc::new(Fixed(found())),
         pubkey: pubkey(),
         manifest_location: manifest,
+        channel_override: None,
         app_version: "0.1.0".into(),
     })
 }

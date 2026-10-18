@@ -3,11 +3,11 @@
 use async_trait::async_trait;
 use helix_installer_core::bundle::support_bundle;
 use helix_installer_core::facts::Facts;
-use helix_installer_core::manifest::{Login, Manifest, Step};
+use helix_installer_core::manifest::{Channel, Login, Manifest, Step};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
-    GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE, RELEASES_MANIFEST_URL,
+    releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE,
 };
 use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
@@ -165,7 +165,12 @@ impl Fakes {
             "published_at": "2026-10-01T00:00:00Z",
             "assets": assets,
         });
-        fetch.add(RELEASES_MANIFEST_URL, release.to_string().into_bytes());
+        for channel in [Channel::Stable, Channel::Beta] {
+            fetch.add(
+                &releases_manifest_url(channel),
+                release.to_string().into_bytes(),
+            );
+        }
         let gh = json!({
             "tag_name": TAG,
             "assets": [
@@ -807,5 +812,110 @@ async fn a_recipe_dir_with_a_space_and_a_quote_is_shell_quoted() {
     assert_eq!(
         spawned(&f)[0].0,
         r"sh '/data/my dir'\''s/install.sh' --local '/data/my dir'\''s/helixscreen-pi-v1.0.5.tar.gz' --progress"
+    );
+}
+
+// ---------------------------------------------------------------- release channel
+
+fn channel_step(channel: Option<&str>) -> Value {
+    let mut step = json!({ "type": "helix_install", "platform": "pi" });
+    if let Some(c) = channel {
+        step["channel"] = json!(c);
+    }
+    json!([step])
+}
+
+fn release_list_requests(f: &Fakes) -> Vec<String> {
+    f.fetch
+        .requests()
+        .into_iter()
+        .filter(|u| u.ends_with("/manifest.json"))
+        .collect()
+}
+
+async fn install_with(f: &Fakes, mut r: Runner) {
+    f.ssh.script_job(vec![
+        (pl(&["platform", "pi"]).as_str(), None),
+        (pl(&["result", "ok"]).as_str(), None),
+        ("", Some(0)),
+    ]);
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+}
+
+#[test]
+fn the_channel_defaults_to_stable_and_names_its_manifest() {
+    let step: Step = serde_json::from_value(channel_step(None)[0].clone()).unwrap();
+    assert!(matches!(
+        step,
+        Step::HelixInstall {
+            channel: Channel::Stable,
+            ..
+        }
+    ));
+    assert_eq!(
+        releases_manifest_url(Channel::Stable),
+        "https://releases.helixscreen.org/stable/manifest.json"
+    );
+    assert_eq!(
+        releases_manifest_url(Channel::Beta),
+        "https://releases.helixscreen.org/beta/manifest.json"
+    );
+}
+
+#[test]
+fn an_unknown_channel_fails_manifest_parsing() {
+    let bad = serde_json::from_value::<Step>(json!({
+        "type": "helix_install", "platform": "pi", "channel": "nightly"
+    }));
+    assert!(bad.is_err());
+    assert_eq!(Channel::parse("beta"), Some(Channel::Beta));
+    assert_eq!(Channel::parse("stable"), Some(Channel::Stable));
+    assert_eq!(Channel::parse("Beta"), None);
+    assert_eq!(Channel::parse(""), None);
+}
+
+#[tokio::test]
+async fn a_recipe_without_a_channel_reads_the_stable_list() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f.runner("root", channel_step(None), json!({}));
+    install_with(&f, r).await;
+    assert_eq!(
+        release_list_requests(&f),
+        vec![releases_manifest_url(Channel::Stable)]
+    );
+}
+
+#[tokio::test]
+async fn a_beta_recipe_reads_the_beta_list() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f.runner("root", channel_step(Some("beta")), json!({}));
+    install_with(&f, r).await;
+    assert_eq!(
+        release_list_requests(&f),
+        vec![releases_manifest_url(Channel::Beta)]
+    );
+}
+
+#[tokio::test]
+async fn the_override_wins_over_the_recipes_channel() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f
+        .runner("root", channel_step(None), json!({}))
+        .with_channel_override(Channel::Beta);
+    install_with(&f, r).await;
+    assert_eq!(
+        release_list_requests(&f),
+        vec![releases_manifest_url(Channel::Beta)]
+    );
+
+    let f = Fakes::standard(&["pi"]);
+    let r = f
+        .runner("root", channel_step(Some("beta")), json!({}))
+        .with_channel_override(Channel::Stable);
+    install_with(&f, r).await;
+    assert_eq!(
+        release_list_requests(&f),
+        vec![releases_manifest_url(Channel::Stable)]
     );
 }

@@ -21,7 +21,7 @@ use helix_installer_core::discovery::{self, Candidate};
 use helix_installer_core::facts::Facts;
 use helix_installer_core::identify::{identify, identify_as, start_state, Identified, StartState};
 use helix_installer_core::manifest::{
-    verify_and_parse, Manifest, ManifestCache, SignedManifest, Verified,
+    verify_and_parse, Channel, Manifest, ManifestCache, SignedManifest, Verified,
 };
 use helix_installer_core::record::record;
 use helix_installer_core::run_state::{RunState, RunStatus};
@@ -105,6 +105,8 @@ pub struct AppConfig {
     /// Where to fetch the signed printer list: an `http(s)://` URL or a file path, with its
     /// signature beside it as `<location>.minisig`. `None` uses only the cached copy.
     pub manifest_location: Option<String>,
+    /// Replaces the release channel of every `helix_install` step; `None` keeps the recipes'.
+    pub channel_override: Option<Channel>,
     pub app_version: String,
 }
 
@@ -529,11 +531,19 @@ impl AppCore {
         )
         .map_err(storage)?
         .with_cache_dir(self.cache_dir());
+        let runner = self.with_channel(runner);
         self.runs
             .lock()
             .await
             .insert(run_id.clone(), Arc::new(Mutex::new(runner)));
         Ok(run_id)
+    }
+
+    fn with_channel(&self, runner: Runner) -> Runner {
+        match self.cfg.channel_override {
+            Some(channel) => runner.with_channel_override(channel),
+            None => runner,
+        }
     }
 
     /// The run's runner, reopened from disk when this app has not touched it yet.
@@ -556,6 +566,7 @@ impl AppCore {
             _ => storage(e),
         })?
         .with_cache_dir(self.cache_dir());
+        let runner = self.with_channel(runner);
         let shared = Arc::new(Mutex::new(runner));
         runs.insert(run_id.to_string(), shared.clone());
         Ok(shared)
