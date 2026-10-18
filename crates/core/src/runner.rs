@@ -35,9 +35,11 @@ pub enum Prompt {
     Login {
         user_hint: Option<String>,
     },
+    /// `message` says why `drives` is empty, when it is.
     ChooseDrive {
         drives: Vec<Drive>,
         needed_bytes: u64,
+        message: Option<String>,
     },
     Ambiguous {
         candidates: Vec<String>,

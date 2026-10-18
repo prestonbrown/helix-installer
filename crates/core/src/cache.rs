@@ -26,18 +26,22 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-fn hex(digest: &[u8]) -> String {
+pub(crate) fn hex(digest: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Lowercase hex sha256 of the file, hashed in chunks so large images never
 /// sit in memory whole.
 pub fn hash_file(path: &Path) -> std::io::Result<String> {
-    let mut f = std::fs::File::open(path)?;
+    hash_reader(&mut std::fs::File::open(path)?)
+}
+
+/// Lowercase hex sha256 of everything `r` yields, read in 64 KiB chunks.
+pub fn hash_reader(r: &mut impl Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = f.read(&mut buf)?;
+        let n = r.read(&mut buf)?;
         if n == 0 {
             break;
         }

@@ -1786,6 +1786,7 @@ dependencies = [
  "futures-util",
  "helix_installer_core",
  "if-addrs",
+ "libc",
  "mdns-sd",
  "minisign",
  "minisign-verify",

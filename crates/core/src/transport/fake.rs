@@ -328,6 +328,7 @@ struct DrivesState {
     ejected: Vec<String>,
     corrupt_copies: bool,
     fail_eject: bool,
+    system_unknown: bool,
 }
 
 #[derive(Default)]
@@ -352,6 +353,14 @@ impl FakeDrives {
     pub fn ejected(&self) -> Vec<String> {
         lock(&self.state).ejected.clone()
     }
+    /// Unplugs drive `id`; files written to it stay readable through `file`.
+    pub fn remove(&self, id: &str) {
+        lock(&self.state).drives.retain(|d| d.id != id);
+    }
+    /// `system_drives_known` answers false, as when the OS root or home cannot be found.
+    pub fn system_unknown(&self) {
+        lock(&self.state).system_unknown = true;
+    }
     /// Every later copy lands with its last byte changed, as a failing stick would leave it.
     pub fn corrupt_copies(&self) {
         lock(&self.state).corrupt_copies = true;
@@ -373,6 +382,9 @@ impl FakeDrives {
 impl Drives for FakeDrives {
     fn list_drives(&self) -> Result<Vec<Drive>> {
         Ok(lock(&self.state).drives.to_vec())
+    }
+    fn system_drives_known(&self) -> bool {
+        !lock(&self.state).system_unknown
     }
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()> {
         self.known(drive)?;

@@ -9,10 +9,10 @@
 //! `system_anchors`.
 
 use super::{Drive, Drives, Result, TransportError};
-use crate::cache::hash_file;
 use crate::fs_atomic::sync_dir;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SysDrives;
@@ -23,10 +23,28 @@ impl SysDrives {
     }
 }
 
-/// True for a name that puts exactly one file in the drive's root: not empty, not `.` or `..`,
-/// and free of path separators, drive prefixes and NUL.
+/// True for a name that puts exactly one file in the drive's root and that FAT32 under every OS
+/// can hold: not empty, no path separator, drive prefix, control character or any of
+/// `* ? " < > |`, no trailing dot or space, and not a Windows device name (`CON`, `PRN`, `AUX`,
+/// `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with or without an extension, in any case).
 pub fn is_plain_file_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
+    const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    if name.is_empty() || name.ends_with(['.', ' ']) {
+        return false;
+    }
+    if name.chars().any(|c| c < ' ' || FORBIDDEN.contains(&c)) {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or(name);
+    let device = ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|d| stem.eq_ignore_ascii_case(d));
+    let numbered = stem.len() == 4
+        && ["COM", "LPT"]
+            .iter()
+            .any(|p| stem.get(..3).is_some_and(|s| s.eq_ignore_ascii_case(p)))
+        && matches!(stem.as_bytes()[3], b'1'..=b'9');
+    !device && !numbered
 }
 
 /// The places whose drive must never be written: the OS root, the user's home and the
@@ -114,18 +132,178 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .map_err(|e| TransportError::Io(e.to_string()))?
 }
 
-/// Copies `src` to `<dest>.part`, syncs it to the device, then renames it into place, so the
-/// final name never holds a partial file. A failed copy removes the `.part`.
+static PART_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A part-file name no other file on the stick has: unique per process and per call, and
+/// created with `create_new`, so a file the user already has is never truncated or removed.
+fn part_name(name: &str) -> String {
+    let seq = PART_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{name}.{}.{seq}.part", std::process::id())
+}
+
+/// Copies `src` into a new part file, syncs it to the device, then renames it into place, so
+/// the final name never holds a partial file. A failed copy removes the part file, which is
+/// only ever the one this call created.
 fn copy_through_part(src: &Path, dest: &Path, part: &Path) -> std::io::Result<()> {
-    let copied = std::fs::copy(src, part)
-        .and_then(|_| std::fs::OpenOptions::new().write(true).open(part))
-        .and_then(|f| f.sync_all());
+    let mut from = std::fs::File::open(src)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    uncached::write_options(&mut opts);
+    let mut to = opts.open(part)?;
+    let copied = uncached::after_open(&to)
+        .and_then(|()| std::io::copy(&mut from, &mut to))
+        .and_then(|_| to.sync_all())
+        .and_then(|()| uncached::after_sync(&to));
+    drop(to);
     if let Err(e) = copied.and_then(|()| std::fs::rename(part, dest)) {
         let _ = std::fs::remove_file(part);
         return Err(e);
     }
     sync_dir(dest);
     Ok(())
+}
+
+/// Keeps the readback hash coming from the stick rather than from the OS's copy of what was
+/// written, as far as each platform allows.
+///
+/// - Linux: the written file is synced and its pages dropped (`POSIX_FADV_DONTNEED`), and the
+///   readback syncs and drops them again before reading, so it reads the device.
+/// - macOS: writes and the readback use `F_NOCACHE`, so neither keeps pages in the cache;
+///   pages some other reader cached in between can still serve the readback.
+/// - Windows: the copy is written with `FILE_FLAG_WRITE_THROUGH` and read back with
+///   `FILE_FLAG_NO_BUFFERING`, which reads the device. A volume whose sector size breaks the
+///   aligned reads falls back to a buffered read, which proves only what the filesystem holds.
+///
+/// None of them can see past a stick's own controller cache.
+#[cfg(target_os = "linux")]
+mod uncached {
+    use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::os::unix::io::AsRawFd;
+    use std::path::Path;
+
+    pub fn write_options(_opts: &mut OpenOptions) {}
+
+    pub fn after_open(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn after_sync(f: &File) -> io::Result<()> {
+        // SAFETY: the descriptor is open for the duration of the call.
+        match unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) } {
+            0 => Ok(()),
+            e => Err(io::Error::from_raw_os_error(e)),
+        }
+    }
+
+    pub fn hash(path: &Path) -> io::Result<String> {
+        let mut f = File::open(path)?;
+        f.sync_all()?;
+        after_sync(&f)?;
+        crate::cache::hash_reader(&mut f)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod uncached {
+    use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::os::unix::io::AsRawFd;
+    use std::path::Path;
+
+    pub fn write_options(_opts: &mut OpenOptions) {}
+
+    pub fn after_open(f: &File) -> io::Result<()> {
+        // SAFETY: the descriptor is open for the duration of the call.
+        if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn after_sync(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn hash(path: &Path) -> io::Result<String> {
+        let mut f = File::open(path)?;
+        after_open(&f)?;
+        crate::cache::hash_reader(&mut f)
+    }
+}
+
+#[cfg(windows)]
+mod uncached {
+    use sha2::{Digest, Sha256};
+    use std::fs::{File, OpenOptions};
+    use std::io::{self, Read};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::Path;
+
+    const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
+    const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
+    /// Unbuffered reads must start on, span whole multiples of, and land in a buffer aligned to
+    /// the volume's sector size; 4096 is a multiple of every sector size a USB stick reports.
+    const ALIGN: usize = 4096;
+    const CHUNK: usize = 64 * 1024;
+
+    pub fn write_options(opts: &mut OpenOptions) {
+        opts.custom_flags(FILE_FLAG_WRITE_THROUGH);
+    }
+
+    pub fn after_open(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn after_sync(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn hash(path: &Path) -> io::Result<String> {
+        unbuffered(path).or_else(|_| crate::cache::hash_file(path))
+    }
+
+    fn unbuffered(path: &Path) -> io::Result<String> {
+        let mut f = OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_NO_BUFFERING)
+            .open(path)?;
+        let mut raw = vec![0u8; CHUNK + ALIGN];
+        let start = raw.as_ptr().align_offset(ALIGN);
+        let buf = raw
+            .get_mut(start..start + CHUNK)
+            .ok_or_else(|| io::Error::other("could not align the read buffer"))?;
+        let mut hasher = Sha256::new();
+        loop {
+            let n = f.read(buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(crate::cache::hex(&hasher.finalize()))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+mod uncached {
+    use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::path::Path;
+
+    pub fn write_options(_opts: &mut OpenOptions) {}
+
+    pub fn after_open(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn after_sync(_f: &File) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn hash(path: &Path) -> io::Result<String> {
+        crate::cache::hash_file(path)
+    }
 }
 
 #[async_trait]
@@ -140,6 +318,10 @@ impl Drives for SysDrives {
             .collect())
     }
 
+    fn system_drives_known(&self) -> bool {
+        system_anchors().is_some()
+    }
+
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()> {
         if !is_plain_file_name(name) {
             return Err(TransportError::Io(format!(
@@ -147,7 +329,7 @@ impl Drives for SysDrives {
             )));
         }
         let dest = drive.mount.join(name);
-        let part = drive.mount.join(format!("{name}.part"));
+        let part = drive.mount.join(part_name(name));
         let src = src.to_path_buf();
         blocking(move || copy_through_part(&src, &dest, &part).map_err(io)).await
     }
@@ -159,7 +341,7 @@ impl Drives for SysDrives {
             )));
         }
         let path = drive.mount.join(name);
-        blocking(move || hash_file(&path).map_err(io)).await
+        blocking(move || uncached::hash(&path).map_err(io)).await
     }
 
     async fn eject(&self, drive: &Drive) -> Result<()> {

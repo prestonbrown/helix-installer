@@ -5,7 +5,7 @@ use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::Manifest;
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
-use helix_installer_core::transport::drives_sys::{is_system, SysDrives};
+use helix_installer_core::transport::drives_sys::{is_plain_file_name, is_system, SysDrives};
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -124,10 +124,35 @@ fn offered(ev: &Event) -> (Vec<String>, u64) {
         Event::NeedInput(Prompt::ChooseDrive {
             drives,
             needed_bytes,
+            ..
         }) => (drives.iter().map(|d| d.id.clone()).collect(), *needed_bytes),
         e => panic!("expected ChooseDrive, got {e:?}"),
     }
 }
+
+fn message_of(ev: &Event) -> Option<String> {
+    match ev {
+        Event::NeedInput(Prompt::ChooseDrive { message, .. }) => message.clone(),
+        e => panic!("expected ChooseDrive, got {e:?}"),
+    }
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+/// Picks `id` and stops at the "Writing to" progress, before the copy runs.
+async fn pick(r: &mut Runner, id: &str) {
+    let ev = r.advance(Some(Input::Drive(id.into()))).await;
+    assert!(matches!(ev, Event::Progress { .. }), "{ev:?}");
+}
+
+const STICK_GONE: &str = "the stick you picked is no longer there; plug it back in or pick again";
 
 fn help_of(ev: &Event) -> String {
     match ev {
@@ -330,6 +355,126 @@ async fn an_eject_failure_after_a_verified_copy_is_a_warning_not_a_failure() {
 
 // ---------------------------------------------------------------- the real drive backend
 
+#[tokio::test]
+async fn a_stick_removed_between_pick_and_write_fails_and_a_retry_asks_again() {
+    let rig = Rig::new();
+    rig.drives.add(stick("s", "vfat"));
+    let mut r = rig.runner(both());
+    settle(&mut r, None).await;
+    pick(&mut r, "s").await;
+    rig.drives.remove("s");
+    match settle(&mut r, None).await {
+        Event::Failed { reason, .. } => assert_eq!(reason, STICK_GONE),
+        e => panic!("expected Failed, got {e:?}"),
+    }
+    assert_eq!(rig.file("s", "firmware.bin"), None);
+    rig.drives.add(stick("s", "vfat"));
+    assert_eq!(
+        offered(&settle(&mut r, None).await).0,
+        vec!["s".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_different_stick_at_the_same_mount_is_not_written() {
+    let swaps: [fn(&mut Drive); 3] = [
+        |d| d.label = "OTHER".into(),
+        |d| d.size_bytes += 1,
+        |d| d.fs = "msdos".into(),
+    ];
+    for (i, swap) in swaps.iter().enumerate() {
+        let rig = Rig::new();
+        rig.drives.add(stick("s", "vfat"));
+        let mut r = rig.runner(both());
+        settle(&mut r, None).await;
+        pick(&mut r, "s").await;
+        rig.drives.remove("s");
+        let mut other = stick("s", "vfat");
+        swap(&mut other);
+        rig.drives.add(other);
+        match settle(&mut r, None).await {
+            Event::Failed { reason, .. } => assert_eq!(reason, STICK_GONE, "swap {i}"),
+            e => panic!("swap {i}: expected Failed, got {e:?}"),
+        }
+        assert_eq!(rig.file("s", "firmware.bin"), None, "swap {i}");
+        assert!(matches!(
+            settle(&mut r, None).await,
+            Event::NeedInput(Prompt::ChooseDrive { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_file_over_the_fat32_limit_refuses_before_copying() {
+    const LIMIT: u64 = 4 * 1024 * 1024 * 1024 - 1;
+    for (len, refused) in [(LIMIT + 1, true), (LIMIT, false)] {
+        let rig = Rig::new();
+        rig.drives.add(drive("s", "vfat", 1 << 40, true, false));
+        let mut r = rig.runner(both());
+        offered(&settle(&mut r, None).await);
+        // Sparse, so the test costs no disk; only its length is read before the pick.
+        let f = std::fs::File::create(cached_path(rig.cache.path(), &sha(FW))).unwrap();
+        f.set_len(len).unwrap();
+        let ev = r.advance(Some(Input::Drive("s".into()))).await;
+        if refused {
+            let help = help_of(&ev);
+            assert!(help.contains("4 GB"), "{help}");
+        } else {
+            assert!(matches!(ev, Event::Progress { .. }), "{len}: {ev:?}");
+        }
+        assert_eq!(rig.file("s", "firmware.bin"), None);
+    }
+}
+
+#[tokio::test]
+async fn no_stick_found_says_so_and_names_sd_readers() {
+    let rig = Rig::new();
+    rig.drives
+        .add(drive("internal", "vfat", 1 << 40, false, false));
+    let mut r = rig.runner(both());
+    let ev = settle(&mut r, None).await;
+    assert_eq!(offered(&ev).0, Vec::<String>::new());
+    assert_eq!(
+        message_of(&ev).as_deref(),
+        Some("No USB stick found. Plug one in (FAT32). Built-in SD card readers are not offered.")
+    );
+    rig.drives.add(stick("s", "vfat"));
+    assert_eq!(message_of(&settle(&mut r, None).await), None);
+}
+
+#[tokio::test]
+async fn unknown_system_drives_get_their_own_message() {
+    let rig = Rig::new();
+    rig.drives.add(drive("s", "vfat", 1 << 30, true, true));
+    rig.drives.system_unknown();
+    let mut r = rig.runner(both());
+    let ev = settle(&mut r, None).await;
+    assert_eq!(offered(&ev).0, Vec::<String>::new());
+    let msg = message_of(&ev).unwrap_or_default();
+    assert!(msg.contains("could not tell which drive"), "{msg}");
+}
+
+#[test]
+fn names_windows_or_fat_cannot_hold_are_not_plain() {
+    for bad in [
+        "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "fw.bin.", "fw.bin ", "CON", "con", "Con.txt",
+        "PRN", "AUX.bin", "nul", "COM1", "com9.bin", "LPT1", "lpt9.txt", "a\u{1}b",
+    ] {
+        assert!(!is_plain_file_name(bad), "{bad:?}");
+    }
+    for good in [
+        "firmware.bin",
+        "CONFIG.txt",
+        "COM10",
+        "console.bin",
+        "LPT",
+        "nul2.bin",
+        ".hidden",
+    ] {
+        assert!(is_plain_file_name(good), "{good:?}");
+    }
+}
+
 #[test]
 fn a_mount_that_is_or_contains_an_anchor_is_system() {
     let anchors = [
@@ -363,23 +508,29 @@ async fn the_real_copy_writes_through_a_part_file_and_hashes_what_landed() {
         mount: mount.clone(),
         ..stick("s", "vfat")
     };
+    // A .part that is not the installer's own is never truncated or removed.
+    std::fs::write(mount.join("firmware.bin.part"), b"user data").unwrap();
     let sys = SysDrives::new();
     sys.copy_to(&d, &src, "firmware.bin").await.unwrap();
     assert_eq!(std::fs::read(mount.join("firmware.bin")).unwrap(), FW);
-    assert!(!mount.join("firmware.bin.part").exists());
     assert_eq!(sys.sha256_of(&d, "firmware.bin").await.unwrap(), sha(FW));
 
-    // A failed copy leaves neither the file nor its .part behind.
+    // A failed copy leaves neither the file nor its part file behind.
     let missing = root.path().join("missing");
     assert!(sys.copy_to(&d, &missing, "other.bin").await.is_err());
-    assert!(!mount.join("other.bin").exists());
-    assert!(!mount.join("other.bin.part").exists());
-    // A rename that fails after the .part is complete removes the .part too.
+    // A rename that fails after the part file is complete removes the part file too.
     std::fs::create_dir_all(mount.join("busy.bin").join("x")).unwrap();
     assert!(sys.copy_to(&d, &src, "busy.bin").await.is_err());
-    assert!(!mount.join("busy.bin.part").exists());
     assert!(sys.copy_to(&d, &src, "../escape.bin").await.is_err());
     assert!(!root.path().join("escape.bin").exists());
+    assert_eq!(
+        names_in(&mount),
+        vec!["busy.bin", "firmware.bin", "firmware.bin.part"]
+    );
+    assert_eq!(
+        std::fs::read(mount.join("firmware.bin.part")).unwrap(),
+        b"user data"
+    );
 }
 
 #[test]

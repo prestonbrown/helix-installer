@@ -133,6 +133,9 @@ pub trait Drives: Send + Sync {
     /// Every drive with its `removable` and `system` flags, unfiltered;
     /// callers decide which to offer.
     fn list_drives(&self) -> Result<Vec<Drive>>;
+    /// False when the drives holding the OS, the user's home or this app could not be
+    /// determined, so `list_drives` marks every drive `system`.
+    fn system_drives_known(&self) -> bool;
     /// Writes `src` to `name` in the drive's root; `name` is never a path.
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()>;
     /// Lowercase hex sha256 of the file `name` as it now reads back from the drive.

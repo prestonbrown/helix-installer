@@ -20,6 +20,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["disk"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [features]
 fakes = []
 

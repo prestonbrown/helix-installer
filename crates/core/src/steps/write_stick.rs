@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// How far the step at `step` got on its previous run, held in memory only: a reopened app
 /// asks for the stick again and rewrites it.
 pub(crate) enum Stage {
-    Chosen { step: usize, drive: String },
+    Chosen { step: usize, drive: Drive },
     EjectWarned { step: usize },
 }
 
@@ -25,6 +25,18 @@ const FAT32_NAMES: [&str; 3] = ["vfat", "msdos", "fat32"];
 pub const FAT32_HELP: &str = "The printer reads only FAT32 sticks. Copy off anything you want \
 to keep, reformat as FAT32 with your computer's disk tool (this erases the stick), or use another \
 stick, then try again.";
+
+/// The largest file FAT32 can hold: 4 GiB less one byte.
+pub const FAT32_MAX_FILE: u64 = 4 * 1024 * 1024 * 1024 - 1;
+
+pub const NO_STICK: &str =
+    "No USB stick found. Plug one in (FAT32). Built-in SD card readers are not offered.";
+
+pub const SYSTEM_UNKNOWN: &str = "The installer could not tell which drive holds your system, \
+your home folder or this app, so it offers no drive. Send a support bundle so we can fix this.";
+
+pub const STICK_GONE: &str =
+    "the stick you picked is no longer there; plug it back in or pick again";
 
 pub fn is_fat32(fs: &str) -> bool {
     FAT32_NAMES.iter().any(|f| fs.eq_ignore_ascii_case(f))
@@ -70,11 +82,14 @@ pub async fn run(
     };
     if let Some(Input::Drive(id)) = input {
         if let Some(d) = offered.iter().find(|d| d.id == id) {
-            if let Err(o) = check_fits(d, needed) {
+            if let Err(o) = check_fits(d, &files, needed) {
                 return o;
             }
             let title = format!("Writing to {}", d.label);
-            ctx.session.stick = Some(Stage::Chosen { step, drive: id });
+            ctx.session.stick = Some(Stage::Chosen {
+                step,
+                drive: d.clone(),
+            });
             return StepOutcome::Progress {
                 title,
                 detail: None,
@@ -82,9 +97,17 @@ pub async fn run(
             };
         }
     }
+    let message = if !offered.is_empty() {
+        None
+    } else if ctx.env.drives.system_drives_known() {
+        Some(NO_STICK.to_string())
+    } else {
+        Some(SYSTEM_UNKNOWN.to_string())
+    };
     StepOutcome::NeedInput(Prompt::ChooseDrive {
         drives: offered,
         needed_bytes: needed,
+        message,
     })
 }
 
@@ -148,11 +171,21 @@ fn offered_drives(ctx: &StepCtx<'_>) -> Result<Vec<Drive>, StepOutcome> {
         .collect())
 }
 
-fn check_fits(d: &Drive, needed: u64) -> Result<(), StepOutcome> {
+fn check_fits(d: &Drive, files: &[StickFile], needed: u64) -> Result<(), StepOutcome> {
     if !is_fat32(&d.fs) {
         return Err(StepOutcome::Failed {
             reason: format!("{} is formatted as {}, not FAT32", d.label, d.fs),
             help: Some(FAT32_HELP.into()),
+        });
+    }
+    if let Some(f) = files.iter().find(|f| f.size > FAT32_MAX_FILE) {
+        return Err(StepOutcome::Failed {
+            reason: format!("{} is {} bytes, too large for FAT32", f.name, f.size),
+            help: Some(
+                "FAT32 cannot hold a file of 4 GB or more, so this file cannot go on a stick. \
+Report this: the printer's recipe needs fixing."
+                    .into(),
+            ),
         });
     }
     if needed > d.free_bytes {
@@ -173,19 +206,32 @@ async fn write(
     ctx: &mut StepCtx<'_>,
     files: &[StickFile],
     needed: u64,
-    drive_id: &str,
+    picked: &Drive,
 ) -> StepOutcome {
     let offered = match offered_drives(ctx) {
         Ok(d) => d,
         Err(o) => return o,
     };
-    let Some(drive) = offered.into_iter().find(|d| d.id == drive_id) else {
+    // A stick is the one picked only if everything but its free space still matches: another
+    // stick plugged into the same slot gets the same mount path.
+    let same = |d: &Drive| {
+        d.id == picked.id
+            && d.mount == picked.mount
+            && d.label == picked.label
+            && d.size_bytes == picked.size_bytes
+            && d.fs == picked.fs
+    };
+    let Some(drive) = offered.into_iter().find(same) else {
+        ctx.log(format!(
+            "{} changed or vanished after it was picked",
+            picked.label
+        ));
         return StepOutcome::Failed {
-            reason: "the chosen stick is no longer available".into(),
-            help: Some("Plug the stick back in and choose it again.".into()),
+            reason: STICK_GONE.into(),
+            help: Some("Plug the stick back in, or pick a stick again.".into()),
         };
     };
-    if let Err(o) = check_fits(&drive, needed) {
+    if let Err(o) = check_fits(&drive, files, needed) {
         return o;
     }
     for f in files {
