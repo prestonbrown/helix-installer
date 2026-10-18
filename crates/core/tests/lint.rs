@@ -24,9 +24,9 @@ fn base() -> Value {
             "install": [
                 {"type": "info", "text": "hi", "image": "step.png"},
                 {"type": "download", "artifact": "fw"},
-                {"type": "helix_install", "platform": "armv7"}
+                {"type": "helix_install", "platform": "armv7", "commits": true}
             ],
-            "restore": [{"type": "ssh_run", "command": "true", "timeout_s": 5}]
+            "restore": [{"type": "ssh_run", "command": "true", "timeout_s": 5, "commits": true}]
         }
     })
 }
@@ -86,7 +86,8 @@ fn fallback_must_refuse_with_doc() {
 fn unknown_restore_and_recipe() {
     let mut v = base();
     v["printers"][0]["restore"] = json!("nope");
-    v["recipes"]["restore"] = json!([{"type": "helix_install", "platform": "armv7"}]);
+    v["recipes"]["restore"] =
+        json!([{"type": "helix_install", "platform": "armv7", "commits": true}]);
     only(v, "restore");
     let mut v = base();
     v["printers"][0]["recipes"][0]["recipe"] = json!("nope");
@@ -117,7 +118,8 @@ fn terminal_step_rule() {
     only(v, "last step");
     // SshRun is only a legal ending for a restore recipe.
     let mut v = base();
-    v["recipes"]["install"] = json!([{"type": "ssh_run", "command": "true", "timeout_s": 5}]);
+    v["recipes"]["install"] =
+        json!([{"type": "ssh_run", "command": "true", "timeout_s": 5, "commits": true}]);
     only(v, "last step");
     let mut v = base();
     v["recipes"]["install"] =
@@ -133,7 +135,6 @@ fn terminal_step_rule() {
 fn at_most_one_commit_step() {
     let mut v = base();
     v["recipes"]["install"][1]["commits"] = json!(true);
-    v["recipes"]["install"][2]["commits"] = json!(true);
     only(v, "commits");
 }
 
@@ -181,7 +182,8 @@ fn unverified_printer_needs_the_flag() {
 #[test]
 fn restore_recipe_may_end_in_gcode() {
     let mut v = base();
-    v["recipes"]["restore"] = json!([{"type": "moonraker_gcode", "script": "FIRMWARE_RESTART"}]);
+    v["recipes"]["restore"] =
+        json!([{"type": "moonraker_gcode", "script": "FIRMWARE_RESTART", "commits": true}]);
     assert_eq!(run(v, false), vec![]);
 }
 
@@ -213,7 +215,8 @@ fn binary_prints_errors_and_exits_nonzero() {
 
 fn install_with(step: Value) -> Value {
     let mut v = base();
-    v["recipes"]["install"] = json!([step, {"type": "helix_install", "platform": "armv7"}]);
+    v["recipes"]["install"] =
+        json!([step, {"type": "helix_install", "platform": "armv7", "commits": true}]);
     v
 }
 
@@ -271,7 +274,8 @@ fn empty_recipe_is_an_error() {
 #[test]
 fn moonraker_update_and_require_are_terminals() {
     let mut v = base();
-    v["recipes"]["install"] = json!([{"type": "moonraker_update", "name": "helixscreen"}]);
+    v["recipes"]["install"] =
+        json!([{"type": "moonraker_update", "name": "helixscreen", "commits": true}]);
     assert_eq!(run(v, false), vec![]);
     let mut v = base();
     v["recipes"]["install"] =
@@ -309,4 +313,104 @@ fn binary_exits_2_on_unparseable_json() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(!out.stderr.is_empty());
+}
+
+fn install(steps: Value) -> Value {
+    let mut v = base();
+    v["recipes"]["install"] = steps;
+    v
+}
+
+const HELIX: &str = r#"{"type": "helix_install", "platform": "armv7"}"#;
+
+fn step(json: &str) -> Value {
+    serde_json::from_str(json).unwrap()
+}
+
+fn committed(json: &str) -> Value {
+    let mut s = step(json);
+    s["commits"] = json!(true);
+    s
+}
+
+#[test]
+fn a_recipe_that_changes_the_printer_needs_a_commit() {
+    only(install(json!([step(HELIX)])), "no step has commits: true");
+    for mutating in [
+        r#"{"type": "ssh_run", "command": "true", "timeout_s": 5}"#,
+        r#"{"type": "moonraker_gcode", "script": "SAVE_CONFIG"}"#,
+        r#"{"type": "moonraker_update", "name": "helixscreen"}"#,
+    ] {
+        only(
+            install(json!([step(mutating), committed(HELIX)])),
+            "after the first step that changes the printer",
+        );
+    }
+}
+
+#[test]
+fn a_restore_recipe_needs_a_commit_too() {
+    let mut v = base();
+    v["recipes"]["restore"] = json!([{"type": "ssh_run", "command": "true", "timeout_s": 5}]);
+    only(v, "no step has commits: true");
+}
+
+#[test]
+fn a_commit_before_the_first_change_is_accepted() {
+    let v = install(json!([
+        committed(r#"{"type": "info", "text": "Do not turn the printer off"}"#),
+        step(r#"{"type": "ssh_run", "command": "true", "timeout_s": 5}"#),
+        step(HELIX)
+    ]));
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn a_recipe_that_changes_nothing_needs_no_commit() {
+    let v = install(json!([
+        {"type": "download", "artifact": "fw"},
+        {"type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://x"}
+    ]));
+    assert_eq!(run(v, false), vec![]);
+}
+
+const STICK: &str = r#"{"type": "write_stick", "artifacts": ["fw"]}"#;
+const FLASH: &str = r#"{"type": "user_action", "text": "Insert the stick and power on"}"#;
+const DONE: &str =
+    r#"{"type": "wait_for", "target": "helix_service", "timeout_s": 5, "message": "m"}"#;
+
+#[test]
+fn flashing_from_a_stick_commits_at_the_flash_not_after() {
+    // Writing the stick leaves the printer alone; the user action after it flashes the printer.
+    only(
+        install(json!([step(STICK), step(FLASH), step(DONE)])),
+        "no step has commits: true",
+    );
+    only(
+        install(json!([step(STICK), step(FLASH), committed(DONE)])),
+        "after the first step that changes the printer",
+    );
+    assert_eq!(
+        run(
+            install(json!([step(STICK), committed(FLASH), step(DONE)])),
+            false
+        ),
+        vec![]
+    );
+    assert_eq!(
+        run(
+            install(json!([committed(STICK), step(FLASH), step(DONE)])),
+            false
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn a_user_action_before_any_stick_changes_nothing() {
+    let v = install(json!([
+        step(r#"{"type": "user_action", "text": "Turn the printer on"}"#),
+        committed(HELIX)
+    ]));
+    assert_eq!(run(v, false), vec![]);
 }

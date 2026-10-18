@@ -178,6 +178,27 @@ fn is_terminal(s: &Step, is_restore: bool) -> bool {
     }
 }
 
+/// The first step that changes the printer, which the commit must come at or before so a
+/// failure from there on is shown as a half-changed printer (Recovery), never "nothing was
+/// changed". Commands, G-code, Moonraker updates and installs change it. Writing a stick does
+/// not: it only touches the user's drive. The first user action after a stick is written is
+/// where the user puts the stick in and the printer flashes itself, so it counts as a change.
+fn first_change(steps: &[Step]) -> Option<usize> {
+    let mut stick_written = false;
+    steps.iter().position(|s| match s {
+        Step::SshRun { .. }
+        | Step::MoonrakerGcode { .. }
+        | Step::MoonrakerUpdate { .. }
+        | Step::HelixInstall { .. } => true,
+        Step::WriteStick { .. } => {
+            stick_written = true;
+            false
+        }
+        Step::UserAction { .. } => stick_written,
+        _ => false,
+    })
+}
+
 fn lint_recipe(
     m: &Manifest,
     id: &str,
@@ -194,8 +215,25 @@ fn lint_recipe(
         ),
         _ => {}
     }
-    if steps.iter().filter(|s| s.commits()).count() > 1 {
+    let commits: Vec<usize> = (0..steps.len()).filter(|&i| steps[i].commits()).collect();
+    if commits.len() > 1 {
         err(id, "more than one step has commits: true".into());
+    }
+    if let Some(first) = first_change(steps) {
+        match commits.first() {
+            None => err(
+                id,
+                format!("step {first} changes the printer but no step has commits: true"),
+            ),
+            Some(&c) if c > first => err(
+                id,
+                format!(
+                    "step {c} has commits: true after the first step that changes the printer \
+                     (step {first})"
+                ),
+            ),
+            _ => {}
+        }
     }
     let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {
         if !m.artifacts.contains_key(name) {
