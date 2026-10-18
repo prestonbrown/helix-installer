@@ -125,6 +125,43 @@
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-k2"
       }
+    },
+    {
+      "id": "k1",
+      "name": "Creality K1 / K1C / K1 Max",
+      "identify": [
+        {
+          "cpu_arch": "mips",
+          "klipper_objects": {
+            "contains": "mcu nozzle_mcu"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "k1_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker"
+          },
+          "recipe": "k1_modded"
+        },
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "k1_stock"
+        }
+      ],
+      "restore": "k1_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-k1"
+      }
     }
   ],
   "artifacts": {},
@@ -344,6 +381,180 @@
         "platform": "k2",
         "uninstall": true,
         "dir": "/mnt/UDISK",
+        "commits": true
+      }
+    ],
+    "k1_stock": [
+      {
+        "type": "ask",
+        "fact": "k1_root_menu",
+        "question": "On the printer's screen, open Settings. Is there an entry called Root account information?",
+        "choices": [
+          {
+            "value": "yes",
+            "label": "Yes, it is there",
+            "image": "k1/root-account.png"
+          },
+          {
+            "value": "no",
+            "label": "No, it is missing"
+          }
+        ]
+      },
+      {
+        "type": "require",
+        "fact": "k1_root_menu",
+        "equals": "yes",
+        "reason": "This printer has no root option. Some 2025 K1C units ship without it, and the installer cannot put HelixScreen on them.",
+        "doc": "https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "info",
+        "text": "Before you start: the installer first puts Simple AF, a community firmware, on this printer, then HelixScreen. Going back to Creality's own software later takes a factory reset or Creality's recovery firmware; removing only HelixScreen is quick and leaves Simple AF's screen."
+      },
+      {
+        "type": "user_action",
+        "text": "Turn on root access: on the printer's screen open Settings, then Root account information. Read the notice, wait for the countdown, then press OK. Then press Next here.",
+        "image": "k1/root-account.png",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "uname -m",
+        "fact": "cpu_arch"
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "probe",
+        "ssh": "sed -n 's/^ota_version=6\\.//p' /etc/ota_info",
+        "fact": "k1_firmware_version"
+      },
+      {
+        "type": "require",
+        "fact": "k1_firmware_version",
+        "range": ">=1.3.3.5",
+        "reason": "Simple AF needs Creality firmware 1.3.3.5 or newer. Update the printer from its own screen, then run the installer again.",
+        "doc": "https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "probe",
+        "ssh": "if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ] || { [ -d /opt ] && [ ! -L /opt ] && [ -n \"$(ls -1 /opt)\" ]; }; then echo yes; else echo no; fi",
+        "fact": "k1_leftovers"
+      },
+      {
+        "type": "require",
+        "fact": "k1_leftovers",
+        "equals": "false",
+        "reason": "Something from an earlier mod is on this printer (Helper Script, Creality's Fluidd or Mainsail script, or files in /opt). Simple AF installs only on a printer fresh from a factory reset: reset it from its Settings, then run the installer again.",
+        "doc": "https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "ssh_run",
+        "command": "git config --global http.sslVerify false; git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp && sh /usr/data/pellcorp/k1/installer.sh --install loadcells",
+        "timeout_s": 1800,
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "moonraker",
+        "timeout_s": 900,
+        "message": "Simple AF is starting the printer's new services. Do not power off the printer.",
+        "help": "If the printer's screen shows an error, follow the recovery steps in the K1 guide: https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "dir": "/usr/data"
+      }
+    ],
+    "k1_modded": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "dir": "/usr/data",
+        "commits": true
+      }
+    ],
+    "k1_update": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "update": true,
+        "dir": "/usr/data",
+        "commits": true
+      }
+    ],
+    "k1_restore": [
+      {
+        "type": "info",
+        "text": "This removes HelixScreen and puts back the screen the printer had before it: GrumpyScreen on Simple AF. Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/docs/install-k1"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "uninstall": true,
+        "dir": "/usr/data",
         "commits": true
       }
     ]

@@ -328,6 +328,17 @@ fn prefix_and_not_conditions_overlap_only_when_one_fact_can_satisfy_both() {
 }
 
 #[test]
+fn a_require_without_range_or_equals_is_flagged() {
+    let v = install(json!([{"type": "require", "fact": "f", "doc": "https://x"}]));
+    let errs = run(v, false);
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("exactly one of range and equals")),
+        "{errs:?}"
+    );
+}
+
+#[test]
 fn binary_exits_2_on_unparseable_json() {
     let dir = assets();
     let path = dir.path().join("m.json");

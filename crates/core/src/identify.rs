@@ -67,7 +67,7 @@ pub fn start_state(f: &Facts) -> StartState {
 }
 
 /// A missing fact never matches.
-fn cond_matches(cond: &Cond, fact: Option<&Value>) -> bool {
+pub(crate) fn cond_matches(cond: &Cond, fact: Option<&Value>) -> bool {
     let Some(fact) = fact else { return false };
     match cond {
         Cond::Exact(want) => match fact {

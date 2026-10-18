@@ -198,6 +198,45 @@ async fn require_refuses_a_missing_or_unparseable_fact() {
 }
 
 #[tokio::test]
+async fn require_equals_compares_text_and_yes_no_facts() {
+    let step =
+        json!({ "type": "require", "fact": "clean", "equals": "true", "doc": "https://doc/x" });
+    for (facts, passes) in [
+        (json!({ "clean": true }), true),
+        (json!({ "clean": "true" }), true),
+        (json!({ "clean": false }), false),
+        (json!({ "clean": "yes" }), false),
+        (json!({}), false),
+    ] {
+        let f = Fakes::new();
+        let mut r = Runner::new(
+            f.env(),
+            manifest(json!([step])),
+            state("run1", facts.clone()),
+        );
+        let ev = r.advance(None).await;
+        assert_eq!(matches!(ev, Event::Done), passes, "{facts}: {ev:?}");
+    }
+}
+
+#[tokio::test]
+async fn require_with_a_reason_refuses_in_those_words() {
+    let f = Fakes::new();
+    let m = manifest(json!([{
+        "type": "require", "fact": "root_menu", "equals": "yes",
+        "reason": "This printer has no root option.", "doc": "https://doc/root"
+    }]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({ "root_menu": "no" })));
+    match r.advance(None).await {
+        Event::Refused { reason, doc, .. } => {
+            assert_eq!(reason, "This printer has no root option.");
+            assert_eq!(doc, "https://doc/root");
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn refusal_after_commit_is_a_failure() {
     let f = Fakes::new();
     let m = manifest(json!([

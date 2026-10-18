@@ -277,5 +277,8 @@ fn lint_recipe(
             ),
             _ => {}
         }
+        if let Some(problem) = s.shape_error() {
+            err(id, format!("step {i}: {problem}"));
+        }
     }
 }

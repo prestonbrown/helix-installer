@@ -635,6 +635,268 @@ async fn k2_restore_runs_the_uninstaller() {
     );
 }
 
+// ---------------------------------------------------------------- Creality K1
+
+const SIMPLE_AF: &str = "git config --global http.sslVerify false; git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
+const OTA_PROBE: &str = r"sed -n 's/^ota_version=6\.//p' /etc/ota_info";
+const LEFTOVERS_PROBE: &str = r#"if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ] || { [ -d /opt ] && [ ! -L /opt ] && [ -n "$(ls -1 /opt)" ]; }; then echo yes; else echo no; fi"#;
+
+struct K1 {
+    firmware: &'static str,
+    helix_there: bool,
+    leftovers: bool,
+}
+
+const STOCK_K1: K1 = K1 {
+    firmware: "1.3.3.46",
+    helix_there: false,
+    leftovers: false,
+};
+
+/// A K1 on root/creality_2023 whose Moonraker, once it answers, lists the fleet K1C's objects.
+fn k1_rig(k1: K1) -> Rig {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "root", "creality_2023");
+    rig.net.answer(ADDR, 22, Some("SSH-2.0-dropbear"));
+    let yes_no = |b: bool| out(if b { "yes\n" } else { "no\n" }, 0);
+    rig.ssh.on_command("uname -m", out("mips\n", 0));
+    rig.ssh.on_command(S99_PROBE, yes_no(k1.helix_there));
+    rig.ssh
+        .on_command(OTA_PROBE, out(&format!("{}\n", k1.firmware), 0));
+    rig.ssh.on_command(LEFTOVERS_PROBE, yes_no(k1.leftovers));
+    let objects = fleet("k1c_helper_script")["klipper_objects"].clone();
+    rig.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "K1C-0000" }));
+    rig.moonraker
+        .set_objects_list(ADDR, json!({ "objects": objects }));
+    rig
+}
+
+/// Answers a stock K1 run: the root option is there, Next everywhere else.
+fn stock_k1_answers(p: &Prompt, _: usize) -> Input {
+    match p {
+        Prompt::Ask { .. } => Input::Choice("yes".into()),
+        _ => next_only(p, 0),
+    }
+}
+
+fn ran(rig: &Rig, cmd: &str) -> bool {
+    rig.ssh.commands().iter().any(|c| c == cmd)
+}
+
+#[test]
+fn the_k1c_with_helper_script_and_helixscreen_identifies_for_the_update() {
+    assert_eq!(
+        identify(&staging(), &fleet("k1c_helper_script")),
+        recipe("k1", StartState::Helix("v1.1.0-beta.9".into()), "k1_update")
+    );
+}
+
+#[tokio::test]
+async fn the_k1c_updates_over_ssh_without_simple_af() {
+    let rig = k1_rig(K1 {
+        helix_there: true,
+        leftovers: true,
+        ..STOCK_K1
+    });
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(trace.prompts.is_empty(), "{:?}", trace.texts());
+    assert!(!ran(&rig, SIMPLE_AF));
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.0.5.tar.gz' --progress --update"
+    );
+}
+
+#[tokio::test]
+async fn a_stock_k1_picked_from_the_grid_gets_simple_af_then_helixscreen() {
+    let rig = k1_rig(STOCK_K1);
+    rig.ssh.script_job(vec![("Simple AF installed\n", Some(0))]);
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    assert_eq!(picked, recipe("k1", StartState::Stock, "k1_stock"));
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    let texts = trace.texts();
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(texts[0].contains("Root account information"), "{texts:?}");
+    assert!(texts[1].contains("factory reset"), "{texts:?}");
+    assert!(texts[2].contains("Root account information"), "{texts:?}");
+    assert!(ran(&rig, SIMPLE_AF), "{:?}", rig.ssh.commands());
+    assert!(r.state().committed);
+    assert!(
+        rig.installs()[0]
+            .0
+            .starts_with("sh '/usr/data/install.sh' --local"),
+        "{:?}",
+        rig.installs()
+    );
+}
+
+#[tokio::test]
+async fn a_k1_without_the_root_option_is_refused_before_anything_runs() {
+    let rig = k1_rig(STOCK_K1);
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::Ask { choices, .. } => {
+            assert!(choices.iter().any(|c| c.value == "no"));
+            Input::Choice("no".into())
+        }
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    match &trace.end {
+        Event::Refused { reason, .. } => assert!(reason.contains("2025"), "{reason}"),
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(rig.ssh.commands().is_empty());
+}
+
+#[tokio::test]
+async fn a_k1_on_old_firmware_is_refused_before_simple_af() {
+    let rig = k1_rig(K1 {
+        firmware: "1.3.2.20",
+        ..STOCK_K1
+    });
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    match &trace.end {
+        Event::Refused { reason, .. } => assert!(reason.contains("1.3.3.5"), "{reason}"),
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(!ran(&rig, SIMPLE_AF));
+    assert!(rig.installs().is_empty());
+}
+
+#[tokio::test]
+async fn a_k1_with_helper_script_leftovers_is_refused_before_simple_af() {
+    let rig = k1_rig(K1 {
+        leftovers: true,
+        ..STOCK_K1
+    });
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    match &trace.end {
+        Event::Refused { reason, .. } => {
+            assert!(reason.contains("Helper Script"), "{reason}");
+            assert!(reason.contains("factory reset"), "{reason}");
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(!ran(&rig, SIMPLE_AF));
+}
+
+#[tokio::test]
+async fn a_grid_picked_k1_that_already_runs_helixscreen_updates_instead_of_simple_af() {
+    let rig = k1_rig(K1 {
+        helix_there: true,
+        leftovers: true,
+        ..STOCK_K1
+    });
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(r.state().recipe_id, "k1_update");
+    assert!(!ran(&rig, SIMPLE_AF));
+    assert!(rig.installs()[0].0.ends_with("--progress --update"));
+}
+
+#[tokio::test]
+async fn a_printer_that_is_no_k1_after_simple_af_stops_the_run() {
+    let rig = k1_rig(STOCK_K1);
+    rig.ssh.script_job(vec![("done\n", Some(0))]);
+    rig.installer_succeeds("k1");
+    rig.moonraker.set_objects_list(
+        ADDR,
+        json!({ "objects": fleet("ad5m_forgex")["klipper_objects"].clone() }),
+    );
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    match &trace.end {
+        Event::Failed {
+            committed: true,
+            reason,
+            ..
+        } => assert!(reason.contains("not the printer"), "{reason}"),
+        other => panic!("expected a committed failure, got {other:?}"),
+    }
+    assert!(rig.installs().is_empty());
+}
+
+#[tokio::test]
+async fn a_k1_with_moonraker_and_no_helixscreen_installs_without_simple_af() {
+    let rig = k1_rig(K1 {
+        leftovers: true,
+        ..STOCK_K1
+    });
+    rig.installer_succeeds("k1");
+    let mut f = fleet("k1c_helper_script");
+    f.remove("helix_installed");
+    f.remove("helix_version");
+    f.insert(
+        "services".into(),
+        json!(["klipper", "moonraker", "klipper_mcu"]),
+    );
+    let m = staging();
+    let picked = identify(&m, &f);
+    assert_eq!(picked, recipe("k1", modded(), "k1_modded"));
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(!ran(&rig, SIMPLE_AF));
+    assert!(rig.installs()[0].0.ends_with("--progress"));
+}
+
+#[tokio::test]
+async fn k1_restore_says_how_far_it_goes_then_uninstalls() {
+    let rig = k1_rig(K1 {
+        helix_there: true,
+        ..STOCK_K1
+    });
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = recipe("k1", StartState::Helix(String::new()), "k1_restore");
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    let texts = trace.texts();
+    assert!(
+        texts[0].contains("GrumpyScreen") && texts[0].contains("factory reset"),
+        "{texts:?}"
+    );
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/usr/data/install.sh' --uninstall --progress"
+    );
+}
+
 // ---------------------------------------------------------------- the fleet
 
 /// Each recorded printer identifies as exactly the printer it is.
@@ -646,7 +908,7 @@ fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
         ("cb1_voron", Some("generic_klipper")),
         ("qidi_box", Some("qidi")),
         ("k2_plus", Some("k2")),
-        ("k1c_helper_script", None),
+        ("k1c_helper_script", Some("k1")),
         ("ad5m_forgex", None),
     ];
     for (name, want) in expect {

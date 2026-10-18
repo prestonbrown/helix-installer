@@ -360,3 +360,22 @@ fn an_install_step_cannot_both_update_and_uninstall() {
         "{err:?}"
     );
 }
+
+#[test]
+fn a_require_step_needs_exactly_one_of_range_and_equals() {
+    for step in [
+        serde_json::json!({ "type": "require", "fact": "f", "doc": "https://d" }),
+        serde_json::json!({ "type": "require", "fact": "f", "range": ">=1", "equals": "yes", "doc": "https://d" }),
+    ] {
+        let m = serde_json::json!({
+            "manifest_version": 1, "min_app_version": "0.1.0", "printers": [], "artifacts": {},
+            "recipes": { "r": [step] }
+        });
+        let bytes = serde_json::to_vec(&m).unwrap();
+        let err = verify_and_parse(&bytes, &sign(&bytes), &pubkey(), "1.0.0").unwrap_err();
+        assert!(
+            matches!(&err, ManifestError::Malformed(m) if m.contains("exactly one of range and equals")),
+            "{err:?}"
+        );
+    }
+}

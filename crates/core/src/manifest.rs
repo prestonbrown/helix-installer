@@ -353,9 +353,17 @@ pub enum Step {
         #[serde(default)]
         commits: bool,
     },
+    /// Exactly one of `range` (a version fact) or `equals` (text, or `true`/`false` for a
+    /// yes/no fact); `verify_and_parse` rejects any other combination. `reason`, when set, is
+    /// what the refusal says instead of the generated text.
     Require {
         fact: String,
-        range: VersionRange,
+        #[serde(default)]
+        range: Option<VersionRange>,
+        #[serde(default)]
+        equals: Option<String>,
+        #[serde(default)]
+        reason: Option<String>,
         doc: String,
         #[serde(default)]
         commits: bool,
@@ -470,6 +478,16 @@ impl Step {
         }
     }
 
+    /// What is wrong with a step whose fields cannot all be expressed in its JSON type.
+    pub fn shape_error(&self) -> Option<&'static str> {
+        match self {
+            Step::Require { range, equals, .. } if range.is_some() == equals.is_some() => {
+                Some("require needs exactly one of range and equals")
+            }
+            _ => None,
+        }
+    }
+
     /// The probe a `Step::Probe` describes, or `None` for any other step or an invalid combination.
     pub fn probe(&self) -> Option<Probe> {
         match self {
@@ -540,6 +558,11 @@ pub fn verify_and_parse(
             if matches!(step, Step::Probe { .. }) && step.probe().is_none() {
                 return Err(ManifestError::Malformed(format!(
                     "recipe {name} step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"
+                )));
+            }
+            if let Some(problem) = step.shape_error() {
+                return Err(ManifestError::Malformed(format!(
+                    "recipe {name} step {i}: {problem}"
                 )));
             }
             if matches!(
