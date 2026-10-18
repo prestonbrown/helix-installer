@@ -35,9 +35,44 @@
           "cpu_model": {
             "prefix": "Radxa"
           }
+        },
+        {
+          "cpu_model": ""
         }
       ],
       "recipes": [
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "aarch64",
+            "cpu_model": ""
+          },
+          "recipe": "generic_update_board"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "armv7l",
+            "cpu_model": ""
+          },
+          "recipe": "generic_update_board"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "cpu_arch": "aarch64",
+            "cpu_model": ""
+          },
+          "recipe": "generic_install_board"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "cpu_arch": "armv7l",
+            "cpu_model": ""
+          },
+          "recipe": "generic_install_board"
+        },
         {
           "when": {
             "state": "helix",
@@ -71,7 +106,8 @@
       "fallback": {
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-generic"
-      }
+      },
+      "last_resort": true
     },
     {
       "id": "qidi",
@@ -1489,6 +1525,65 @@
       {
         "type": "moonraker_gcode",
         "script": "DISPLAY_ON",
+        "commits": true
+      }
+    ],
+    "generic_install_board": [
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "b=$(. /etc/armbian-release 2>/dev/null; echo \"$BOARD\"); [ -n \"$b\" ] || b=$(timeout 5 tr -d '\\0' < /proc/device-tree/model 2>/dev/null); case \"$b\" in bigtreetech-cb1|bigtreetech-cb2|orangepi*|rock*|radxa*|\"Raspberry Pi\"*|BigTreeTech*|\"Xunlong Orange Pi\"*|Radxa*) echo yes;; *) echo no;; esac",
+        "fact": "board_ok"
+      },
+      {
+        "type": "require",
+        "fact": "board_ok",
+        "equals": "true",
+        "reason": "The installer does not recognise this computer's board, so it will not guess which HelixScreen build it needs. The manual install guide covers other boards.",
+        "doc": "https://helixscreen.org/docs/install"
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "commits": true
+      }
+    ],
+    "generic_update_board": [
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "b=$(. /etc/armbian-release 2>/dev/null; echo \"$BOARD\"); [ -n \"$b\" ] || b=$(timeout 5 tr -d '\\0' < /proc/device-tree/model 2>/dev/null); case \"$b\" in bigtreetech-cb1|bigtreetech-cb2|orangepi*|rock*|radxa*|\"Raspberry Pi\"*|BigTreeTech*|\"Xunlong Orange Pi\"*|Radxa*) echo yes;; *) echo no;; esac",
+        "fact": "board_ok"
+      },
+      {
+        "type": "require",
+        "fact": "board_ok",
+        "equals": "true",
+        "reason": "The installer does not recognise this computer's board, so it will not guess which HelixScreen build it needs. The manual install guide covers other boards.",
+        "doc": "https://helixscreen.org/docs/install"
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
         "commits": true
       }
     ]

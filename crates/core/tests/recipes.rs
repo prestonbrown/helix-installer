@@ -44,19 +44,6 @@ fn fleet(name: &str) -> Facts {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
-/// A fleet record plus the board model Moonraker reports (`cpu_info.model`), which the
-/// recordings predate. ASSUMED values until the pi3 and the CB1 Voron are recorded again.
-fn fleet_sbc(name: &str) -> Facts {
-    let model = match name {
-        "pi3_mainsailos" => "Raspberry Pi 3 Model B Rev 1.2",
-        "cb1_voron" => "BigTreeTech CB1",
-        other => panic!("no board model for {other}"),
-    };
-    let mut f = fleet(name);
-    f.insert("cpu_model".into(), model.into());
-    f
-}
-
 fn sha(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -277,13 +264,16 @@ fn staging_is_what_the_manifest_workflow_lints() {
 #[test]
 fn the_voron_and_the_pi_are_generic_hosts_with_helix_installed() {
     let m = staging();
-    for host in ["pi3_mainsailos", "cb1_voron"] {
+    for (host, recipe_id) in [
+        ("pi3_mainsailos", "generic_update"),
+        ("cb1_voron", "generic_update_board"),
+    ] {
         assert_eq!(
-            identify(&m, &fleet_sbc(host)),
+            identify(&m, &fleet(host)),
             recipe(
                 "generic_klipper",
                 StartState::Helix("v1.0.0".into()),
-                "generic_update"
+                recipe_id
             ),
             "{host}"
         );
@@ -292,7 +282,7 @@ fn the_voron_and_the_pi_are_generic_hosts_with_helix_installed() {
 
 #[test]
 fn a_generic_host_without_helix_gets_the_install_recipe() {
-    let mut f = fleet_sbc("pi3_mainsailos");
+    let mut f = fleet("pi3_mainsailos");
     f.remove("helix_installed");
     f.remove("helix_version");
     assert_eq!(
@@ -303,7 +293,7 @@ fn a_generic_host_without_helix_gets_the_install_recipe() {
 
 #[test]
 fn a_generic_host_on_a_cpu_without_a_build_is_refused() {
-    let mut f = fleet_sbc("cb1_voron");
+    let mut f = fleet("cb1_voron");
     f.insert("cpu_arch".into(), "x86_64".into());
     assert!(matches!(
         identify(&staging(), &f),
@@ -322,7 +312,7 @@ async fn generic_install_asks_for_the_login_and_installs_for_the_cpu() {
     });
     rig.installer_succeeds("pi");
     let m = staging();
-    let mut f = fleet_sbc("pi3_mainsailos");
+    let mut f = fleet("pi3_mainsailos");
     f.remove("helix_installed");
     let picked = identify(&m, &f);
     let mut r = rig.runner(&m, &picked, f);
@@ -350,12 +340,22 @@ async fn generic_update_on_the_voron_passes_update() {
     rig.ssh.set_fallback(|cmd| match cmd {
         "id -u" => out("1000\n", 0),
         "sudo -n true" => out("", 0),
+        c if c == board_probe() => out("yes\n", 0),
         _ => out("", 127),
     });
     rig.installer_succeeds("pi");
     let m = staging();
-    let picked = identify(&m, &fleet_sbc("cb1_voron"));
-    let mut r = rig.runner(&m, &picked, fleet_sbc("cb1_voron"));
+    let picked = identify(&m, &fleet("cb1_voron"));
+    assert_eq!(
+        picked,
+        recipe(
+            "generic_klipper",
+            StartState::Helix("v1.0.0".into()),
+            "generic_update_board"
+        ),
+        "Moonraker names no board on the CB1, so the board is checked over SSH"
+    );
+    let mut r = rig.runner(&m, &picked, fleet("cb1_voron"));
 
     let trace = drive(&mut r, |p, _| match p {
         Prompt::Login { .. } => login("biqu", "biqu"),
@@ -380,7 +380,7 @@ async fn generic_install_stops_after_three_wrong_logins_without_changing_anythin
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "pi", "raspberry");
     let m = staging();
-    let mut f = fleet_sbc("pi3_mainsailos");
+    let mut f = fleet("pi3_mainsailos");
     f.remove("helix_installed");
     let picked = identify(&m, &f);
     let mut r = rig.runner(&m, &picked, f);
@@ -406,13 +406,13 @@ async fn generic_restore_runs_the_uninstaller() {
     rig.ssh.accept(ADDR, "pi", "raspberry");
     rig.installer_succeeds("pi");
     let m = staging();
-    let restore = restore_for(&m, "generic_klipper", &fleet_sbc("pi3_mainsailos")).unwrap();
+    let restore = restore_for(&m, "generic_klipper", &fleet("pi3_mainsailos")).unwrap();
     let picked = recipe(
         "generic_klipper",
         StartState::Helix(String::new()),
         &restore,
     );
-    let mut r = rig.runner(&m, &picked, fleet_sbc("pi3_mainsailos"));
+    let mut r = rig.runner(&m, &picked, fleet("pi3_mainsailos"));
 
     let trace = drive(&mut r, |p, _| match p {
         Prompt::Login { .. } => login("pi", "raspberry"),
@@ -1368,10 +1368,12 @@ fn refused_as(f: &Facts) -> Option<(String, String)> {
 }
 
 #[test]
-fn a_recording_without_the_board_model_is_refused_with_the_manual_install_guide() {
+fn a_host_whose_moonraker_gives_no_board_fact_is_refused_with_the_manual_install_guide() {
     for host in ["pi3_mainsailos", "cb1_voron"] {
+        let mut f = fleet(host);
+        f.remove("cpu_model");
         assert_eq!(
-            identify(&staging(), &fleet(host)),
+            identify(&staging(), &f),
             Identified::Refuse {
                 printer_id: None,
                 doc: GENERIC_REFUSE_DOC.into(),
@@ -1382,9 +1384,159 @@ fn a_recording_without_the_board_model_is_refused_with_the_manual_install_guide(
     }
 }
 
+/// The `ssh` command of the first probe whose fact is `board_ok`.
+fn board_probe() -> String {
+    staging().recipes["generic_install_board"]
+        .iter()
+        .find_map(|s| match s {
+            helix_installer_core::manifest::Step::Probe {
+                ssh: Some(cmd),
+                fact: Some(fact),
+                ..
+            } if fact == "board_ok" => Some(cmd.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// Runs the board probe with a real `sh`, reading `armbian` and `dt_model` in place of
+/// /etc/armbian-release and /proc/device-tree/model.
+fn run_board_probe(armbian: Option<&str>, dt_model: Option<&[u8]>) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let rel = dir.path().join("armbian-release");
+    let model = dir.path().join("model");
+    if let Some(a) = armbian {
+        std::fs::write(&rel, a).unwrap();
+    }
+    if let Some(m) = dt_model {
+        std::fs::write(&model, m).unwrap();
+    }
+    let cmd = board_probe()
+        .replace("/etc/armbian-release", rel.to_str().unwrap())
+        .replace("/proc/device-tree/model", model.to_str().unwrap());
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn the_board_probe_accepts_known_sbcs_and_nothing_else() {
+    let armbian = |board: &str| format!("BOARD={board}\nBOARD_NAME=\"x\"\nBOARDFAMILY=sun50iw9\n");
+    for board in [
+        "bigtreetech-cb1",
+        "bigtreetech-cb2",
+        "orangepi5",
+        "orangepizero2",
+        "rock-5b",
+        "radxa-zero3",
+    ] {
+        assert_eq!(
+            run_board_probe(Some(&armbian(board)), None),
+            "yes",
+            "{board}"
+        );
+    }
+    for board in ["mkspi", "qidi", "sovol-sv08", ""] {
+        assert_eq!(
+            run_board_probe(Some(&armbian(board)), None),
+            "no",
+            "{board:?}"
+        );
+    }
+    assert_eq!(
+        run_board_probe(None, Some(b"Raspberry Pi 4 Model B Rev 1.4\0")),
+        "yes"
+    );
+    assert_eq!(run_board_probe(None, Some(b"Rockchip RK3308 EVB\0")), "no");
+    assert_eq!(
+        run_board_probe(None, None),
+        "no",
+        "a host that names no board"
+    );
+}
+
+#[tokio::test]
+async fn a_cb1_voron_whose_board_is_not_whitelisted_is_refused_before_any_change() {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "biqu", "biqu");
+    rig.ssh.set_fallback(|cmd| match cmd {
+        "id -u" => out("1000\n", 0),
+        c if c == board_probe() => out("no\n", 0),
+        _ => out("", 127),
+    });
+    rig.installer_succeeds("pi");
+    let m = staging();
+    let picked = identify(&m, &fleet("cb1_voron"));
+    let mut r = rig.runner(&m, &picked, fleet("cb1_voron"));
+
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::Login { .. } => login("biqu", "biqu"),
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    match &trace.end {
+        Event::Refused { doc, .. } => assert_eq!(doc, GENERIC_REFUSE_DOC),
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(!r.state().committed);
+    assert!(rig.installs().is_empty());
+}
+
+#[tokio::test]
+async fn the_pi3_installs_without_the_ssh_board_check() {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "pi", "raspberry");
+    rig.installer_succeeds("pi");
+    let m = staging();
+    let picked = identify(&m, &fleet("pi3_mainsailos"));
+    assert_eq!(
+        picked,
+        recipe(
+            "generic_klipper",
+            StartState::Helix("v1.0.0".into()),
+            "generic_update"
+        )
+    );
+    let mut r = rig.runner(&m, &picked, fleet("pi3_mainsailos"));
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::Login { .. } => login("pi", "raspberry"),
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(!rig.ssh.commands().contains(&board_probe()));
+}
+
+#[test]
+fn a_specific_printer_with_no_board_model_is_never_generic() {
+    let m = staging();
+    for (name, id) in [
+        ("qidi_box", "qidi"),
+        ("k2_plus", "k2"),
+        ("k1c_helper_script", "k1"),
+    ] {
+        assert!(
+            matches!(identify(&m, &fleet(name)), Identified::Recipe { ref printer_id, .. } if printer_id == id),
+            "{name}: {:?}",
+            identify(&m, &fleet(name))
+        );
+        assert!(
+            matches!(
+                identify_as(&m, "generic_klipper", &fleet(name)),
+                Identified::Refuse { .. }
+            ),
+            "{name} picked as generic"
+        );
+    }
+}
+
 #[test]
 fn an_unknown_board_on_debian_is_refused_not_given_the_pi_build() {
-    let mut f = fleet_sbc("pi3_mainsailos");
+    let mut f = fleet("pi3_mainsailos");
     f.insert("cpu_model".into(), "Rockchip RK3562 EVB".into());
     assert!(matches!(
         identify(&staging(), &f),
@@ -1479,7 +1631,7 @@ fn no_fleet_printer_is_caught_by_a_refusal() {
     }
     for name in ["pi3_mainsailos", "cb1_voron"] {
         assert!(
-            matches!(identify(&m, &fleet_sbc(name)), Identified::Recipe { .. }),
+            matches!(identify(&m, &fleet(name)), Identified::Recipe { .. }),
             "{name}"
         );
     }
@@ -1603,7 +1755,7 @@ fn every_fleet_printer_identifies_as_itself_and_nothing_else() {
     ];
     for host in ["pi3_mainsailos", "cb1_voron"] {
         assert!(
-            matches!(identify(&m, &fleet_sbc(host)), Identified::Recipe { ref printer_id, .. } if printer_id == "generic_klipper"),
+            matches!(identify(&m, &fleet(host)), Identified::Recipe { ref printer_id, .. } if printer_id == "generic_klipper"),
             "{host}"
         );
     }

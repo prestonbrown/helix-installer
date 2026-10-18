@@ -506,3 +506,40 @@ fn restore_follows_the_facts_when_it_is_chosen_by_them() {
     assert_eq!(restore_for(&m, "two", &Facts::new()), None);
     assert_eq!(restore_for(&m, "nope", &Facts::new()), None);
 }
+
+#[test]
+fn a_last_resort_printer_matches_only_when_no_other_does() {
+    let m: Manifest = serde_json::from_value(serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "artifacts": {}, "recipes": {"r": []},
+        "printers": [
+            {"id": "generic", "name": "Klipper host", "last_resort": true,
+             "identify": [{"cpu_model": ""}],
+             "recipes": [{"when": {"state": "modded:moonraker"}, "recipe": "r"}],
+             "restore": "r", "fallback": {"refuse": true, "doc": "https://d/g"}},
+            {"id": "qidi", "name": "QIDI", "identify": [{"klipper_hostname": "linaro-alip"}],
+             "recipes": [{"when": {"state": "modded:moonraker"}, "recipe": "r"}],
+             "restore": "r", "fallback": {"refuse": true, "doc": "https://d/q"}}
+        ]
+    }))
+    .unwrap();
+    let f = |v: serde_json::Value| -> Facts { serde_json::from_value(v).unwrap() };
+    let qidi = f(
+        serde_json::json!({"has_moonraker": true, "cpu_model": "", "klipper_hostname": "linaro-alip"}),
+    );
+    let voron =
+        f(serde_json::json!({"has_moonraker": true, "cpu_model": "", "klipper_hostname": "voron"}));
+    assert!(
+        matches!(identify(&m, &qidi), Identified::Recipe { ref printer_id, .. } if printer_id == "qidi")
+    );
+    assert!(
+        matches!(identify(&m, &voron), Identified::Recipe { ref printer_id, .. } if printer_id == "generic")
+    );
+    assert!(matches!(
+        identify_as(&m, "generic", &qidi),
+        Identified::Refuse { printer_id: Some(ref p), .. } if p == "generic"
+    ));
+    assert!(matches!(
+        identify_as(&m, "generic", &voron),
+        Identified::Recipe { .. }
+    ));
+}

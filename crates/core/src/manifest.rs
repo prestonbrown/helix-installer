@@ -72,6 +72,10 @@ pub struct Printer {
     /// printer is refused with its `fallback.doc`, whatever else the facts also match.
     #[serde(default)]
     pub refused: bool,
+    /// Matches only when no other printer does: the catch-all for hosts that answer too
+    /// little to be told apart from a vendor's printer.
+    #[serde(default)]
+    pub last_resort: bool,
 }
 
 /// One restore recipe, or a list chosen by the facts (first match), for a printer whose way

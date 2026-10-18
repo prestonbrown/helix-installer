@@ -134,6 +134,20 @@ fn refuse(printer: &Printer) -> Identified {
     }
 }
 
+/// The printers the facts match, a last-resort printer only when nothing else does.
+fn matching<'a>(m: &'a Manifest, f: &Facts) -> Vec<&'a Printer> {
+    let all: Vec<&Printer> = m
+        .printers
+        .iter()
+        .filter(|p| printer_matches(p, f))
+        .collect();
+    if all.iter().any(|p| !p.last_resort) {
+        all.into_iter().filter(|p| !p.last_resort).collect()
+    } else {
+        all
+    }
+}
+
 /// The first refused printer the facts match: it wins over every other match.
 fn refused_match<'a>(m: &'a Manifest, f: &Facts) -> Option<&'a Printer> {
     m.printers
@@ -153,11 +167,7 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
     if let Some(p) = refused_match(m, f) {
         return turned_away(p);
     }
-    let matched: Vec<&Printer> = m
-        .printers
-        .iter()
-        .filter(|p| printer_matches(p, f))
-        .collect();
+    let matched = matching(m, f);
     let printer = match matched.as_slice() {
         [] => return not_recognised(),
         [one] => *one,
@@ -235,11 +245,12 @@ pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
     if let Some(p) = refused_match(m, f) {
         return turned_away(p);
     }
-    let matched_any = m.printers.iter().any(|p| printer_matches(p, f));
+    let matched = matching(m, f);
+    let matched_any = !matched.is_empty();
     if !f.is_empty() && !matched_any {
         return not_recognised();
     }
-    if matched_any && !printer_matches(printer, f) {
+    if matched_any && !matched.iter().any(|p| p.id == printer.id) {
         return Identified::Refuse {
             printer_id: Some(printer.id.clone()),
             doc: printer.fallback.doc.clone(),
