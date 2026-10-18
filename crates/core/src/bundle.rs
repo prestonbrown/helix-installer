@@ -10,7 +10,7 @@ use serde_json::Value;
 const SECRET: &str = "<secret>";
 const IP: &str = "<ip>";
 const MAC: &str = "<mac>";
-const SERIAL: &str = "<serial>";
+pub(crate) const SERIAL: &str = "<serial>";
 
 /// `secrets` are the passwords seen in the run (the run state never holds them). Each is
 /// removed wherever it appears; an empty one is ignored. `mask` additionally hides IPv4 and
@@ -33,11 +33,16 @@ pub fn support_bundle(
         if let Some(serial) = serial.filter(|s| !s.is_empty()) {
             text = text.replace(&serial, SERIAL);
         }
-        text = rewrite_runs(&text, is_mac_char, mask_mac);
-        text = rewrite_runs(&text, is_v6_char, mask_ipv6);
-        text = rewrite_runs(&text, is_v4_char, mask_ipv4);
+        text = mask_addresses(&text);
     }
     text
+}
+
+/// Hides MAC, IPv6 and IPv4 addresses (in that order, so a MAC is not read as IPv6).
+pub(crate) fn mask_addresses(text: &str) -> String {
+    let text = rewrite_runs(text, is_mac_char, mask_mac);
+    let text = rewrite_runs(&text, is_v6_char, mask_ipv6);
+    rewrite_runs(&text, is_v4_char, mask_ipv4)
 }
 
 fn serial_of(state: &RunState) -> Option<String> {
