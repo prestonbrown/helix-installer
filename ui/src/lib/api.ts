@@ -19,6 +19,7 @@ export type ErrorKind =
   | "choose_model"
   | "unsupported"
   | "storage"
+  | "run_committed"
   | "unexpected";
 
 const MESSAGES: Record<ErrorKind, string> = {
@@ -32,6 +33,8 @@ const MESSAGES: Record<ErrorKind, string> = {
   unsupported: "The installer can't set up this printer.",
   storage:
     "The installer couldn't save its progress on this computer. Check that the disk isn't full, then try again.",
+  run_committed:
+    "This install has already changed your printer, so it can't be put aside. Continue it to finish setting up the printer.",
   unexpected: "The installer couldn't do that. Try again, or close the installer and open it again.",
 };
 
@@ -81,7 +84,21 @@ export const startRun = (candidateKey: string, printerId?: string | null) =>
 export const advance = (runId: string, input?: Input | null) =>
   call<AdvanceView>("advance", { runId, input: input ?? null });
 export const unfinishedRuns = () => call<RunSummary[]>("unfinished_runs");
+export const dismissRun = (runId: string) => call<void>("dismiss_run", { runId });
 export const exportBundle = (runId: string, mask: boolean) =>
   call<string>("export_bundle", { runId, mask });
 export const recordPrinter = (candidateKey: string) =>
   call<string>("record_printer", { candidateKey });
+
+/** What to tell the user when starting the printer they picked failed. A refusal of the model
+ * they chose says to choose again rather than only that the printer can't be set up. */
+export function pickFailure(e: ApiError): string {
+  if (e.kind !== "unsupported") return e.message;
+  if (e.detail.includes("answers as a different model")) {
+    return "This printer answers as a different model from the one you picked. Pick another model, or go back to the printers found.";
+  }
+  if (e.detail === "printer not recognised") {
+    return "Your printer answered, but it isn't one the installer knows. The install guide shows how to set it up by hand.";
+  }
+  return e.message;
+}

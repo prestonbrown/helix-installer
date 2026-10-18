@@ -197,6 +197,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       event: "refused",
       doc: "https://helixscreen.org/docs/install-k1",
       reason: "K1 firmware 1.2.9.15 is older than the 1.3.3.5 this install needs",
+      cancelled: false,
     },
     run: run({ step: 4, step_kind: "require" }),
   },
@@ -222,7 +223,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
   },
 };
 
-const unfinished: RunSummary[] = [
+let unfinished: RunSummary[] = [
   {
     run_id: "run-mock",
     printer_name: "Creality K1",
@@ -231,6 +232,15 @@ const unfinished: RunSummary[] = [
     total_steps: 9,
     committed: true,
     reason: "the printer stopped answering",
+  },
+  {
+    run_id: "run-mock-2",
+    printer_name: "FlashForge Adventurer 5M",
+    address: "192.168.1.62",
+    step: 3,
+    total_steps: 10,
+    committed: false,
+    reason: "could not download the firmware: timed out",
   },
 ];
 
@@ -267,12 +277,21 @@ export function install(): void {
         return new Promise((resolve) => setTimeout(() => resolve(found), 300));
       case "unfinished_runs":
         return screen === "resume" ? unfinished : [];
+      case "dismiss_run": {
+        const r = unfinished.find((u) => u.run_id === a.runId);
+        if (r?.committed) {
+          throw { kind: "run_committed", message: "this install has already changed the printer", doc: null };
+        }
+        unfinished = unfinished.filter((u) => u.run_id !== a.runId);
+        return null;
+      }
       case "add_manual_host":
         return { ...found[0], key: String(a.ip), address: String(a.ip) };
       case "start_run":
         return "run-mock";
       case "advance": {
-        const s = screens[screen] ?? screens.info;
+        // Continuing a saved run from the resume banner opens it where it failed.
+        const s = screens[screen] ?? (screen === "resume" ? screens.recovery : screens.info);
         // A long step: the first answer is progress, the next never comes.
         if (s.event.event === "progress" && advanced) return new Promise(() => {});
         advanced = true;

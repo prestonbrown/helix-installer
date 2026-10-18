@@ -71,7 +71,7 @@ export type RunEvent =
       fraction: number | null;
     }
   | { event: "done" }
-  | { event: "refused"; doc: string; reason: string }
+  | { event: "refused"; doc: string; reason: string; cancelled: boolean }
   | { event: "failed"; committed: boolean; step: number; reason: string; help: string | null };
 
 export interface RunInfo {

@@ -45,23 +45,20 @@
 </script>
 
 <section class="card body">
-  <div class="notice warn" role="status">Do not turn off your printer.</div>
-  <h1>Your {run.printer_name} is part-way through the install</h1>
+  <header class="head">
+    <h1>Your {run.printer_name} is part-way through the install</h1>
+    <span class="keep-on" role="status">Do not turn off your printer</span>
+  </header>
 
-  <h2>Where your printer is now</h2>
   <p>
     The install stopped at step {Math.min(run.step + 1, run.total_steps)} of {run.total_steps}: {stepLabel(
       run.step_kind,
-    )}.
+    )}. {stoppedState(run.step_kind)}
   </p>
-  <p>{stoppedState(run.step_kind)}</p>
-
-  <h2>What to do next</h2>
-  <ol>
-    <li>Leave the printer switched on and connected to your network.</li>
-    <li>Choose <strong>Try this step again</strong>.</li>
-    <li>If it stops again, follow the recovery guide for your printer.</li>
-  </ol>
+  <p>
+    Leave the printer switched on and connected to your network, then choose <strong>Try this step again</strong>.
+    If it stops again, follow the recovery guide for your printer.
+  </p>
   {#if event.help && !isUrl(event.help)}<p class="muted">{event.help}</p>{/if}
 
   <div class="actions">
@@ -71,8 +68,8 @@
   </div>
 </section>
 
-<section class="card body help">
-  <h2>Get help</h2>
+<details class="card help">
+  <summary>Get help</summary>
   <p>
     Make a report of this install to send with your question. It lists each step and what the printer answered.
     Passwords are never included.
@@ -90,24 +87,43 @@
     <Copyable text={report} rows={8} />
   {/if}
   <p class="muted small">Technical detail: {event.reason}</p>
-</section>
+</details>
 
 <style>
   .body {
-    padding: 2rem;
+    padding: 1.5rem 2rem;
   }
-  h2 {
-    margin-top: 1.5rem;
+  .head {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
   }
-  ol {
-    margin: 0 0 0.75rem;
-    padding-left: 1.25rem;
+  .head h1 {
+    margin: 0;
   }
-  li {
-    margin-bottom: 0.35rem;
+  .keep-on {
+    flex: none;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-weight: 700;
+    font-size: 0.9rem;
+    white-space: nowrap;
   }
-  .help h2 {
-    margin-top: 0;
+  .help {
+    margin-top: 1rem;
+    padding: 1rem 2rem;
+  }
+  .help summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1.1rem;
+  }
+  .help[open] summary {
+    margin-bottom: 0.75rem;
   }
   .check {
     display: flex;

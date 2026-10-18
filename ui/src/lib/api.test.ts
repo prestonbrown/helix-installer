@@ -140,6 +140,40 @@ describe("unfinishedRuns", () => {
   });
 });
 
+describe("dismissRun", () => {
+  it("sends the run id", async () => {
+    invoke.mockResolvedValueOnce(null);
+    await api.dismissRun("run-1");
+    expect(invoke).toHaveBeenCalledWith("dismiss_run", { runId: "run-1" });
+  });
+  it("says a run that changed the printer can only be continued", async () => {
+    rejectWith("run_committed", "this install has already changed the printer");
+    const e = await failure(api.dismissRun("run-1"));
+    expect(e.kind).toBe("run_committed");
+    expect(e.message).toMatch(/already changed your printer/);
+    expect(e.message).toMatch(/Continue/);
+  });
+});
+
+describe("pickFailure", () => {
+  const unsupported = (detail: string) =>
+    new ApiError("unsupported", "The installer can't set up this printer.", detail, "https://x");
+  it("asks for another model when the printer answers as a different one", () => {
+    const m = api.pickFailure(unsupported("this printer answers as a different model, not a Creality K1"));
+    expect(m).toMatch(/different model/);
+    expect(m).toMatch(/[Pp]ick another model/);
+  });
+  it("says the printer answered but is not one the installer knows", () => {
+    expect(api.pickFailure(unsupported("printer not recognised"))).toMatch(/isn't one the installer knows/);
+  });
+  it("keeps the plain message for any other refusal", () => {
+    const e = unsupported("no install recipe for this Creality K1 setup");
+    expect(api.pickFailure(e)).toBe(e.message);
+    const other = new ApiError("storage", "disk full", "", null);
+    expect(api.pickFailure(other)).toBe("disk full");
+  });
+});
+
 describe("exportBundle", () => {
   it("sends the mask choice", async () => {
     invoke.mockResolvedValueOnce("report");

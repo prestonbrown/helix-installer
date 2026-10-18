@@ -13,6 +13,7 @@
   let runId = $state<string | null>(null);
   let listError = $state<ApiError | null>(null);
   let unfinished = $state<RunSummary[]>([]);
+  let resumeHidden = $state(false);
   let versionClicks = 0;
 
   async function load() {
@@ -25,18 +26,33 @@
       screen = "no_list";
       return;
     }
+    await loadUnfinished();
+    screen = "picker";
+  }
+
+  async function loadUnfinished() {
     try {
       unfinished = await api.unfinishedRuns();
     } catch {
       unfinished = [];
     }
-    screen = "picker";
   }
 
   function open(id: string) {
     runId = id;
-    unfinished = unfinished.filter((r) => r.run_id !== id);
     screen = "run";
+  }
+
+  /** Back from a run: what it left unfinished, and any other run, is offered again. */
+  async function backToPicker() {
+    resumeHidden = false;
+    await loadUnfinished();
+    screen = "picker";
+  }
+
+  async function forget(id: string) {
+    await api.dismissRun(id);
+    await loadUnfinished();
   }
 
   function versionClicked() {
@@ -81,13 +97,13 @@
         {#if listError?.detail}<p class="muted small">Technical detail: {listError.detail}</p>{/if}
       </section>
     {:else if screen === "picker"}
-      {#if unfinished.length > 0}
-        <Resume runs={unfinished} oncontinue={open} ondismiss={() => (unfinished = [])} />
+      {#if unfinished.length > 0 && !resumeHidden}
+        <Resume runs={unfinished} oncontinue={open} onforget={forget} onhide={() => (resumeHidden = true)} />
       {/if}
       <Picker onstart={open} />
     {:else if screen === "run" && runId}
       {#key runId}
-        <Run {runId} onexit={() => (screen = "picker")} />
+        <Run {runId} onexit={backToPicker} />
       {/key}
     {/if}
   </main>

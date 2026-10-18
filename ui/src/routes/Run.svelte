@@ -271,7 +271,7 @@
     </section>
   {:else if ev.event === "refused"}
     <section class="card body">
-      {#if ev.reason.startsWith("cancelled")}
+      {#if ev.cancelled}
         <h1>Install stopped</h1>
         <p class="lead">Nothing on your printer was changed.</p>
       {:else}

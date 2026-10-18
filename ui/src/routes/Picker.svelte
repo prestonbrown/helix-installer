@@ -87,7 +87,7 @@
 
 {#snippet failure(e: ApiError)}
   <div class="notice danger" role="alert">
-    <p>{e.message}</p>
+    <p>{api.pickFailure(e)}</p>
     {#if e.doc}
       <button class="link" onclick={() => openGuide(e.doc!)}>Open the install guide</button>
     {/if}
@@ -213,7 +213,7 @@
     numbers with dots between them.
   </p>
 
-  <div class="actions">
+  <div class="actions sticky">
     <button
       class="primary"
       disabled={!model || !address.trim() || busy !== null}
@@ -337,6 +337,17 @@
   .field-error {
     color: var(--danger);
     font-weight: 600;
+  }
+  /* The model grid can be taller than the window; Continue stays in view below it. */
+  .sticky {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    /* Wide enough to cover a focus outline scrolling under it. */
+    margin: 1rem -0.5rem 0;
+    padding: 0.75rem 0.5rem;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
   }
   .visually-hidden {
     position: absolute;
