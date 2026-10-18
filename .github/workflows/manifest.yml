@@ -1,7 +1,9 @@
 name: Manifest
 
 on:
+  # Branches only: a release tag is built by release.yml, not re-checked here.
   push:
+    branches: ['**']
   pull_request:
 
 jobs:
