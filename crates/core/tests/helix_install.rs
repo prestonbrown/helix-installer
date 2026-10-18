@@ -24,7 +24,8 @@ const ADDR: &str = "192.168.1.50";
 const PASSWORD: &str = "s3cret-pw";
 const TAG: &str = "v1.0.5";
 const TARBALL: &[u8] = b"helixscreen tarball bytes";
-const INSTALL_SH: &[u8] = b"#!/bin/sh\necho install\n";
+const INSTALL_SH: &[u8] =
+    b"#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --progress) P=1 ;;\n  esac\n  shift\ndone\necho install\n";
 
 // ---------------------------------------------------------------- progress parser
 
@@ -293,7 +294,7 @@ fn spawned(f: &Fakes) -> Vec<(String, Option<Vec<u8>>)> {
     f.ssh
         .calls()
         .into_iter()
-        .filter(|(c, _)| c.contains("install.sh"))
+        .filter(|(c, _)| c.starts_with("sh ") && c.contains("install.sh"))
         .collect()
 }
 
@@ -918,4 +919,93 @@ async fn the_override_wins_over_the_recipes_channel() {
         release_list_requests(&f),
         vec![releases_manifest_url(Channel::Stable)]
     );
+}
+
+// ---------------------------------------------------------------- capability and cleanup
+
+const OLD_INSTALL_SH: &[u8] =
+    b"#!/bin/sh\ncase \"$1\" in\n  --update) U=1 ;;\n  --help) usage ;;\nesac\n";
+
+fn rm_commands(f: &Fakes) -> Vec<String> {
+    f.ssh
+        .commands()
+        .into_iter()
+        .filter(|c| c.starts_with("rm "))
+        .collect()
+}
+
+const CLEANUP: &str = "rm -f '/tmp/helixscreen-pi-v1.0.5.tar.gz' '/tmp/install.sh'";
+
+#[tokio::test]
+async fn an_install_sh_without_progress_support_is_refused_before_any_upload() {
+    let old = json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL, "digest": format!("sha256:{}", sha(OLD_INSTALL_SH)) });
+    let f = Fakes::new(&["pi"], old);
+    f.fetch.add(INSTALL_SH_URL, OLD_INSTALL_SH.to_vec());
+    let reason = fails_before_upload(f, json!("pi"), json!({})).await;
+    assert_eq!(
+        reason,
+        "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer."
+    );
+}
+
+#[tokio::test]
+async fn the_uploaded_files_are_removed_after_a_successful_install() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f.runner("root", install_step(json!("pi")), json!({}));
+    install_with(&f, r).await;
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn the_uploaded_files_are_removed_after_a_failed_install() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (pl(&["result", "fail", "no space"]).as_str(), None),
+        ("", Some(1)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("installer failed"), "{ev:?}");
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn the_uploaded_files_are_removed_after_an_exit_without_a_result() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh
+        .script_job(vec![("Usage: install.sh\n", None), ("", Some(1))]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(
+        failure(&ev).contains("without reporting a result"),
+        "{ev:?}"
+    );
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn a_spawn_failure_removes_what_was_uploaded() {
+    let f = Fakes::standard(&["pi"]);
+    // No job is scripted, so the fake's spawn_detached fails after both uploads.
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("could not start"), "{ev:?}");
+    assert_eq!(f.ssh.uploads().len(), 2);
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn a_cleanup_that_fails_does_not_fail_the_step() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.on_command(
+        CLEANUP,
+        ExecOutput {
+            stdout: String::new(),
+            stderr: "read-only".into(),
+            exit: 1,
+        },
+    );
+    let r = f.runner("root", install_step(json!("pi")), json!({}));
+    install_with(&f, r).await;
+    assert_eq!(rm_commands(&f).len(), 1);
 }

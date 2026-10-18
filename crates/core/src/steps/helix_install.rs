@@ -34,6 +34,10 @@ pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
 const SUDO_DOC: &str = "https://helixscreen.org/docs/install";
 const SUDO_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Fact holding the remote paths this step uploaded, so a reopened run can still remove them.
+const UPLOADED_FACT: &str = "helix_install_uploaded";
+const TOO_OLD: &str = "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer.";
 const TITLE: &str = "Installing HelixScreen";
 
 #[derive(Deserialize)]
@@ -182,6 +186,17 @@ async fn launch(
         sh_quote(&tarball_remote),
         if update { " --update" } else { "" }
     );
+    // install.sh only understands --progress in newer releases; an older one prints its usage
+    // and exits, after the upload has already filled the printer's /tmp.
+    let script_text = std::fs::read(&script_local)
+        .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
+    if !handles_progress(&String::from_utf8_lossy(&script_text)) {
+        return Err(StepOutcome::failed(TOO_OLD));
+    }
+    ctx.facts.insert(
+        UPLOADED_FACT.into(),
+        serde_json::json!([tarball_remote, script_remote]),
+    );
     let sent = async {
         let ssh = ctx.ssh().await?;
         ssh.upload(&tarball_local, &tarball_remote).await?;
@@ -190,10 +205,55 @@ async fn launch(
         ssh.spawn_detached(&command, None).await
     }
     .await;
-    sent.map_err(|e| {
-        ctx.drop_ssh();
-        StepOutcome::failed(format!("could not start the installer on the printer: {e}"))
-    })
+    match sent {
+        Ok(job) => Ok(job),
+        Err(e) => {
+            ctx.drop_ssh();
+            remove_uploaded(ctx).await;
+            Err(StepOutcome::failed(format!(
+                "could not start the installer on the printer: {e}"
+            )))
+        }
+    }
+}
+
+/// Whether `install.sh` has a case arm for `--progress`.
+fn handles_progress(script: &str) -> bool {
+    script
+        .lines()
+        .any(|l| l.contains("--progress)") || l.contains("--progress|"))
+}
+
+/// Removes the exact files this step uploaded. A failure is logged, never a step failure.
+async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
+    let Some(files) = ctx.facts.remove(UPLOADED_FACT) else {
+        return;
+    };
+    let paths: Vec<String> = files
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(sh_quote).collect())
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return;
+    }
+    let command = format!("rm -f {}", paths.join(" "));
+    let ran = match ctx.ssh().await {
+        Ok(s) => s.exec(&command, None, CLEANUP_TIMEOUT).await,
+        Err(e) => Err(e),
+    };
+    match ran {
+        Ok(out) if out.exit == 0 => {}
+        Ok(out) => ctx.log(format!(
+            "could not remove the uploaded installer files (exit {})",
+            out.exit
+        )),
+        Err(e) => {
+            ctx.drop_ssh();
+            ctx.log(format!(
+                "could not remove the uploaded installer files: {e}"
+            ));
+        }
+    }
 }
 
 /// install.sh runs as the login user and calls sudo itself, which cannot prompt from a
@@ -298,6 +358,7 @@ async fn follow(ctx: &mut StepCtx<'_>, running: &RemoteJob, platform: &str) -> S
 
     if let Some((ok, reason)) = result {
         job::forget(ctx);
+        remove_uploaded(ctx).await;
         if !ok {
             let reason = reason.unwrap_or_else(|| "no reason given".into());
             return StepOutcome::failed(format!("the HelixScreen installer failed: {reason}"));
@@ -340,12 +401,14 @@ async fn follow(ctx: &mut StepCtx<'_>, running: &RemoteJob, platform: &str) -> S
         }
         Followed::Exited(code) => {
             job::forget(ctx);
+            remove_uploaded(ctx).await;
             StepOutcome::failed(format!(
                 "the installer exited ({code}) without reporting a result{tail}"
             ))
         }
         Followed::Died => {
             job::forget(ctx);
+            remove_uploaded(ctx).await;
             StepOutcome::failed("the installer stopped without reporting a result")
         }
         Followed::Silent => StepOutcome::failed(format!(
