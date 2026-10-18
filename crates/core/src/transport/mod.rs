@@ -4,6 +4,7 @@
 //! plus the clock. Recipes depend only on these traits so they run end to end
 //! against the scriptable fakes in `fake`.
 
+pub mod drives_sys;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
 pub mod fetch_http;
@@ -132,7 +133,10 @@ pub trait Drives: Send + Sync {
     /// Every drive with its `removable` and `system` flags, unfiltered;
     /// callers decide which to offer.
     fn list_drives(&self) -> Result<Vec<Drive>>;
+    /// Writes `src` to `name` in the drive's root; `name` is never a path.
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()>;
+    /// Lowercase hex sha256 of the file `name` as it now reads back from the drive.
+    async fn sha256_of(&self, drive: &Drive, name: &str) -> Result<String>;
     async fn eject(&self, drive: &Drive) -> Result<()>;
 }
 

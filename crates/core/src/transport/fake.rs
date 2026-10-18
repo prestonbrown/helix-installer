@@ -326,6 +326,8 @@ struct DrivesState {
     drives: Vec<Drive>,
     files: HashMap<(String, String), Vec<u8>>,
     ejected: Vec<String>,
+    corrupt_copies: bool,
+    fail_eject: bool,
 }
 
 #[derive(Default)]
@@ -350,6 +352,14 @@ impl FakeDrives {
     pub fn ejected(&self) -> Vec<String> {
         lock(&self.state).ejected.clone()
     }
+    /// Every later copy lands with its last byte changed, as a failing stick would leave it.
+    pub fn corrupt_copies(&self) {
+        lock(&self.state).corrupt_copies = true;
+    }
+    /// Every later `eject` fails, as for a stick another program holds open.
+    pub fn fail_eject(&self) {
+        lock(&self.state).fail_eject = true;
+    }
     fn known(&self, d: &Drive) -> Result<()> {
         if lock(&self.state).drives.iter().any(|x| x.id == d.id) {
             Ok(())
@@ -366,15 +376,29 @@ impl Drives for FakeDrives {
     }
     async fn copy_to(&self, drive: &Drive, src: &Path, name: &str) -> Result<()> {
         self.known(drive)?;
-        let bytes = std::fs::read(src).map_err(|e| TransportError::Io(e.to_string()))?;
-        lock(&self.state)
-            .files
-            .insert((drive.id.clone(), name.into()), bytes);
+        let mut bytes = std::fs::read(src).map_err(|e| TransportError::Io(e.to_string()))?;
+        let mut st = lock(&self.state);
+        if st.corrupt_copies {
+            if let Some(b) = bytes.last_mut() {
+                *b ^= 0xff;
+            }
+        }
+        st.files.insert((drive.id.clone(), name.into()), bytes);
         Ok(())
+    }
+    async fn sha256_of(&self, drive: &Drive, name: &str) -> Result<String> {
+        self.known(drive)?;
+        self.file(&drive.id, name)
+            .map(|b| crate::cache::sha256_hex(&b))
+            .ok_or_else(|| TransportError::Io(format!("no file {name} on {}", drive.id)))
     }
     async fn eject(&self, drive: &Drive) -> Result<()> {
         self.known(drive)?;
-        lock(&self.state).ejected.push(drive.id.clone());
+        let mut st = lock(&self.state);
+        if st.fail_eject {
+            return Err(TransportError::Io("the drive is busy".into()));
+        }
+        st.ejected.push(drive.id.clone());
         Ok(())
     }
 }

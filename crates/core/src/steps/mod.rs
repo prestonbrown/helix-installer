@@ -13,6 +13,7 @@ pub mod progress;
 pub mod require;
 pub mod ssh_run;
 pub mod wait_for;
+pub mod write_stick;
 
 use crate::facts::Facts;
 use crate::manifest::{Login, Manifest, Step};
@@ -66,6 +67,7 @@ pub struct Session {
     login: Option<Login>,
     ssh: Option<Box<dyn SshSession>>,
     job_cursor: Option<job::JobCursor>,
+    stick: Option<write_stick::Stage>,
 }
 
 /// Everything a step may read or change while it runs.
@@ -202,7 +204,10 @@ pub(crate) async fn run_builtin(
             dir,
             ..
         } => helix_install::run(ctx, platform, *update, dir.as_deref(), input).await,
-        Step::WriteStick { .. } | Step::SshLogin { .. } => {
+        Step::WriteStick {
+            artifacts, rename, ..
+        } => write_stick::run(ctx, artifacts, rename, input).await,
+        Step::SshLogin { .. } => {
             StepOutcome::failed(format!("unsupported step {}", step.type_name()))
         }
     }

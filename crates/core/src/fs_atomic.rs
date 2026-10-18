@@ -30,14 +30,14 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Makes the rename itself durable. Best effort: the data is already safe in the file.
 #[cfg(unix)]
-fn sync_dir(path: &Path) {
+pub(crate) fn sync_dir(path: &Path) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
     }
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_path: &Path) {}
+pub(crate) fn sync_dir(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
