@@ -702,3 +702,66 @@ async fn ssh_run_whose_process_dies_fails() {
     let (ev, _) = settle(&mut r).await;
     assert!(failure(&ev).contains("stopped"), "{ev:?}");
 }
+
+#[tokio::test]
+async fn a_retry_after_a_silence_timeout_waits_a_whole_window_again() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![(&pl(&["platform", "pi"]), None)]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("nothing"), "{ev:?}");
+
+    let retried = f.now();
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("nothing"), "{ev:?}");
+    let waited = f.now().duration_since(retried).unwrap();
+    assert!(
+        waited >= HELIX_INSTALL_SILENCE,
+        "retry gave up after {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn ssh_run_retried_after_silence_finishes_when_the_job_speaks_again() {
+    let f = Fakes::standard(&[]);
+    // Reads 1-3 time out a 4 s window; the retry's first read is still quiet.
+    f.ssh.script_job(vec![
+        ("started\n", None),
+        ("", None),
+        ("", None),
+        ("", None),
+        ("done\n", None),
+        ("", Some(0)),
+    ]);
+    let mut r = f.runner("root", ssh_run("slow thing", 4), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("4 seconds"), "{ev:?}");
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn a_recipe_dir_with_a_space_and_a_quote_is_shell_quoted() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "dir": "/data/my dir's/" }]);
+    let mut r = f.runner("root", steps, json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let paths: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
+    assert!(
+        paths.contains(&"/data/my dir's/install.sh".into()),
+        "{paths:?}"
+    );
+    assert!(paths.contains(&"/data/my dir's/helixscreen-pi-v1.0.5.tar.gz".into()));
+    assert_eq!(
+        spawned(&f)[0].0,
+        r"sh '/data/my dir'\''s/install.sh' --local '/data/my dir'\''s/helixscreen-pi-v1.0.5.tar.gz' --progress"
+    );
+}

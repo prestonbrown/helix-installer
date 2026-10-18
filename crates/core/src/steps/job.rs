@@ -20,7 +20,7 @@ pub(crate) struct JobCursor {
     /// Text after the last newline, not yet a complete line.
     partial: String,
     lines: Vec<String>,
-    /// When the log last grew, or when following began.
+    /// When the log last grew, or when the current call began following.
     last_growth: SystemTime,
 }
 
@@ -58,7 +58,8 @@ pub(crate) enum Followed {
 }
 
 /// Reads `job`'s log until a new line matches `is_event`, the job ends, or the log stays
-/// unchanged for `silence`.
+/// unchanged for `silence`, counted from this call: a retry after a silence timeout gets a
+/// whole window again.
 pub(crate) async fn follow(
     ctx: &mut StepCtx<'_>,
     job: &RemoteJob,
@@ -79,6 +80,9 @@ pub(crate) async fn follow(
             lines: Vec::new(),
             last_growth: now,
         });
+    }
+    if let Some(cursor) = ctx.session.job_cursor.as_mut() {
+        cursor.last_growth = now;
     }
     loop {
         let offset = ctx.session.job_cursor.as_ref().map_or(0, |c| c.offset);
