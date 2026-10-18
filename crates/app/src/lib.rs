@@ -68,6 +68,7 @@ pub fn run() {
             ipc::start_run,
             ipc::advance,
             ipc::unfinished_runs,
+            ipc::dismiss_run,
             ipc::export_bundle,
             ipc::record_printer,
         ])

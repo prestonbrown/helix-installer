@@ -24,6 +24,18 @@ pub(crate) struct JobCursor {
 }
 
 impl JobCursor {
+    pub(crate) fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// The complete lines, then any text after the last newline.
+    pub(crate) fn into_lines(mut self) -> Vec<String> {
+        if !self.partial.is_empty() {
+            self.lines.push(self.partial);
+        }
+        self.lines
+    }
+
     /// Takes in new log text; returns the index of the first line it completed. `ended` means
     /// no more text will come, so an unterminated last line is complete.
     fn take(&mut self, text: &str, next_offset: u64, ended: bool, now: SystemTime) -> usize {
@@ -72,6 +84,7 @@ pub(crate) async fn follow(
         .as_ref()
         .is_none_or(|c| c.log_path != job.log_path)
     {
+        ctx.session.retire_job_cursor();
         ctx.session.job_cursor = Some(JobCursor {
             log_path: job.log_path.clone(),
             offset: 0,
@@ -114,7 +127,7 @@ pub(crate) fn lines<'a>(ctx: &'a StepCtx<'_>) -> &'a [String] {
     ctx.session
         .job_cursor
         .as_ref()
-        .map_or(&[], |c| c.lines.as_slice())
+        .map_or(&[], JobCursor::lines)
 }
 
 /// The last output lines that `keep` accepts, for a failure message: empty, or a colon and
@@ -136,7 +149,7 @@ pub(crate) fn tail(ctx: &StepCtx<'_>, keep: fn(&str) -> bool) -> String {
 /// Drops the job once it has ended, so a retry starts it again.
 pub(crate) fn forget(ctx: &mut StepCtx<'_>) {
     *ctx.job = None;
-    ctx.session.job_cursor = None;
+    ctx.session.retire_job_cursor();
 }
 
 /// The connection failed while the job runs on. The job stays recorded so a retry follows it

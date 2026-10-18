@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use async_trait::async_trait;
+use helix_installer_core::bundle::support_bundle;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::{Login, Manifest, Step};
 use helix_installer_core::run_state::RunState;
@@ -406,6 +407,49 @@ async fn a_failed_result_surfaces_the_installers_reason() {
     let (ev, _) = settle(&mut r).await;
     assert!(failure(&ev).contains("no space left on /tmp"), "{ev:?}");
     assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn the_support_bundle_carries_the_installers_output_after_a_failure() {
+    let f = Fakes::standard(&["pi"]);
+    let mut lines = vec![
+        pl(&["platform", "pi"]),
+        "tar: /usr/data/helixscreen: Cannot write: No space left on device\n".to_string(),
+        format!("a broken script echoed {PASSWORD}\n"),
+    ];
+    // More lines than a failure message quotes.
+    lines.extend((1..=12).map(|n| format!("unpacking file {n}\n")));
+    lines.push(pl(&["result", "fail", "no space left"]));
+    let last = lines.len() - 1;
+    let chunks = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.as_str(), (i == last).then_some(1)))
+        .collect();
+    f.ssh.script_job(chunks);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    failure(&ev);
+    let logs = r.job_logs();
+    let secrets = r.secrets();
+    let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
+    let bundle = support_bundle(r.state(), &logs, &secrets, false);
+    let (_, printer_side) = bundle
+        .split_once("printer-side job log:\n")
+        .expect("the bundle has a job log section");
+    for line in [
+        "tar: /usr/data/helixscreen: Cannot write: No space left on device",
+        "unpacking file 1\n",
+        "unpacking file 12",
+        "HELIX-PROGRESS\tresult\tfail\tno space left",
+    ] {
+        assert!(
+            printer_side.contains(line),
+            "{line:?} missing from {printer_side}"
+        );
+    }
+    assert!(!bundle.contains(PASSWORD), "{bundle}");
 }
 
 #[tokio::test]

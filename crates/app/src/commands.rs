@@ -54,6 +54,8 @@ pub enum ErrorKind {
     Unsupported,
     /// The run's files on this computer could not be read or written.
     Storage,
+    /// The run has changed the printer, so it can only be continued, never dismissed.
+    RunCommitted,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -593,15 +595,34 @@ impl AppCore {
         out
     }
 
-    /// The run's support report. Passwords held in memory are always stripped; `mask` also
-    /// hides addresses and the serial.
+    /// Ends a run that has not changed the printer, marked cancelled, so it is never offered
+    /// again. A run past its point of no return is refused: only finishing it, or the
+    /// printer's recovery guide, puts the printer right.
+    pub async fn dismiss_run(&self, run_id: &str) -> Result<(), CommandError> {
+        let runner = self.runner(run_id).await?;
+        let mut r = runner.lock().await;
+        if r.state().committed {
+            return Err(CommandError::new(
+                ErrorKind::RunCommitted,
+                "this install has already changed the printer",
+            ));
+        }
+        match r.advance(Some(Input::Cancel)).await {
+            Event::Failed { reason, .. } => Err(CommandError::new(ErrorKind::Storage, reason)),
+            _ => Ok(()),
+        }
+    }
+
+    /// The run's support report, with what the printer printed while this app followed the
+    /// run. Passwords held in memory are always stripped; `mask` also hides addresses and the
+    /// serial.
     pub async fn export_bundle(&self, run_id: &str, mask: bool) -> Result<String, CommandError> {
         let held = self.runs.lock().await.get(run_id).cloned();
         if let Some(r) = held {
             let r = r.lock().await;
             let secrets = r.secrets();
             let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
-            return Ok(support_bundle(r.state(), &[], &secrets, mask));
+            return Ok(support_bundle(r.state(), &r.job_logs(), &secrets, mask));
         }
         let state = Runner::load(&self.runs_dir(), run_id).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::InvalidInput => {
@@ -669,6 +690,11 @@ pub mod ipc {
     #[tauri::command]
     pub async fn unfinished_runs(core: Core<'_>) -> Result<Vec<RunSummary>, CommandError> {
         Ok(core.unfinished_runs().await)
+    }
+
+    #[tauri::command]
+    pub async fn dismiss_run(core: Core<'_>, run_id: String) -> Result<(), CommandError> {
+        core.dismiss_run(&run_id).await
     }
 
     #[tauri::command]

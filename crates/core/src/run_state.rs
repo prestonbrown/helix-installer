@@ -25,6 +25,9 @@ pub enum RunStatus {
     Refused {
         doc: String,
         reason: String,
+        /// The user stopped the run before it changed the printer.
+        #[serde(default)]
+        cancelled: bool,
     },
     /// Stopped at `step_index`; the next advance retries that step.
     Failed {

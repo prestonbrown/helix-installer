@@ -74,6 +74,9 @@ pub enum Event {
     Refused {
         doc: String,
         reason: String,
+        /// The user stopped the run before it changed the printer; the UI says so rather
+        /// than showing a refusal.
+        cancelled: bool,
     },
     Failed {
         committed: bool,
@@ -181,6 +184,12 @@ impl Runner {
         self.session.secrets()
     }
 
+    /// What the printer-side jobs this runner followed have printed, held in memory only. A
+    /// reopened app has only what it has read since.
+    pub fn job_logs(&self) -> Vec<String> {
+        self.session.job_logs()
+    }
+
     /// The manifest the run is pinned to: its own verified copy, not the newest one.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
@@ -209,10 +218,15 @@ impl Runner {
     pub async fn advance(&mut self, input: Option<Input>) -> Event {
         match &self.state.status {
             RunStatus::Done => return Event::Done,
-            RunStatus::Refused { doc, reason } => {
+            RunStatus::Refused {
+                doc,
+                reason,
+                cancelled,
+            } => {
                 return Event::Refused {
                     doc: doc.clone(),
                     reason: reason.clone(),
+                    cancelled: *cancelled,
                 }
             }
             RunStatus::Running | RunStatus::Failed { .. } => {}
@@ -422,17 +436,30 @@ impl Runner {
         if self.state.committed {
             self.fail("cancelled after the printer was changed".into(), Some(doc))
         } else {
-            self.refuse(doc, "cancelled; nothing on the printer was changed".into())
+            self.end_refused(
+                doc,
+                "cancelled; nothing on the printer was changed".into(),
+                true,
+            )
         }
     }
 
     fn refuse(&mut self, doc: String, reason: String) -> Event {
+        self.end_refused(doc, reason, false)
+    }
+
+    fn end_refused(&mut self, doc: String, reason: String, cancelled: bool) -> Event {
         self.log(self.state.step_index, format!("refused: {reason}"));
         self.state.status = RunStatus::Refused {
             doc: doc.clone(),
             reason: reason.clone(),
+            cancelled,
         };
-        self.persist(Event::Refused { doc, reason })
+        self.persist(Event::Refused {
+            doc,
+            reason,
+            cancelled,
+        })
     }
 
     fn fail(&mut self, reason: String, help: Option<String>) -> Event {

@@ -71,6 +71,8 @@ pub struct Session {
     login: Option<Login>,
     ssh: Option<Box<dyn SshSession>>,
     job_cursor: Option<job::JobCursor>,
+    /// Every line of the jobs this runner followed to their end, for the support bundle.
+    job_log: Vec<String>,
     stick: Option<write_stick::Stage>,
     /// Logins the user typed that the printer refused since the last success.
     login_tries: u32,
@@ -82,6 +84,19 @@ impl Session {
     /// Called when a step becomes current or is retried.
     pub(crate) fn begin_step(&mut self) {
         self.defaults_tried = false;
+    }
+
+    /// What the printer-side jobs printed: the ended jobs' lines, then the current job's.
+    pub(crate) fn job_logs(&self) -> Vec<String> {
+        let current = self.job_cursor.iter().flat_map(|c| c.lines());
+        self.job_log.iter().chain(current).cloned().collect()
+    }
+
+    /// Stops following the current job, keeping its lines for `job_logs`.
+    pub(crate) fn retire_job_cursor(&mut self) {
+        if let Some(c) = self.job_cursor.take() {
+            self.job_log.extend(c.into_lines());
+        }
     }
 
     /// The password of the login held now, for stripping from a support bundle.

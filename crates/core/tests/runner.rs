@@ -168,7 +168,12 @@ async fn failing_require_before_commit_refuses_with_doc() {
     ]));
     let mut r = Runner::new(f.env(), m, state("run1", json!({ "fw_version": "1.2.0" })));
     match r.advance(None).await {
-        Event::Refused { doc, reason } => {
+        Event::Refused {
+            doc,
+            reason,
+            cancelled,
+        } => {
+            assert!(!cancelled, "a refusal the recipe made is not a cancel");
             assert_eq!(doc, "https://doc/fw");
             assert!(reason.contains("1.2.0"), "{reason}");
         }
@@ -356,6 +361,7 @@ async fn list_unfinished_skips_done_and_refused_runs() {
             RunStatus::Refused {
                 doc: "d".into(),
                 reason: "r".into(),
+                cancelled: false,
             },
         ),
         (
@@ -507,9 +513,41 @@ async fn cancel_before_commit_refuses_with_the_printer_guide() {
     let mut r = Runner::new(f.env(), m, state("run1", json!({})));
     r.advance(None).await;
     match r.advance(Some(Input::Cancel)).await {
-        Event::Refused { doc, .. } => assert_eq!(doc, PRINTER_DOC),
+        Event::Refused { doc, cancelled, .. } => {
+            assert_eq!(doc, PRINTER_DOC);
+            assert!(cancelled);
+        }
         e => panic!("expected Refused, got {e:?}"),
     }
+    assert!(matches!(
+        r.state().status,
+        RunStatus::Refused {
+            cancelled: true,
+            ..
+        }
+    ));
+    // The saved run still says it was cancelled when it is opened again.
+    assert!(matches!(
+        r.advance(None).await,
+        Event::Refused {
+            cancelled: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_saved_refusal_without_the_cancelled_flag_is_not_a_cancel() {
+    let s: RunStatus =
+        serde_json::from_value(json!({ "status": "refused", "doc": "d", "reason": "r" })).unwrap();
+    assert_eq!(
+        s,
+        RunStatus::Refused {
+            doc: "d".into(),
+            reason: "r".into(),
+            cancelled: false,
+        }
+    );
 }
 
 #[tokio::test]
@@ -894,7 +932,7 @@ async fn resume_with_changed_manifest(commit: bool, change_recipe: bool) -> Even
 async fn a_changed_recipe_or_manifest_refuses_a_resume_before_commit() {
     for change_recipe in [true, false] {
         match resume_with_changed_manifest(false, change_recipe).await {
-            Event::Refused { doc, reason } => {
+            Event::Refused { doc, reason, .. } => {
                 assert_eq!(doc, PRINTER_DOC);
                 assert!(reason.contains("start again"), "{reason}");
             }

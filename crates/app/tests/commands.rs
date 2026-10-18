@@ -68,6 +68,14 @@ fn manifest_json() -> Value {
                 "recipes": [{ "when": { "state": "stock" }, "recipe": "stock" }],
                 "restore": "stock",
                 "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-k2" }
+            },
+            {
+                "id": "pi",
+                "name": "Raspberry Pi",
+                "identify": [{ "klipper_hostname": "pi-box" }],
+                "recipes": [{ "when": { "state": "modded:moonraker" }, "recipe": "shell" }],
+                "restore": "shell",
+                "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-pi" }
             }
         ],
         "artifacts": {},
@@ -80,6 +88,11 @@ fn manifest_json() -> Value {
                 { "type": "ssh_login", "logins": [{ "user": "root", "password": "wrong-default" }],
                   "ask_if_failed": true },
                 { "type": "moonraker_gcode", "script": "DISPLAY_OFF HELIX=1", "commits": true }
+            ],
+            "shell": [
+                { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }],
+                  "ask_if_failed": true },
+                { "type": "ssh_run", "command": "sh /tmp/setup.sh", "timeout_s": 60, "commits": true }
             ],
             "stock": [
                 { "type": "info", "text": "Changing the printer", "commits": true },
@@ -215,13 +228,13 @@ async fn a_verified_manifest_is_cached_for_the_next_launch() {
     let printers = c.printers().await.unwrap();
     assert_eq!(
         printers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
-        ["k1", "k2"]
+        ["k1", "k2", "pi"]
     );
     assert_eq!(printers[0].photo.as_deref(), Some("img/k1.jpg"));
     assert_eq!(printers[0].verified.as_ref().unwrap().firmware, "1.3.3.46");
 
     let offline = core(&f, data.path(), None);
-    assert_eq!(offline.printers().await.unwrap().len(), 2);
+    assert_eq!(offline.printers().await.unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -470,4 +483,115 @@ fn pictures_are_relative_to_where_the_printer_list_came_from() {
     assert_eq!(remote.app_info().version, "0.1.0");
     let local = core(&f, data.path(), Some("/tmp/manifest.json".into()));
     assert_eq!(local.app_info().image_base, None);
+}
+
+#[tokio::test]
+async fn the_support_bundle_carries_what_the_printer_printed() {
+    let f = Fakes::new();
+    f.ssh.accept("10.0.0.9", "root", PASSWORD);
+    f.ssh.on_command(
+        "id -u",
+        ExecOutput {
+            stdout: "0\n".into(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    f.moonraker.set_printer_info(
+        "10.0.0.9",
+        json!({ "hostname": "pi-box", "state": "ready" }),
+    );
+    let echoed = format!("setup: logging in with {PASSWORD}\n");
+    f.ssh.script_job(vec![
+        ("setup: unpacking the screen\n", None),
+        (&echoed, None),
+        ("setup: no space left on /home/pi\n", Some(1)),
+    ]);
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let c = core(&f, data.path(), Some(write_manifest(src.path(), false)));
+    let host = c.add_manual_host("10.0.0.9").await.unwrap();
+    let run = c.start_run(&host.key, None).await.unwrap();
+    let ev = settle(&c, &run, None).await;
+    assert!(
+        matches!(
+            ev,
+            Event::Failed {
+                committed: true,
+                ..
+            }
+        ),
+        "{ev:?}"
+    );
+    let bundle = c.export_bundle(&run, false).await.unwrap();
+    let (_, printer_side) = bundle
+        .split_once("printer-side job log:\n")
+        .expect("the bundle has a job log section");
+    assert!(
+        printer_side.contains("setup: unpacking the screen"),
+        "{bundle}"
+    );
+    assert!(
+        printer_side.contains("setup: no space left on /home/pi"),
+        "{bundle}"
+    );
+    assert!(!bundle.contains(PASSWORD), "{bundle}");
+}
+
+/// A K1 run started on a printer that answers nothing, stopped at its first prompt: nothing
+/// on the printer has changed.
+async fn run_before_commit(c: &AppCore) -> String {
+    let silent = c.add_manual_host("10.0.0.10").await.unwrap();
+    let run = c.start_run(&silent.key, Some("k1")).await.unwrap();
+    c.advance(&run, None).await.unwrap();
+    run
+}
+
+#[tokio::test]
+async fn a_run_that_changed_nothing_can_be_dismissed_for_good() {
+    let f = Fakes::new();
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let manifest = write_manifest(src.path(), false);
+    let c = core(&f, data.path(), Some(manifest.clone()));
+    let run = run_before_commit(&c).await;
+    assert_eq!(c.unfinished_runs().await.len(), 1);
+
+    c.dismiss_run(&run).await.unwrap();
+    assert!(c.unfinished_runs().await.is_empty());
+    assert!(matches!(
+        c.advance(&run, None).await.unwrap().event,
+        Event::Refused {
+            cancelled: true,
+            ..
+        }
+    ));
+    let reopened = core(&f, data.path(), Some(manifest));
+    assert!(reopened.unfinished_runs().await.is_empty());
+    assert_eq!(
+        kind(c.dismiss_run("no-such-run").await),
+        ErrorKind::UnknownRun
+    );
+}
+
+#[tokio::test]
+async fn a_run_that_changed_the_printer_cannot_be_dismissed() {
+    let f = Fakes::new();
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let manifest = write_manifest(src.path(), false);
+    let c = core(&f, data.path(), Some(manifest.clone()));
+    let run = run_before_commit(&c).await;
+    c.advance(&run, Some(Input::Next)).await.unwrap();
+
+    assert_eq!(kind(c.dismiss_run(&run).await), ErrorKind::RunCommitted);
+    // Not even from an app that has not opened the run yet.
+    let reopened = core(&f, data.path(), Some(manifest));
+    assert_eq!(
+        kind(reopened.dismiss_run(&run).await),
+        ErrorKind::RunCommitted
+    );
+    let listed = reopened.unfinished_runs().await;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].committed);
 }
