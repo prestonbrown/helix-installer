@@ -627,6 +627,167 @@ async fn a_moonraker_printer_answering_as_itself_after_commit_continues() {
     assert!(matches!(k1c_rechecked_as("k1c").await, Event::Done));
 }
 
+const HELIX_INIT_PROBE: &str = "test -e /etc/init.d/S99helixscreen && echo yes || echo no";
+
+/// A K2 Plus as the manifest would know it, with a fresh-install and an update recipe chosen
+/// by the start state.
+fn k2_manifest(install: Value, update: Value) -> Arc<Manifest> {
+    let m: Manifest = serde_json::from_value(json!({
+        "manifest_version": 1,
+        "min_app_version": "0.1.0",
+        "printers": [{
+            "id": "k2plus",
+            "name": "Creality K2 Plus",
+            "identify": [{
+                "os_distribution": "OpenWrt 21.02-SNAPSHOT",
+                "klipper_objects": { "contains": "prtouch_v3" }
+            }],
+            "recipes": [
+                { "when": { "state": "helix" }, "recipe": "k2_update" },
+                { "when": { "state": "modded:moonraker" }, "recipe": "k2_install" }
+            ],
+            "restore": "k2_install",
+            "fallback": { "refuse": true, "doc": PRINTER_DOC }
+        }],
+        "artifacts": {},
+        "recipes": { "k2_install": install, "k2_update": update }
+    }))
+    .unwrap();
+    Arc::new(m)
+}
+
+/// The K2 Plus at 192.168.30.196 as discovery found it: Moonraker answers, no service list.
+fn k2_run(m: Arc<Manifest>, f: &Fakes) -> Runner {
+    let facts: Facts = serde_json::from_value(json!({
+        "has_moonraker": true,
+        "cpu_arch": "armv7l",
+        "klipper_hostname": "K2Plus-50C1",
+        "klipper_state": "ready",
+        "os_distribution": "OpenWrt 21.02-SNAPSHOT",
+        "services": [],
+        "klipper_objects": ["webhooks", "mcu", "mcu nozzle_mcu", "box", "prtouch_v3", "toolhead"]
+    }))
+    .unwrap();
+    let state = RunState::new("run1", "k2plus", "k2_install", Host::new(ADDR), facts);
+    Runner::new(f.env(), m, state).with_handler("ssh_login", Arc::new(TestLogin))
+}
+
+fn k2_fakes(init_script: bool) -> Fakes {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", PASSWORD);
+    f.ssh.on_command(
+        HELIX_INIT_PROBE,
+        out(if init_script { "yes\n" } else { "no\n" }),
+    );
+    f
+}
+
+fn info_text(ev: &Event) -> &str {
+    match ev {
+        Event::NeedInput(Prompt::Info { text, .. }) => text,
+        e => panic!("expected an info prompt, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_installed_helixscreen_found_before_commit_switches_to_the_update_recipe() {
+    let f = k2_fakes(true);
+    let login_and_probe = json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "probe", "ssh": HELIX_INIT_PROBE, "fact": "helix_installed" }
+    ]);
+    let with = |text: &str| {
+        let mut steps = login_and_probe.as_array().unwrap().clone();
+        steps.push(json!({ "type": "info", "text": text, "commits": true }));
+        Value::Array(steps)
+    };
+    let mut r = k2_run(k2_manifest(with("Fresh install"), with("Update")), &f);
+
+    match r.advance(None).await {
+        Event::Progress { title, .. } => {
+            assert!(
+                title.contains("HelixScreen is already installed"),
+                "{title}"
+            );
+        }
+        e => panic!("expected the switch to be reported, got {e:?}"),
+    }
+    let ev = r.advance(None).await;
+    assert_eq!(info_text(&ev), "Update");
+    assert_eq!(r.state().recipe_id, "k2_update");
+    assert_eq!(r.state().facts.get("helix_installed"), Some(&json!(true)));
+    let probes = f
+        .ssh
+        .commands()
+        .iter()
+        .filter(|c| c.as_str() == HELIX_INIT_PROBE)
+        .count();
+    assert_eq!(probes, 1, "steps both recipes share are not run again");
+    assert!(
+        r.state()
+            .log
+            .iter()
+            .any(|e| e.text.contains("k2_install") && e.text.contains("k2_update")),
+        "{:?}",
+        r.state().log
+    );
+    assert!(matches!(r.advance(Some(Input::Next)).await, Event::Done));
+}
+
+#[tokio::test]
+async fn no_init_script_keeps_the_fresh_install_recipe() {
+    let f = k2_fakes(false);
+    let steps = json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "probe", "ssh": HELIX_INIT_PROBE, "fact": "helix_installed" },
+        { "type": "info", "text": "Fresh install", "commits": true }
+    ]);
+    let mut r = k2_run(k2_manifest(steps.clone(), steps), &f);
+    let ev = r.advance(None).await;
+    assert_eq!(info_text(&ev), "Fresh install");
+    assert_eq!(r.state().recipe_id, "k2_install");
+    assert_eq!(r.state().facts.get("helix_installed"), Some(&json!(false)));
+}
+
+#[tokio::test]
+async fn a_switch_resumes_the_new_recipe_where_it_stops_matching_the_old() {
+    let f = k2_fakes(true);
+    let install = json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "probe", "ssh": HELIX_INIT_PROBE, "fact": "helix_installed" },
+        { "type": "info", "text": "Fresh install", "commits": true }
+    ]);
+    let update = json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "info", "text": "Updating" },
+        { "type": "probe", "ssh": HELIX_INIT_PROBE, "fact": "helix_installed" },
+        { "type": "info", "text": "Update", "commits": true }
+    ]);
+    let mut r = k2_run(k2_manifest(install, update), &f);
+    assert!(matches!(r.advance(None).await, Event::Progress { .. }));
+    let ev = r.advance(None).await;
+    assert_eq!(info_text(&ev), "Updating");
+    assert_eq!(r.state().step_index, 1);
+}
+
+#[tokio::test]
+async fn a_probe_after_commit_never_switches_the_recipe() {
+    let f = k2_fakes(true);
+    let install = json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+        { "type": "info", "text": "Fresh install", "commits": true },
+        { "type": "probe", "ssh": HELIX_INIT_PROBE, "fact": "helix_installed" },
+        { "type": "info", "text": "Installed" }
+    ]);
+    let update = json!([{ "type": "info", "text": "Update", "commits": true }]);
+    let mut r = k2_run(k2_manifest(install, update), &f);
+    assert_eq!(info_text(&r.advance(None).await), "Fresh install");
+    let ev = r.advance(Some(Input::Next)).await;
+    assert_eq!(info_text(&ev), "Installed");
+    assert_eq!(r.state().recipe_id, "k2_install");
+    assert_eq!(r.state().facts.get("helix_installed"), Some(&json!(true)));
+}
+
 #[tokio::test]
 async fn cancel_before_commit_refuses_with_the_printer_guide() {
     let f = Fakes::new();

@@ -539,6 +539,14 @@ async fn a_job_that_exits_without_a_result_fails() {
     assert!(reason.contains("syntax error"), "{reason}");
 }
 
+fn out_ok() -> ExecOutput {
+    ExecOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit: 0,
+    }
+}
+
 fn sudo_needs_a_password(f: &Fakes) {
     f.ssh.on_command(
         "sudo -n true",
@@ -788,6 +796,88 @@ async fn ssh_run_succeeds_on_exit_zero() {
         .collect();
     assert_eq!(job_calls, vec![("sync && echo done".to_string(), None)]);
     assert_eq!(r.state().job, None);
+}
+
+fn job_calls(f: &Fakes, command: &str) -> Vec<(String, Option<Vec<u8>>)> {
+    f.ssh
+        .calls()
+        .into_iter()
+        .filter(|(c, _)| c == command)
+        .collect()
+}
+
+#[tokio::test]
+async fn ssh_run_for_a_login_without_passwordless_sudo_runs_through_sudo() {
+    let f = Fakes::standard(&[]);
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(PASSWORD);
+    f.ssh.script_job(vec![("", Some(0))]);
+    let mut r = f.runner(
+        "mks",
+        ssh_run("systemctl stop KlipperScreen", 60),
+        json!({}),
+    );
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(
+        job_calls(&f, "systemctl stop KlipperScreen"),
+        vec![(
+            "systemctl stop KlipperScreen".to_string(),
+            Some(PASSWORD.as_bytes().to_vec())
+        )]
+    );
+    assert!(f.ssh.commands().iter().all(|c| !c.contains(PASSWORD)));
+}
+
+#[tokio::test]
+async fn ssh_run_with_passwordless_sudo_runs_as_the_login_user() {
+    let f = Fakes::standard(&[]);
+    f.ssh.on_command("sudo -n true", out_ok());
+    f.ssh.script_job(vec![("", Some(0))]);
+    let mut r = f.runner(
+        "mks",
+        ssh_run("sudo systemctl stop KlipperScreen", 60),
+        json!({}),
+    );
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(
+        job_calls(&f, "sudo systemctl stop KlipperScreen"),
+        vec![("sudo systemctl stop KlipperScreen".to_string(), None)]
+    );
+}
+
+#[tokio::test]
+async fn ssh_run_whose_sudo_refuses_the_password_fails_naming_sudo() {
+    let f = Fakes::standard(&[]);
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts("another-password");
+    f.ssh.script_job(vec![("", Some(0))]);
+    let mut r = f.runner(
+        "mks",
+        ssh_run("systemctl stop KlipperScreen", 60),
+        json!({}),
+    );
+
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(reason.contains("sudo"), "{reason}");
+    assert!(!reason.contains(PASSWORD), "{reason}");
+}
+
+#[tokio::test]
+async fn ssh_run_for_a_login_with_no_password_runs_as_the_login_user() {
+    let f = Fakes::standard(&[]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    f.ssh.script_job(vec![("", Some(0))]);
+    let mut r = f.runner_with_password("mks", "", ssh_run("ls", 60), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(job_calls(&f, "ls"), vec![("ls".to_string(), None)]);
 }
 
 #[tokio::test]

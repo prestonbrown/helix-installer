@@ -5,7 +5,7 @@
 //! committed failure the UI must turn into recovery.
 
 use crate::facts::Facts;
-use crate::identify::GENERIC_REFUSE_DOC;
+use crate::identify::{self, StartState, GENERIC_REFUSE_DOC};
 use crate::manifest::{verify_and_parse, Channel, Choice, Login, Manifest, Step};
 use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
@@ -320,6 +320,11 @@ impl Runner {
                         let reason = format!("could not save install progress: {e}");
                         return self.fail(reason, None);
                     }
+                    if matches!(step, Step::Probe { .. }) && !self.state.committed {
+                        if let Some(ev) = self.switch_recipe(&manifest, &steps[..=index]) {
+                            return ev;
+                        }
+                    }
                 }
                 StepOutcome::NeedInput(prompt) => return self.persist(Event::NeedInput(prompt)),
                 StepOutcome::Progress {
@@ -376,6 +381,41 @@ impl Runner {
                 "the installer's printer data changed; start again".into(),
             )
         }
+    }
+
+    /// Before the point of no return, facts a probe added can change which recipe the printer
+    /// needs (an install that finds HelixScreen already there becomes an update). The run then
+    /// moves to that recipe, skipping its leading steps that equal the steps already `done`,
+    /// and the switch is reported as progress. After the commit the recipe never changes.
+    fn switch_recipe(&mut self, manifest: &Manifest, done: &[Step]) -> Option<Event> {
+        let (state, to) =
+            identify::recipe_for(manifest, &self.state.printer_id, &self.state.facts)?;
+        if to == self.state.recipe_id {
+            return None;
+        }
+        let steps = manifest.recipes.get(&to)?;
+        let resume = done
+            .iter()
+            .zip(steps)
+            .take_while(|(a, b)| same_step(a, b))
+            .count();
+        let from = std::mem::replace(&mut self.state.recipe_id, to.clone());
+        self.state.recipe_sha256 = Some(recipe_sha256(steps));
+        self.state.step_index = resume;
+        let title = match state {
+            StartState::Helix(_) => "HelixScreen is already installed; switching to update",
+            _ => {
+                "This printer is set up differently than it first looked; switching how to install"
+            }
+        };
+        self.log(resume, format!("{title} (recipe {from} -> {to})"));
+        Some(self.persist(Event::Progress {
+            step: resume,
+            total: steps.len(),
+            title: title.into(),
+            detail: None,
+            fraction: None,
+        }))
     }
 
     /// Captures the facts that name the printer, for re-identification after the commit.
@@ -556,4 +596,12 @@ pub(crate) fn unix_secs(env: &Env) -> u64 {
         .now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// Two recipe steps that do the same thing: equal type and arguments.
+fn same_step(a: &Step, b: &Step) -> bool {
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }

@@ -7,6 +7,7 @@
 use super::download::fetch_artifact;
 use super::job::{self, Followed};
 use super::progress::{parse_progress_line, ProgressEvent, StepStatus};
+use super::sudo::{self, SudoPlan};
 use super::{StepCtx, StepOutcome};
 use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, Channel, PlatformSel};
@@ -32,8 +33,6 @@ pub const GITHUB_RELEASE_API: &str =
 /// release onto a MIPS printer's slow flash takes minutes without a line of output.
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
-const SUDO_DOC: &str = "https://helixscreen.org/docs/install";
-const SUDO_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Fact holding the remote paths this step uploaded, so a reopened run can still remove them.
 const UPLOADED_FACT: &str = "helix_install_uploaded";
@@ -210,7 +209,7 @@ async fn launch(
             ctx.drop_ssh();
             remove_uploaded(ctx).await;
             Err(match e {
-                TransportError::Auth => sudo_refused(ctx),
+                TransportError::Auth => sudo::refused(ctx),
                 e => StepOutcome::failed(format!(
                     "could not start the installer on the printer: {e}"
                 )),
@@ -258,51 +257,23 @@ async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
     }
 }
 
-/// The password to start install.sh as root with, or `None` to start it as the login user.
 /// install.sh calls sudo itself, which cannot prompt from a detached job, so a login without
 /// passwordless sudo runs the whole installer through sudo with the held password. Run as
 /// root, install.sh still installs for the Klipper service user: it finds that user from the
 /// klipper service, the process table and /home, never from who started it.
 async fn sudo_password(ctx: &mut StepCtx<'_>) -> Result<Option<String>, StepOutcome> {
-    let Some(login) = ctx.login().cloned() else {
-        return Err(StepOutcome::failed("no SSH login is held"));
-    };
-    if login.user == "root" {
-        return Ok(None);
-    }
-    let user = login.user;
-    let ran = match ctx.ssh().await {
-        Ok(s) => s.exec("sudo -n true", None, SUDO_CHECK_TIMEOUT).await,
-        Err(e) => Err(e),
-    };
-    match ran {
-        Ok(out) if out.exit == 0 => Ok(None),
-        Ok(_) if !login.password.is_empty() => Ok(Some(login.password)),
-        Ok(_) => Err(StepOutcome::Failed {
+    match sudo::plan(ctx).await? {
+        SudoPlan::AsLoginUser => Ok(None),
+        SudoPlan::WithPassword(pw) => Ok(Some(pw)),
+        SudoPlan::Unavailable { user } => Err(StepOutcome::Failed {
             reason: format!(
                 "this printer's account ({user}) needs passwordless sudo to install HelixScreen"
             ),
             help: Some(format!(
-                "Allow {user} to run sudo without a password, then retry: {SUDO_DOC}"
+                "Allow {user} to run sudo without a password, then retry: {}",
+                sudo::SUDO_DOC
             )),
         }),
-        Err(e) => {
-            ctx.drop_ssh();
-            Err(StepOutcome::failed(format!(
-                "could not check sudo on the printer: {e}"
-            )))
-        }
-    }
-}
-
-/// sudo turned down the password the printer accepted for the login.
-fn sudo_refused(ctx: &StepCtx<'_>) -> StepOutcome {
-    let user = ctx.login().map(|l| l.user.as_str()).unwrap_or_default();
-    StepOutcome::Failed {
-        reason: format!("sudo on the printer refused the password of this printer's account ({user})"),
-        help: Some(format!(
-            "Allow {user} to run sudo with its login password, or without one, then retry: {SUDO_DOC}"
-        )),
     }
 }
 

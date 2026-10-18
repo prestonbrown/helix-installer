@@ -13,6 +13,7 @@ pub mod progress;
 pub mod require;
 pub mod ssh_login;
 pub mod ssh_run;
+mod sudo;
 pub mod wait_for;
 pub mod write_stick;
 

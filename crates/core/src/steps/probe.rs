@@ -42,10 +42,9 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
                 Err(e) => return Err(format!("could not log in over SSH: {e}")),
             };
             match session.exec(ssh, None, SSH_PROBE_TIMEOUT).await {
-                Ok(out) if out.exit == 0 => Ok(Facts::from([(
-                    fact.clone(),
-                    Value::String(out.stdout.trim().to_string()),
-                )])),
+                Ok(out) if out.exit == 0 => {
+                    Ok(Facts::from([(fact.clone(), ssh_fact(out.stdout.trim()))]))
+                }
                 Ok(out) => Err(format!(
                     "{ssh} exited with {}: {}",
                     out.exit,
@@ -66,6 +65,16 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
                 .is_ok();
             Ok(Facts::from([(fact.clone(), Value::Bool(open))]))
         }
+    }
+}
+
+/// An SSH probe's output as a fact: `yes`/`true` and `no`/`false` are booleans, so a shell
+/// test can set a flag such as `helix_installed`; anything else is the text.
+fn ssh_fact(text: &str) -> Value {
+    match text {
+        "yes" | "true" => Value::Bool(true),
+        "no" | "false" => Value::Bool(false),
+        _ => Value::String(text.to_string()),
     }
 }
 
