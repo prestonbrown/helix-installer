@@ -97,9 +97,13 @@ impl Moonraker for FakeMoonraker {
 struct JobScript {
     chunks: Vec<(String, Option<i32>)>,
     revealed: usize,
+    /// The job's process is gone once every chunk is shown, without having exited.
+    dies: bool,
 }
 
 type Fallback = Box<dyn Fn(&str) -> ExecOutput + Send + Sync>;
+/// A job's (text, exit) chunks and whether it dies once they are shown.
+type QueuedJob = (Vec<(String, Option<i32>)>, bool);
 
 #[derive(Default)]
 struct SshState {
@@ -108,7 +112,7 @@ struct SshState {
     fallback: Option<Fallback>,
     calls: Vec<(String, Option<Vec<u8>>)>,
     uploads: Vec<(String, Vec<u8>)>,
-    queued_jobs: Vec<Vec<(String, Option<i32>)>>,
+    queued_jobs: Vec<QueuedJob>,
     jobs: HashMap<String, JobScript>,
     next_job: u32,
     drop_next_session_after: Option<u32>,
@@ -140,11 +144,19 @@ impl FakeSsh {
     /// Queues the log for the next `spawn_detached`: (text, exit) chunks,
     /// one revealed per `read_job` call; `Some` exit marks the job finished.
     pub fn script_job(&self, chunks: Vec<(&str, Option<i32>)>) {
+        self.queue_job(chunks, false);
+    }
+    /// Like `script_job`, but once every chunk is shown the job reports `alive: Some(false)`
+    /// with no exit status: its process died without finishing.
+    pub fn script_dying_job(&self, chunks: Vec<(&str, Option<i32>)>) {
+        self.queue_job(chunks, true);
+    }
+    fn queue_job(&self, chunks: Vec<(&str, Option<i32>)>, dies: bool) {
         let chunks = chunks
             .into_iter()
             .map(|(t, e)| (t.to_string(), e))
             .collect();
-        lock(&self.state).queued_jobs.push(chunks);
+        lock(&self.state).queued_jobs.push((chunks, dies));
     }
     /// The next session to connect fails every call from its n-th (1-based)
     /// onward with `Unreachable`; later sessions are unaffected.
@@ -260,7 +272,7 @@ impl SshSession for FakeSshSession {
         if st.queued_jobs.is_empty() {
             return Err(TransportError::Protocol(format!("unscripted job: {cmd}")));
         }
-        let chunks = st.queued_jobs.remove(0);
+        let (chunks, dies) = st.queued_jobs.remove(0);
         st.next_job += 1;
         let log_path = format!("/tmp/fake-job-{}.log", st.next_job);
         st.jobs.insert(
@@ -268,6 +280,7 @@ impl SshSession for FakeSshSession {
             JobScript {
                 chunks,
                 revealed: 0,
+                dies,
             },
         );
         Ok(RemoteJob {
@@ -292,16 +305,18 @@ impl SshSession for FakeSshSession {
             .get(from_offset as usize..)
             .ok_or_else(|| TransportError::Protocol(format!("bad log offset {from_offset}")))?
             .to_string();
-        let exit = if script.revealed == script.chunks.len() {
+        let ended = script.revealed == script.chunks.len();
+        let exit = if ended {
             script.chunks.last().and_then(|(_, e)| *e)
         } else {
             None
         };
+        let alive = (script.dies && exit.is_none()).then_some(!ended);
         Ok(JobChunk {
             text,
             next_offset: full.len() as u64,
             exit,
-            alive: None,
+            alive,
         })
     }
 }

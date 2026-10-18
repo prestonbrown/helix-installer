@@ -233,7 +233,12 @@ impl Runner {
                 return self.persist(Event::Done);
             };
 
-            if self.calls == 0 && self.state.started_step == Some(index) && !step.is_idempotent() {
+            // A recorded job is followed rather than run again, so there is nothing to ask.
+            if self.calls == 0
+                && self.state.started_step == Some(index)
+                && !step.is_idempotent()
+                && self.state.job.is_none()
+            {
                 match input.take() {
                     Some(Input::Choice(c)) if c == RERUN => {}
                     Some(Input::Choice(c)) if c == STOP => {

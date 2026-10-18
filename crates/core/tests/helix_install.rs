@@ -1,0 +1,704 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use async_trait::async_trait;
+use helix_installer_core::facts::Facts;
+use helix_installer_core::manifest::{Login, Manifest, Step};
+use helix_installer_core::run_state::RunState;
+use helix_installer_core::runner::{Event, Input, Prompt, Runner};
+use helix_installer_core::steps::helix_install::{
+    GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE, RELEASES_MANIFEST_URL,
+};
+use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
+use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
+use helix_installer_core::transport::fake::{
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
+};
+use helix_installer_core::transport::{Clock, Env, ExecOutput, Host, Ssh};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+const ADDR: &str = "192.168.1.50";
+const PASSWORD: &str = "s3cret-pw";
+const TAG: &str = "v1.0.5";
+const TARBALL: &[u8] = b"helixscreen tarball bytes";
+const INSTALL_SH: &[u8] = b"#!/bin/sh\necho install\n";
+
+// ---------------------------------------------------------------- progress parser
+
+fn step(n: u32, total: u32, status: StepStatus, title: &str, detail: &str) -> ProgressEvent {
+    ProgressEvent::Step {
+        n,
+        total,
+        status,
+        title: title.into(),
+        detail: detail.into(),
+    }
+}
+
+#[test]
+fn every_progress_line_form_parses() {
+    let cases = [
+        (
+            "HELIX-PROGRESS\tplatform\tpi32",
+            ProgressEvent::Platform("pi32".into()),
+        ),
+        (
+            "HELIX-PROGRESS\tstep\t1\t7\tstart\tChecking the printer\t",
+            step(1, 7, StepStatus::Start, "Checking the printer", ""),
+        ),
+        (
+            "HELIX-PROGRESS\tstep\t1\t7\tok\tChecking the printer\t512 MB free",
+            step(1, 7, StepStatus::Ok, "Checking the printer", "512 MB free"),
+        ),
+        (
+            "HELIX-PROGRESS\tstep\t2\t7\tskip\tStopping the old UI\t",
+            step(2, 7, StepStatus::Skip, "Stopping the old UI", ""),
+        ),
+        (
+            "HELIX-PROGRESS\tstep\t3\t7\tfail\tExtracting\tno space left",
+            step(3, 7, StepStatus::Fail, "Extracting", "no space left"),
+        ),
+        (
+            "HELIX-PROGRESS\tresult\tok",
+            ProgressEvent::Result {
+                ok: true,
+                reason: None,
+            },
+        ),
+        (
+            "HELIX-PROGRESS\tresult\tfail\tno space left on /data",
+            ProgressEvent::Result {
+                ok: false,
+                reason: Some("no space left on /data".into()),
+            },
+        ),
+        // A log written through a terminal or by a CRLF shell keeps the carriage return.
+        (
+            "HELIX-PROGRESS\tresult\tfail\texit 3\r",
+            ProgressEvent::Result {
+                ok: false,
+                reason: Some("exit 3".into()),
+            },
+        ),
+    ];
+    for (line, want) in cases {
+        assert_eq!(parse_progress_line(line), Some(want), "{line:?}");
+    }
+}
+
+#[test]
+fn garbage_and_the_bare_word_are_not_progress() {
+    let garbage = [
+        "",
+        "HELIX-PROGRESS",
+        "HELIX-PROGRESS\t",
+        // install.sh's own usage text names the word without a tab after it.
+        "  --progress     Also print one machine-readable HELIX-PROGRESS line per event",
+        "HELIX-PROGRESS platform pi",
+        " HELIX-PROGRESS\tplatform\tpi",
+        "XHELIX-PROGRESS\tplatform\tpi",
+        "HELIX-PROGRESSplatform\tpi",
+        "HELIX-PROGRESS\tplatform",
+        "HELIX-PROGRESS\tplatform\t",
+        "HELIX-PROGRESS\tplatform\tpi\textra",
+        "HELIX-PROGRESS\tstep\t1\t7\tstart\tTitle",
+        "HELIX-PROGRESS\tstep\t1\t7\tstart\tTitle\t\textra",
+        "HELIX-PROGRESS\tstep\tone\t7\tstart\tTitle\t",
+        "HELIX-PROGRESS\tstep\t1\t-7\tstart\tTitle\t",
+        "HELIX-PROGRESS\tstep\t1\t7\tdone\tTitle\t",
+        "HELIX-PROGRESS\tresult",
+        "HELIX-PROGRESS\tresult\tmaybe",
+        "HELIX-PROGRESS\tresult\tok\tbut also",
+        "HELIX-PROGRESS\tresult\tfail\twhy\tmore",
+        "HELIX-PROGRESS\tbanana\tpi",
+        "[3/7] Extracting ok",
+    ];
+    for line in garbage {
+        assert_eq!(parse_progress_line(line), None, "{line:?}");
+    }
+}
+
+// ---------------------------------------------------------------- fixtures
+
+struct Fakes {
+    ssh: FakeSsh,
+    fetch: Arc<FakeFetch>,
+    clock: Arc<FakeClock>,
+    cache: tempfile::TempDir,
+}
+
+fn sha(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn tarball_url(platform: &str) -> String {
+    format!("https://releases.helixscreen.org/releases/{TAG}/helixscreen-{platform}-{TAG}.tar.gz")
+}
+
+const INSTALL_SH_URL: &str =
+    "https://github.com/prestonbrown/helixscreen/releases/download/v1.0.5/install.sh";
+
+impl Fakes {
+    /// A releases manifest with `platforms`, each serving `TARBALL`, and a GitHub release
+    /// whose `install.sh` asset carries `digest`.
+    fn new(platforms: &[&str], install_sh_asset: Value) -> Self {
+        let fetch = Arc::new(FakeFetch::new());
+        let mut assets = serde_json::Map::new();
+        for p in platforms {
+            assets.insert(
+                p.to_string(),
+                json!({ "url": tarball_url(p), "sha256": sha(TARBALL), "size": TARBALL.len() }),
+            );
+            fetch.add(&tarball_url(p), TARBALL.to_vec());
+        }
+        let release = json!({
+            "version": "1.0.5",
+            "tag": TAG,
+            "notes": "notes",
+            "published_at": "2026-10-01T00:00:00Z",
+            "assets": assets,
+        });
+        fetch.add(RELEASES_MANIFEST_URL, release.to_string().into_bytes());
+        let gh = json!({
+            "tag_name": TAG,
+            "assets": [
+                { "name": "helixscreen-pi-v1.0.5.tar.gz", "browser_download_url": "https://example.invalid/x", "digest": "sha256:00" },
+                install_sh_asset,
+            ]
+        });
+        fetch.add(
+            &format!("{GITHUB_RELEASE_API}/{TAG}"),
+            gh.to_string().into_bytes(),
+        );
+        fetch.add(INSTALL_SH_URL, INSTALL_SH.to_vec());
+        let ssh = FakeSsh::new();
+        ssh.accept(ADDR, "root", PASSWORD);
+        ssh.accept(ADDR, "pi", PASSWORD);
+        Fakes {
+            ssh,
+            fetch,
+            clock: Arc::new(FakeClock::new()),
+            cache: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn standard(platforms: &[&str]) -> Self {
+        Fakes::new(platforms, good_install_sh())
+    }
+
+    fn env(&self) -> Env {
+        Env {
+            moonraker: Arc::new(FakeMoonraker::new()),
+            ssh: Arc::new(self.ssh.clone()),
+            drives: Arc::new(FakeDrives::new()),
+            fetch: self.fetch.clone(),
+            clock: self.clock.clone(),
+            net: Arc::new(FakeNet::new()),
+        }
+    }
+
+    /// A runner for `steps`, logged in as `user` by a stand-in `ssh_login` first step.
+    fn runner(&self, user: &str, steps: Value, facts: Value) -> Runner {
+        let mut all = vec![json!({ "type": "ssh_login", "logins": [] })];
+        all.extend(steps.as_array().unwrap().iter().cloned());
+        let facts: Facts = serde_json::from_value(facts).unwrap();
+        let state = RunState::new("run1", "k1", "r", Host::new(ADDR), facts);
+        Runner::new(self.env(), manifest(Value::Array(all)), state)
+            .with_handler("ssh_login", Arc::new(TestLogin(user.into())))
+            .with_cache_dir(self.cache.path().to_path_buf())
+    }
+
+    fn now(&self) -> SystemTime {
+        self.clock.now()
+    }
+}
+
+fn good_install_sh() -> Value {
+    json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL, "digest": format!("sha256:{}", sha(INSTALL_SH)) })
+}
+
+fn manifest(steps: Value) -> Arc<Manifest> {
+    let m: Manifest = serde_json::from_value(json!({
+        "manifest_version": 1,
+        "min_app_version": "0.1.0",
+        "printers": [{
+            "id": "k1",
+            "name": "Creality K1",
+            "identify": [{ "model": "K1" }],
+            "recipes": [{ "when": { "state": "stock" }, "recipe": "r" }],
+            "restore": "r",
+            "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-k1" }
+        }],
+        "artifacts": {},
+        "recipes": { "r": steps }
+    }))
+    .unwrap();
+    Arc::new(m)
+}
+
+struct TestLogin(String);
+
+#[async_trait]
+impl StepHandler for TestLogin {
+    async fn run(&self, ctx: &mut StepCtx<'_>, _step: &Step, _input: Option<Input>) -> StepOutcome {
+        ctx.set_login(Login {
+            user: self.0.clone(),
+            password: PASSWORD.into(),
+        });
+        StepOutcome::Done
+    }
+}
+
+/// Advances past every `Progress` event, collecting their titles, and returns the first other
+/// event.
+async fn settle(r: &mut Runner) -> (Event, Vec<String>) {
+    let mut titles = Vec::new();
+    for _ in 0..200 {
+        match r.advance(None).await {
+            Event::Progress { title, .. } => titles.push(title),
+            other => return (other, titles),
+        }
+    }
+    panic!("runner kept reporting progress");
+}
+
+fn failure(ev: &Event) -> &str {
+    match ev {
+        Event::Failed { reason, .. } => reason,
+        e => panic!("expected Failed, got {e:?}"),
+    }
+}
+
+fn pl(fields: &[&str]) -> String {
+    format!("HELIX-PROGRESS\t{}\n", fields.join("\t"))
+}
+
+fn install_step(platform: Value) -> Value {
+    json!([{ "type": "helix_install", "platform": platform }])
+}
+
+fn spawned(f: &Fakes) -> Vec<(String, Option<Vec<u8>>)> {
+    f.ssh
+        .calls()
+        .into_iter()
+        .filter(|(c, _)| c.contains("install.sh"))
+        .collect()
+}
+
+// ---------------------------------------------------------------- helix_install
+
+#[tokio::test]
+async fn installs_the_platform_for_the_cpu_and_reports_its_steps() {
+    let f = Fakes::standard(&["pi", "pi32"]);
+    let log = [
+        "human output on stderr\n".to_string(),
+        pl(&["platform", "pi"]),
+        pl(&["step", "1", "2", "start", "Extracting", ""]),
+        pl(&["step", "1", "2", "ok", "Extracting", "done"]),
+        pl(&["step", "2", "2", "start", "Starting HelixScreen", ""]),
+        pl(&["step", "2", "2", "ok", "Starting HelixScreen", ""]),
+        pl(&["result", "ok"]),
+    ];
+    let mut chunks: Vec<(&str, Option<i32>)> = log.iter().map(|l| (l.as_str(), None)).collect();
+    chunks.push(("", Some(0)));
+    f.ssh.script_job(chunks);
+    let mut r = f.runner(
+        "root",
+        install_step(json!({ "from_arch": { "aarch64": "pi", "armv7l": "pi32" } })),
+        json!({ "cpu_arch": "aarch64" }),
+    );
+
+    let (ev, titles) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(titles.iter().any(|t| t == "Extracting"), "{titles:?}");
+    assert!(
+        titles.iter().any(|t| t == "Starting HelixScreen"),
+        "{titles:?}"
+    );
+
+    let uploads = f.ssh.uploads();
+    assert!(uploads.contains(&("/tmp/install.sh".into(), INSTALL_SH.to_vec())));
+    assert!(uploads.contains(&("/tmp/helixscreen-pi-v1.0.5.tar.gz".into(), TARBALL.to_vec())));
+    assert_eq!(
+        spawned(&f),
+        vec![(
+            "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.0.5.tar.gz' --progress".into(),
+            None
+        )]
+    );
+    assert!(f.fetch.requests().contains(&tarball_url("pi")));
+    assert!(!f.fetch.requests().contains(&tarball_url("pi32")));
+    assert_eq!(r.state().job, None, "a finished job is forgotten");
+}
+
+#[tokio::test]
+async fn a_fixed_platform_installs_into_the_recipe_dir_as_an_update() {
+    let f = Fakes::standard(&["ad5m"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "ad5m"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps =
+        json!([{ "type": "helix_install", "platform": "ad5m", "update": true, "dir": "/data" }]);
+    let mut r = f.runner("root", steps, json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let paths: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
+    assert!(paths.contains(&"/data/install.sh".into()), "{paths:?}");
+    assert!(paths.contains(&"/data/helixscreen-ad5m-v1.0.5.tar.gz".into()));
+    assert_eq!(
+        spawned(&f)[0].0,
+        "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.0.5.tar.gz' --progress --update"
+    );
+}
+
+#[tokio::test]
+async fn an_installer_reporting_another_platform_fails() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi32"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(reason.contains("pi32") && reason.contains("pi"), "{reason}");
+}
+
+#[tokio::test]
+async fn an_ok_result_without_a_platform_line_fails() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![(&pl(&["result", "ok"]), Some(0))]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("platform"), "{ev:?}");
+}
+
+#[tokio::test]
+async fn a_failed_result_surfaces_the_installers_reason() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (
+            &pl(&[
+                "step",
+                "1",
+                "3",
+                "fail",
+                "Extracting",
+                "no space left on /tmp",
+            ]),
+            None,
+        ),
+        (&pl(&["result", "fail", "no space left on /tmp"]), Some(1)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("no space left on /tmp"), "{ev:?}");
+    assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn progress_lines_split_across_reads_still_parse() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        ("HELIX-PROGRESS\tplat", None),
+        ("form\tpi\nHELIX-PROGRESS\tresult", None),
+        ("\tok", None),
+        ("", Some(0)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+}
+
+#[tokio::test]
+async fn a_job_that_goes_silent_times_out_instead_of_succeeding() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![(&pl(&["platform", "pi"]), None)]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let start = f.now();
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(reason.contains("nothing"), "{reason}");
+    let waited = f.now().duration_since(start).unwrap();
+    assert!(waited >= HELIX_INSTALL_SILENCE, "gave up after {waited:?}");
+    assert!(
+        r.state().job.is_some(),
+        "a job still running is kept, so a retry follows it instead of starting a second install"
+    );
+}
+
+#[tokio::test]
+async fn a_job_that_dies_without_a_result_fails() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_dying_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["step", "1", "3", "start", "Extracting", ""]), None),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let start = f.now();
+    let (ev, _) = settle(&mut r).await;
+    assert_eq!(
+        failure(&ev),
+        "the installer stopped without reporting a result"
+    );
+    assert!(f.now().duration_since(start).unwrap() < HELIX_INSTALL_SILENCE);
+    assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn a_job_that_exits_without_a_result_fails() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        ("sh: syntax error\n", Some(2)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(reason.contains("without reporting a result"), "{reason}");
+    assert!(reason.contains("syntax error"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_non_root_login_without_passwordless_sudo_stops_before_uploading() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.on_command(
+        "sudo -n true",
+        ExecOutput {
+            stdout: String::new(),
+            stderr: "sudo: a password is required".into(),
+            exit: 1,
+        },
+    );
+    let mut r = f.runner("pi", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    match &ev {
+        Event::Failed { reason, help, .. } => {
+            assert!(reason.contains("passwordless sudo"), "{reason}");
+            assert!(
+                help.as_deref()
+                    .unwrap_or("")
+                    .contains("https://helixscreen.org/docs/install"),
+                "{help:?}"
+            );
+        }
+        e => panic!("expected Failed, got {e:?}"),
+    }
+    assert!(f.ssh.uploads().is_empty());
+    assert!(spawned(&f).is_empty());
+}
+
+#[tokio::test]
+async fn a_non_root_login_with_passwordless_sudo_installs_without_sending_the_password() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.on_command(
+        "sudo -n true",
+        ExecOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("pi", install_step(json!("pi")), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let s = spawned(&f);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].1, None, "the password never reaches the install job");
+    assert!(f.ssh.stdins().iter().all(|b| b != PASSWORD.as_bytes()));
+}
+
+async fn fails_before_upload(f: Fakes, platform: Value, facts: Value) -> String {
+    let mut r = f.runner("root", install_step(platform), facts);
+    let (ev, _) = settle(&mut r).await;
+    assert!(f.ssh.uploads().is_empty(), "{:?}", f.ssh.uploads());
+    assert!(spawned(&f).is_empty());
+    match ev {
+        Event::Failed { reason, .. } | Event::Refused { reason, .. } => reason,
+        e => panic!("expected a stop, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_install_sh_whose_digest_does_not_match_is_not_uploaded() {
+    let bad = json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL, "digest": format!("sha256:{}", sha(b"other")) });
+    let reason = fails_before_upload(Fakes::new(&["pi"], bad), json!("pi"), json!({})).await;
+    assert!(reason.contains("install.sh"), "{reason}");
+    assert!(reason.contains("hash"), "{reason}");
+}
+
+#[tokio::test]
+async fn an_install_sh_asset_without_a_digest_fails() {
+    let bare = json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL });
+    let reason = fails_before_upload(Fakes::new(&["pi"], bare), json!("pi"), json!({})).await;
+    assert!(reason.contains("digest"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_release_without_install_sh_fails() {
+    let other = json!({ "name": "README.md", "browser_download_url": "https://example.invalid/r", "digest": "sha256:00" });
+    let reason = fails_before_upload(Fakes::new(&["pi"], other), json!("pi"), json!({})).await;
+    assert!(reason.contains("has no install.sh"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_tarball_that_does_not_match_the_release_manifest_is_not_uploaded() {
+    let f = Fakes::standard(&["pi"]);
+    f.fetch.add(&tarball_url("pi"), b"tampered".to_vec());
+    let reason = fails_before_upload(f, json!("pi"), json!({})).await;
+    assert!(reason.contains("hash"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_platform_missing_from_the_release_fails_clearly() {
+    let reason = fails_before_upload(Fakes::standard(&["pi"]), json!("k2"), json!({})).await;
+    assert!(reason.contains("k2"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_cpu_the_recipe_does_not_map_stops() {
+    let reason = fails_before_upload(
+        Fakes::standard(&["pi"]),
+        json!({ "from_arch": { "aarch64": "pi" } }),
+        json!({ "cpu_arch": "mips" }),
+    )
+    .await;
+    assert!(reason.contains("mips"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_reopened_run_asks_for_the_login_then_follows_its_recorded_job() {
+    let f = Fakes::standard(&["pi"]);
+    // The job the earlier app session launched; the fake hands out logs only through
+    // spawn_detached.
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["step", "1", "1", "start", "Extracting", ""]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let login = || Login {
+        user: "root".into(),
+        password: PASSWORD.into(),
+    };
+    let job = {
+        let mut s = Ssh::connect(&f.ssh, &Host::new(ADDR), &login())
+            .await
+            .unwrap();
+        s.spawn_detached("earlier launch", None).await.unwrap()
+    };
+    // The run as the reopened app loads it: at the install step, which started and recorded
+    // its job, with no login in memory.
+    let facts: Facts = serde_json::from_value(json!({ "ssh_user": "root" })).unwrap();
+    let mut state = RunState::new("run1", "k1", "r", Host::new(ADDR), facts);
+    state.started_step = Some(0);
+    state.job = Some(job);
+    let mut r = Runner::new(f.env(), manifest(install_step(json!("pi"))), state)
+        .with_cache_dir(f.cache.path().to_path_buf());
+
+    match r.advance(None).await {
+        Event::NeedInput(Prompt::Login { user_hint }) => {
+            assert_eq!(user_hint.as_deref(), Some("root"))
+        }
+        e => panic!("expected a login prompt, got {e:?}"),
+    }
+    let mut ev = r.advance(Some(Input::Login(login()))).await;
+    let mut titles = Vec::new();
+    while let Event::Progress { title, .. } = &ev {
+        titles.push(title.clone());
+        ev = r.advance(None).await;
+    }
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(titles.iter().any(|t| t == "Extracting"), "{titles:?}");
+    assert!(f.ssh.uploads().is_empty(), "nothing re-uploaded");
+    assert!(spawned(&f).is_empty(), "nothing re-run");
+    assert!(f.fetch.requests().is_empty(), "nothing re-downloaded");
+}
+
+// ---------------------------------------------------------------- ssh_run
+
+fn ssh_run(command: &str, timeout_s: u64) -> Value {
+    json!([{ "type": "ssh_run", "command": command, "timeout_s": timeout_s }])
+}
+
+#[tokio::test]
+async fn ssh_run_succeeds_on_exit_zero() {
+    let f = Fakes::standard(&[]);
+    f.ssh.script_job(vec![("syncing\n", None), ("", Some(0))]);
+    let mut r = f.runner("root", ssh_run("sync && echo done", 60), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let job_calls: Vec<_> = f
+        .ssh
+        .calls()
+        .into_iter()
+        .filter(|(c, _)| c == "sync && echo done")
+        .collect();
+    assert_eq!(job_calls, vec![("sync && echo done".to_string(), None)]);
+    assert_eq!(r.state().job, None);
+}
+
+#[tokio::test]
+async fn ssh_run_failure_shows_the_last_lines_of_output() {
+    let f = Fakes::standard(&[]);
+    let mut text = String::new();
+    for i in 0..40 {
+        text.push_str(&format!("line {i}\n"));
+    }
+    text.push_str("cp: cannot create /opt/x: Read-only file system\n");
+    f.ssh.script_job(vec![(&text, None), ("", Some(1))]);
+    let mut r = f.runner("root", ssh_run("cp a /opt/x", 60), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    let reason = failure(&ev);
+    assert!(reason.contains("exit 1"), "{reason}");
+    assert!(reason.contains("Read-only file system"), "{reason}");
+    assert!(
+        !reason.contains("line 0\n") && !reason.contains("line 0 "),
+        "only the tail: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn ssh_run_times_out_after_its_timeout_of_silence() {
+    let f = Fakes::standard(&[]);
+    f.ssh.script_job(vec![("started\n", None)]);
+    let mut r = f.runner("root", ssh_run("sleep 9999", 30), json!({}));
+
+    let start = f.now();
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("30 seconds"), "{ev:?}");
+    assert!(f.now().duration_since(start).unwrap() >= Duration::from_secs(30));
+}
+
+#[tokio::test]
+async fn ssh_run_whose_process_dies_fails() {
+    let f = Fakes::standard(&[]);
+    f.ssh.script_dying_job(vec![("half\n", None)]);
+    let mut r = f.runner("root", ssh_run("thing", 60), json!({}));
+
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("stopped"), "{ev:?}");
+}

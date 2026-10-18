@@ -4,10 +4,14 @@
 
 pub mod ask;
 pub mod download;
+pub mod helix_install;
 pub mod info;
+mod job;
 pub mod moonraker;
 pub mod probe;
+pub mod progress;
 pub mod require;
+pub mod ssh_run;
 pub mod wait_for;
 
 use crate::facts::Facts;
@@ -61,6 +65,7 @@ pub trait StepHandler: Send + Sync {
 pub struct Session {
     login: Option<Login>,
     ssh: Option<Box<dyn SshSession>>,
+    job_cursor: Option<job::JobCursor>,
 }
 
 /// Everything a step may read or change while it runs.
@@ -188,10 +193,16 @@ pub(crate) async fn run_builtin(
         } => wait_for::run(ctx, *target, *timeout_s, message, help, input).await,
         Step::MoonrakerGcode { script, .. } => moonraker::gcode(ctx, script).await,
         Step::MoonrakerUpdate { name, .. } => moonraker::update(ctx, name).await,
-        Step::WriteStick { .. }
-        | Step::SshLogin { .. }
-        | Step::SshRun { .. }
-        | Step::HelixInstall { .. } => {
+        Step::SshRun {
+            command, timeout_s, ..
+        } => ssh_run::run(ctx, command, *timeout_s, input).await,
+        Step::HelixInstall {
+            platform,
+            update,
+            dir,
+            ..
+        } => helix_install::run(ctx, platform, *update, dir.as_deref(), input).await,
+        Step::WriteStick { .. } | Step::SshLogin { .. } => {
             StepOutcome::failed(format!("unsupported step {}", step.type_name()))
         }
     }

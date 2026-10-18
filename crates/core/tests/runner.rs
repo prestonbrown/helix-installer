@@ -418,10 +418,10 @@ async fn the_ssh_password_never_reaches_saved_state() {
 #[tokio::test]
 async fn an_unregistered_step_type_fails_as_unsupported() {
     let f = Fakes::new();
-    let m = manifest(json!([{ "type": "ssh_run", "command": "true", "timeout_s": 5 }]));
+    let m = manifest(json!([{ "type": "write_stick", "artifacts": [] }]));
     let mut r = Runner::new(f.env(), m, state("run1", json!({})));
     match r.advance(None).await {
-        Event::Failed { reason, .. } => assert_eq!(reason, "unsupported step ssh_run"),
+        Event::Failed { reason, .. } => assert_eq!(reason, "unsupported step write_stick"),
         e => panic!("expected Failed, got {e:?}"),
     }
 }

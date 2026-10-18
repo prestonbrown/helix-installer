@@ -26,7 +26,9 @@ impl Default for HttpFetch {
 
 impl HttpFetch {
     pub fn new() -> Self {
+        // GitHub's API refuses requests that carry no User-Agent.
         let client = Client::builder()
+            .user_agent(concat!("helix-installer/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .build()
