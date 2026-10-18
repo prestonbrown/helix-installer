@@ -56,12 +56,12 @@ jobs:
             args: ""
     runs-on: ${{ matrix.os }}
     env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      IN_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      IN_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      IN_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      IN_APPLE_ID: ${{ secrets.APPLE_ID }}
+      IN_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      IN_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -82,15 +82,15 @@ jobs:
         run: |
           sign_apple=false; notarize=false; sign_azure=false; sign_updater=false
           if [ "$RUNNER_OS" = macOS ]; then
-            [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && sign_apple=true
-            [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ] && notarize=true
+            [ -n "$IN_APPLE_CERTIFICATE" ] && [ -n "$IN_APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$IN_APPLE_SIGNING_IDENTITY" ] && sign_apple=true
+            [ -n "$IN_APPLE_ID" ] && [ -n "$IN_APPLE_PASSWORD" ] && [ -n "$IN_APPLE_TEAM_ID" ] && notarize=true
             if [ "$sign_apple" = true ]; then
               for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
-                echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+                echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "IN_$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
               done
               if [ "$notarize" = true ]; then
                 for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-                  echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+                  echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "IN_$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
                 done
               fi
             else
