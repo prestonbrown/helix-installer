@@ -1,0 +1,226 @@
+name: Release
+
+# A v* tag, or a manual run, builds every installer and leaves a DRAFT release for a person to
+# publish. Nothing here needs a secret: with none set, everything builds unsigned and the
+# "Signing" summary of each job says so. Setup steps for each secret: docs/SIGNING.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      updater: ${{ steps.flags.outputs.updater }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+    steps:
+      - id: tag
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=dispatch-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+          fi
+      - id: flags
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "updater=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            args: ""
+          - os: macos-latest
+            label: macos
+            args: "--target universal-apple-darwin"
+          - os: ubuntu-22.04
+            label: linux
+            args: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+      UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Each signing step is switched on by its secrets and only by them: a secret that is not set
+      # leaves that artifact unsigned, never a failed build. The decision is exported to later
+      # steps through GITHUB_ENV, so an unset credential is never handed to the bundler as an
+      # empty string (which it would try to use).
+      - name: Decide what gets signed
+        shell: bash
+        run: |
+          sign_apple=false; notarize=false; sign_azure=false; sign_updater=false
+          if [ "$RUNNER_OS" = macOS ]; then
+            [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && sign_apple=true
+            [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ] && notarize=true
+            if [ "$sign_apple" = true ]; then
+              for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+                echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+              done
+              if [ "$notarize" = true ]; then
+                for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+                  echo "$v<<__EOF__" >> "$GITHUB_ENV"; printenv "$v" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+                done
+              fi
+            else
+              notarize=false
+            fi
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_CLIENT_SECRET" ] \
+              && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_SIGNING_PROFILE" ] && sign_azure=true
+          fi
+          if [ -n "$UPDATER_KEY" ]; then
+            sign_updater=true
+            echo "TAURI_SIGNING_PRIVATE_KEY<<__EOF__" >> "$GITHUB_ENV"; printf '%s\n' "$UPDATER_KEY" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<__EOF__" >> "$GITHUB_ENV"; printf '%s\n' "$UPDATER_KEY_PASSWORD" >> "$GITHUB_ENV"; echo "__EOF__" >> "$GITHUB_ENV"
+          fi
+          {
+            echo "SIGN_APPLE=$sign_apple"
+            echo "NOTARIZE_APPLE=$notarize"
+            echo "SIGN_AZURE=$sign_azure"
+            echo "SIGN_UPDATER=$sign_updater"
+          } >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.label == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Install the Azure Artifact (Trusted) Signing client
+        if: env.SIGN_AZURE == 'true'
+        run: cargo install artifact-signing-cli --locked --version 0.12.0
+
+      # Per-run overrides for tauri.conf.json, so the checked-in config builds unsigned anywhere.
+      - name: Write the build configuration
+        shell: bash
+        run: |
+          node -e '
+            const bundle = {};
+            if (process.env.SIGN_UPDATER === "true") bundle.createUpdaterArtifacts = true;
+            if (process.env.SIGN_AZURE === "true") {
+              bundle.windows = { signCommand: [
+                "artifact-signing-cli", "-e", process.env.AZURE_SIGNING_ENDPOINT,
+                "-a", process.env.AZURE_SIGNING_ACCOUNT, "-c", process.env.AZURE_SIGNING_PROFILE,
+                "-d", "HelixScreen Installer", "%1"
+              ].join(" ") };
+            }
+            require("fs").writeFileSync("crates/app/ci-config.json", JSON.stringify({ bundle }));
+          '
+
+      - uses: tauri-apps/tauri-action@action-v1.0.0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/app
+          tauriScript: npm --prefix ../../ui exec -- tauri
+          tagName: ${{ needs.plan.outputs.tag }}
+          releaseName: HelixScreen Installer ${{ needs.plan.outputs.tag }}
+          releaseBody: Unsigned builds are listed in each build job's Signing summary. Review, then publish.
+          releaseDraft: true
+          uploadUpdaterJson: false
+          uploadWorkflowArtifacts: true
+          args: --config ci-config.json ${{ matrix.args }}
+
+      - name: Signing
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Signing: ${{ matrix.label }}"
+            case "$RUNNER_OS" in
+              macOS)
+                if [ "$SIGN_APPLE" = true ]; then echo "- .dmg: Developer ID signed"; else echo "- .dmg: UNSIGNED (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY not all set); Gatekeeper will block it"; fi
+                if [ "$NOTARIZE_APPLE" = true ]; then echo "- .dmg: notarized"; else echo "- .dmg: NOT notarized (APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID not all set, or no signing certificate)"; fi ;;
+              Windows)
+                if [ "$SIGN_AZURE" = true ]; then echo "- .msi and .exe: signed with Azure Trusted Signing"; else echo "- .msi and .exe: UNSIGNED (Azure Trusted Signing secrets not all set); SmartScreen will warn"; fi ;;
+              Linux)
+                echo "- AppImage and .deb: not code-signed on this platform" ;;
+            esac
+            if [ "$SIGN_UPDATER" = true ]; then echo "- updater signatures (.sig): produced"; else echo "- updater signatures (.sig): NOT produced (TAURI_SIGNING_PRIVATE_KEY not set); the in-app updater has nothing to install"; fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The update manifest the app reads. Runs only when the updater key exists, and only after a
+  # reviewer approves the manifest-publish environment (the same one that guards the printer list).
+  publish-updater:
+    needs: [plan, build]
+    if: needs.plan.outputs.updater == 'true'
+    runs-on: ubuntu-latest
+    environment: manifest-publish
+    concurrency: manifest-publish-updater
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET_NAME || 'helixscreen-releases' }}
+      R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL || 'https://releases.helixscreen.org' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require upload configuration
+        run: |
+          missing=""
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          case "$R2_ENDPOINT" in https://.r2.*) missing="$missing R2_ACCOUNT_ID" ;; esac
+          if [ -n "$missing" ]; then
+            echo "::error::Not publishing updates: missing in the manifest-publish environment:$missing. See docs/SIGNING.md."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+      - name: Write latest.json
+        run: python3 scripts/updater_manifest.py bundles "$R2_PUBLIC_URL/installer/app" out
+      - name: Upload to R2
+        run: |
+          set -e
+          version=$(jq -r .version out/latest.json)
+          # Bundles first, so latest.json never names a file that is not there yet.
+          aws s3 sync out "s3://${R2_BUCKET}/installer/app/${version}" --endpoint-url "$R2_ENDPOINT" --exclude latest.json
+          aws s3 cp out/latest.json "s3://${R2_BUCKET}/installer/app/latest.json" --endpoint-url "$R2_ENDPOINT" --content-type application/json --cache-control "max-age=300"

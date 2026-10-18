@@ -74,3 +74,76 @@ fetches `https://releases.helixscreen.org/installer/manifest.json`; set
 cargo run -p helix_installer_core --bin manifest-lint -- --verify manifest.json \
   --sig manifest.json.minisig --pubkey helix-installer.pub
 ```
+
+# Signing the app and the updater
+
+`.github/workflows/release.yml` runs on a `v*` tag, or by hand (`gh workflow run release.yml
+--ref engine`), and leaves a **draft** release with the Windows `.msi` and `.exe`, the macOS
+`.dmg` (universal) and the Linux AppImage and `.deb`. Every signing step switches on only
+when its secrets exist; with none set the build still succeeds and each job's summary lists
+what came out unsigned. Nothing below is required to build.
+
+Set repository secrets with `gh secret set NAME -R prestonbrown/helix-installer`.
+
+## In-app updater
+
+The app checks `https://releases.helixscreen.org/installer/app/latest.json` once at startup,
+but only when `UPDATER_PUBKEY` in `crates/core/src/keys.rs` is set. Empty (today), it never
+checks and shows nothing.
+
+```sh
+cd ui && npx tauri signer generate -w ~/helix-installer-updater.key
+```
+
+Choose a password. The command prints the public key and writes the private one to the file.
+
+```sh
+R=prestonbrown/helix-installer
+gh secret set TAURI_SIGNING_PRIVATE_KEY -R $R < ~/helix-installer-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R $R   # prompts
+```
+
+Paste the public key into `UPDATER_PUBKEY` and commit; builds from then on check for updates.
+Changing it later strands every installed copy, so treat it as permanent and back the private
+key up offline.
+
+With `TAURI_SIGNING_PRIVATE_KEY` set the release builds updater bundles and `.sig` files, and
+the `publish-updater` job writes `latest.json` plus the bundles to `installer/app/` in the
+release bucket, after you approve the `manifest-publish` deployment (same environment and R2
+secrets as the printer list above).
+
+## Apple (on hold)
+
+Needs the Apple Developer Program membership and a "Developer ID Application" certificate
+exported from Keychain as a `.p12`.
+
+```sh
+base64 -i DeveloperID.p12 | gh secret set APPLE_CERTIFICATE -R $R
+gh secret set APPLE_CERTIFICATE_PASSWORD -R $R   # the .p12 export password
+gh secret set APPLE_SIGNING_IDENTITY -R $R       # "Developer ID Application: Name (TEAMID)"
+gh secret set APPLE_ID -R $R                     # Apple ID email, for notarization
+gh secret set APPLE_PASSWORD -R $R               # an app-specific password from appleid.apple.com
+gh secret set APPLE_TEAM_ID -R $R
+```
+
+The first three sign the `.dmg`; the last three also notarize it. Without all of them the
+`.dmg` is unsigned and Gatekeeper blocks it.
+
+## Windows: Azure Artifact (Trusted) Signing
+
+Create an Artifact Signing account and a certificate profile in the Azure portal, complete
+identity validation, then register an app (service principal) with the "Artifact Signing
+Certificate Profile Signer" role on the account.
+
+```sh
+gh secret set AZURE_TENANT_ID -R $R
+gh secret set AZURE_CLIENT_ID -R $R
+gh secret set AZURE_CLIENT_SECRET -R $R
+gh secret set AZURE_SIGNING_ENDPOINT -R $R   # e.g. https://wus2.codesigning.azure.net
+gh secret set AZURE_SIGNING_ACCOUNT -R $R    # the account name
+gh secret set AZURE_SIGNING_PROFILE -R $R    # the certificate profile name
+```
+
+With all six set, the Windows job installs `artifact-signing-cli` and Tauri signs the `.msi`
+and `.exe` through it (`bundle.windows.signCommand`). Without them they are unsigned and
+SmartScreen warns.

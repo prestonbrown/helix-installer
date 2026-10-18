@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import * as api from "./lib/api";
   import { ApiError } from "./lib/api";
   import { session } from "./lib/session.svelte";
@@ -15,6 +16,17 @@
   let unfinished = $state<RunSummary[]>([]);
   let resumeHidden = $state(false);
   let versionClicks = 0;
+  let newVersion = $state<string | null>(null);
+  let updating = $state(false);
+
+  async function installUpdate() {
+    updating = true;
+    try {
+      await api.installUpdate();
+    } catch {
+      updating = false;
+    }
+  }
 
   async function load() {
     screen = "loading";
@@ -64,6 +76,8 @@
   }
 
   onMount(async () => {
+    // Fired only when a release is newer; absent in a build without an updater key.
+    listen<string>("update-available", (e) => (newVersion = e.payload)).catch(() => {});
     try {
       const info = await api.appInfo();
       session.version = info.version;
@@ -78,6 +92,14 @@
 <div class="shell">
   <header class="top">
     <span class="logo">HelixScreen Installer</span>
+  {#if newVersion}
+    <div class="update" role="status">
+      Version {newVersion} is available.
+      <button class="primary" onclick={installUpdate} disabled={updating}>
+        {updating ? "Updating…" : "Update and restart"}
+      </button>
+    </div>
+  {/if}
   </header>
 
   <main>
@@ -130,6 +152,13 @@
   .logo {
     font-weight: 700;
     letter-spacing: 0.01em;
+  }
+  .update {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0.5rem;
   }
   main {
     width: 100%;

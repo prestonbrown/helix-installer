@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod commands;
+pub mod updater;
 
 use commands::{ipc, AppConfig, AppCore, LanDiscovery};
 use helix_installer_core::keys::{manifest_location, MANIFEST_PUBKEY};
@@ -65,11 +66,16 @@ fn app_core(data_dir: PathBuf) -> AppCore {
 }
 
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    if let Some(updater) = updater::plugin() {
+        builder = builder.plugin(updater);
+    }
+    builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             app.manage(app_core(data_dir));
+            app.manage(updater::PendingUpdate::default());
+            tauri::async_runtime::spawn(updater::check(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -83,6 +89,7 @@ pub fn run() {
             ipc::dismiss_run,
             ipc::export_bundle,
             ipc::record_printer,
+            ipc::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HelixScreen Installer");

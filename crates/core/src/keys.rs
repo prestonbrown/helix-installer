@@ -16,3 +16,17 @@ pub fn manifest_location(override_: Option<String>) -> String {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| DEFAULT_MANIFEST_URL.to_string())
 }
+
+/// The public half of the key release builds are signed with for the in-app updater (the text
+/// printed by `npx tauri signer generate`). Empty until `docs/SIGNING.md` has been followed;
+/// while empty the app never checks for updates.
+pub const UPDATER_PUBKEY: &str = "";
+
+/// Where the app looks for a newer release: a Tauri updater manifest.
+pub const UPDATE_ENDPOINT: &str = "https://releases.helixscreen.org/installer/app/latest.json";
+
+/// `key` trimmed, or `None` when it is blank, meaning updates are switched off.
+pub fn updater_key(key: &str) -> Option<&str> {
+    let key = key.trim();
+    (!key.is_empty()).then_some(key)
+}

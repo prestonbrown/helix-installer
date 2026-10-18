@@ -658,6 +658,11 @@ pub mod ipc {
     type Core<'a> = State<'a, AppCore>;
 
     #[tauri::command]
+    pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+        crate::updater::install(app).await
+    }
+
+    #[tauri::command]
     pub fn app_info(core: Core<'_>) -> AppInfo {
         core.app_info()
     }
