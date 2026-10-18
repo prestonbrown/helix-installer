@@ -62,6 +62,9 @@ pub trait StepHandler: Send + Sync {
     async fn run(&self, ctx: &mut StepCtx<'_>, step: &Step, input: Option<Input>) -> StepOutcome;
 }
 
+/// Logins the user may type before an SSH step gives up.
+pub(crate) const USER_LOGIN_TRIES: u32 = 3;
+
 /// What lives only in the runner's memory: never saved, never logged.
 #[derive(Default)]
 pub struct Session {
@@ -71,6 +74,15 @@ pub struct Session {
     stick: Option<write_stick::Stage>,
     /// Logins the user typed that the printer refused since the last success.
     login_tries: u32,
+    /// The recipe's default logins were already tried during this step run.
+    defaults_tried: bool,
+}
+
+impl Session {
+    /// Called when a step becomes current or is retried.
+    pub(crate) fn begin_step(&mut self) {
+        self.defaults_tried = false;
+    }
 }
 
 /// Everything a step may read or change while it runs.
@@ -119,32 +131,83 @@ impl StepCtx<'_> {
         Ok(())
     }
 
-    /// Holds a login for an SSH step: the one the user just gave, else the recipe's own
-    /// `ssh_login` defaults tried quietly (a reopened run has lost the login it had in memory),
-    /// else a prompt. `None` means a login is held and the step may go on.
+    /// Holds a login for an SSH step: the one the user just gave (checked against the printer,
+    /// three tries in all), else the recipe's own `ssh_login` defaults tried quietly (a reopened
+    /// run has lost the login it had in memory), else a prompt. `None` means a login is held
+    /// and the step may go on.
     pub(crate) async fn need_login(&mut self, input: Option<Input>) -> Option<StepOutcome> {
-        if let Some(Input::Login(login)) = input {
-            self.set_login(login);
+        match input {
+            Some(Input::Login(login)) => {
+                self.session.login_tries += 1;
+                match self.try_login(login).await {
+                    Ok(()) => {
+                        self.session.login_tries = 0;
+                        return None;
+                    }
+                    Err(TransportError::Auth) => return Some(self.refused_login()),
+                    Err(e) => return Some(self.login_error(e)),
+                }
+            }
+            None => self.session.login_tries = 0,
+            Some(_) => {}
         }
         if self.login().is_some() {
             return None;
         }
-        self.try_default_logins().await;
+        if let Err(e) = self.try_default_logins().await {
+            return Some(self.login_error(e));
+        }
         match self.login() {
             Some(_) => None,
             None => Some(StepOutcome::NeedInput(self.login_prompt(None))),
         }
     }
 
-    /// Holds the first of the recipe's `ssh_login` defaults the printer accepts, if any.
-    pub(crate) async fn try_default_logins(&mut self) {
+    /// The printer refused a typed login: ask again, or give up after `USER_LOGIN_TRIES`.
+    pub(crate) fn refused_login(&mut self) -> StepOutcome {
+        if self.session.login_tries < USER_LOGIN_TRIES {
+            return StepOutcome::NeedInput(self.login_prompt(None));
+        }
+        self.session.login_tries = 0;
+        StepOutcome::Failed {
+            reason: "the printer refused that login three times".into(),
+            help: self.login_help(),
+        }
+    }
+
+    pub(crate) fn login_error(&mut self, e: TransportError) -> StepOutcome {
+        self.session.login_tries = 0;
+        StepOutcome::failed(format!("could not log in over SSH: {e}"))
+    }
+
+    /// The printer's install guide, where the recipe tells the user how to find its password.
+    pub(crate) fn login_help(&self) -> Option<String> {
+        let printer = self
+            .manifest
+            .printers
+            .iter()
+            .find(|p| p.id == self.printer_id)?;
+        Some(format!(
+            "Look up this printer's SSH password in its install guide: {}",
+            printer.fallback.doc
+        ))
+    }
+
+    /// Holds the first of the recipe's `ssh_login` defaults the printer accepts. Refused
+    /// defaults are not an error; an unreachable host is. Tried once per step run, so a stale
+    /// default is not retried against the printer on every poll.
+    pub(crate) async fn try_default_logins(&mut self) -> Result<(), TransportError> {
+        if std::mem::replace(&mut self.session.defaults_tried, true) {
+            return Ok(());
+        }
         for login in self.default_logins() {
             match self.try_login(login).await {
-                Ok(()) => return,
+                Ok(()) => return Ok(()),
                 Err(TransportError::Auth) => {}
-                Err(_) => return,
+                Err(e) => return Err(e),
             }
         }
+        Ok(())
     }
 
     /// The logins of the recipe's first `ssh_login` step.
@@ -172,7 +235,7 @@ impl StepCtx<'_> {
     /// The open SSH session to the run's host, connecting with the held login if none is open.
     pub async fn ssh(&mut self) -> Result<&mut (dyn SshSession + 'static), TransportError> {
         if self.session.login.is_none() {
-            self.try_default_logins().await;
+            self.try_default_logins().await?;
         }
         if self.session.ssh.is_none() {
             let login = self

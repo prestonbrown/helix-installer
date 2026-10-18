@@ -116,6 +116,7 @@ struct SshState {
     jobs: HashMap<String, JobScript>,
     next_job: u32,
     drop_next_session_after: Option<u32>,
+    connects: u32,
 }
 
 /// Shared by every session it hands out, so a reconnect sees the same job logs.
@@ -171,6 +172,10 @@ impl FakeSsh {
             .map(|(c, _)| c.clone())
             .collect()
     }
+    /// How many times `connect` was called, accepted or not.
+    pub fn connect_count(&self) -> u32 {
+        lock(&self.state).connects
+    }
     /// Every stdin payload, kept apart from the command lines.
     pub fn stdins(&self) -> Vec<Vec<u8>> {
         lock(&self.state)
@@ -194,6 +199,7 @@ impl FakeSsh {
 impl Ssh for FakeSsh {
     async fn connect(&self, host: &Host, login: &Login) -> Result<Box<dyn SshSession>> {
         let mut st = lock(&self.state);
+        st.connects += 1;
         if !st.accepted.iter().any(|(a, _, _)| *a == host.addr) {
             return Err(TransportError::Unreachable);
         }

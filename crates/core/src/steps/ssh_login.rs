@@ -8,12 +8,10 @@ use crate::runner::Input;
 use crate::transport::TransportError;
 use std::time::Duration;
 
-/// Logins the user may type before the step gives up.
-const USER_TRIES: u32 = 3;
 const ID_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Tries each of the recipe's `logins` once, in order. When all are refused the user is asked
-/// (if the recipe allows) and gets `USER_TRIES` attempts. Records `ssh_user` and `needs_sudo`.
+/// (if the recipe allows) and gets `USER_LOGIN_TRIES` attempts. Records `ssh_user` and `needs_sudo`.
 pub async fn run(
     ctx: &mut StepCtx<'_>,
     logins: &[Login],
@@ -24,24 +22,18 @@ pub async fn run(
         ctx.session.login_tries += 1;
         return match ctx.try_login(login).await {
             Ok(()) => finish(ctx).await,
-            Err(TransportError::Auth) if ctx.session.login_tries < USER_TRIES => {
-                StepOutcome::NeedInput(ctx.login_prompt(None))
-            }
-            Err(TransportError::Auth) => {
-                ctx.session.login_tries = 0;
-                StepOutcome::Failed {
-                    reason: "the printer refused that login three times".into(),
-                    help: help(ctx),
-                }
-            }
-            Err(e) => unreachable_failure(ctx, e),
+            Err(TransportError::Auth) => ctx.refused_login(),
+            Err(e) => ctx.login_error(e),
         };
+    }
+    if input.is_none() {
+        ctx.session.login_tries = 0;
     }
     for login in logins {
         match ctx.try_login(login.clone()).await {
             Ok(()) => return finish(ctx).await,
             Err(TransportError::Auth) => {}
-            Err(e) => return unreachable_failure(ctx, e),
+            Err(e) => return ctx.login_error(e),
         }
     }
     if ask_if_failed {
@@ -50,7 +42,7 @@ pub async fn run(
     }
     StepOutcome::Failed {
         reason: "the printer refused every known login".into(),
-        help: help(ctx),
+        help: ctx.login_help(),
     }
 }
 
@@ -65,12 +57,17 @@ async fn finish(ctx: &mut StepCtx<'_>) -> StepOutcome {
         Err(e) => Err(e),
     };
     match uid {
-        Ok(out) if out.exit == 0 => {
-            ctx.facts.insert("ssh_user".into(), user.into());
-            ctx.facts
-                .insert("needs_sudo".into(), (out.stdout.trim() != "0").into());
-            StepOutcome::Done
-        }
+        Ok(out) if out.exit == 0 => match out.stdout.trim().parse::<u32>() {
+            Ok(uid) => {
+                ctx.facts.insert("ssh_user".into(), user.into());
+                ctx.facts.insert("needs_sudo".into(), (uid != 0).into());
+                StepOutcome::Done
+            }
+            Err(_) => StepOutcome::failed(format!(
+                "could not tell which user the login is: id -u printed {:?}",
+                out.stdout.trim()
+            )),
+        },
         Ok(out) => StepOutcome::failed(format!(
             "could not tell which user the login is: id -u exited with {}",
             out.exit
@@ -80,22 +77,4 @@ async fn finish(ctx: &mut StepCtx<'_>) -> StepOutcome {
             StepOutcome::failed(format!("could not tell which user the login is: {e}"))
         }
     }
-}
-
-fn unreachable_failure(ctx: &mut StepCtx<'_>, e: TransportError) -> StepOutcome {
-    ctx.session.login_tries = 0;
-    StepOutcome::failed(format!("could not log in over SSH: {e}"))
-}
-
-/// The printer's install guide, where the recipe tells the user how to find its password.
-fn help(ctx: &StepCtx<'_>) -> Option<String> {
-    let printer = ctx
-        .manifest
-        .printers
-        .iter()
-        .find(|p| p.id == ctx.printer_id)?;
-    Some(format!(
-        "Look up this printer's SSH password in its install guide: {}",
-        printer.fallback.doc
-    ))
 }

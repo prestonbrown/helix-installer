@@ -106,3 +106,46 @@ fn masking_leaves_versions_and_times_alone() {
         "{out}"
     );
 }
+
+#[test]
+fn a_mac_after_a_label_is_still_masked() {
+    let mut s = state();
+    s.log.push(LogEntry {
+        at_unix: 6,
+        step: 0,
+        text: "mac:aa:bb:cc:dd:ee:11 and eth0:aa:bb:cc:dd:ee:22 and wlan-AA-BB-CC-DD-EE-33".into(),
+    });
+    let out = support_bundle(&s, &[], &[], true);
+    for leaked in ["ee:11", "ee:22", "EE-33"] {
+        assert!(!out.contains(leaked), "{leaked} leaked: {out}");
+    }
+    assert!(
+        out.contains("eth0:<mac>") && out.contains("wlan-<mac>"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_v4_mapped_v6_address_is_masked_whole() {
+    let mut s = state();
+    s.log.push(LogEntry {
+        at_unix: 7,
+        step: 0,
+        text: "peer ::ffff:10.20.30.40 ok".into(),
+    });
+    let out = support_bundle(&s, &[], &[], true);
+    assert!(out.contains("peer <ip> ok"), "{out}");
+}
+
+#[test]
+fn the_longest_secret_is_stripped_first() {
+    let mut s = state();
+    s.log.push(LogEntry {
+        at_unix: 8,
+        step: 0,
+        text: "pw=hunter2-extra-tail".into(),
+    });
+    let out = support_bundle(&s, &[], &["hunter2", "hunter2-extra"], false);
+    assert!(out.contains("pw=<secret>-tail"), "{out}");
+    assert!(!out.contains("extra"), "{out}");
+}

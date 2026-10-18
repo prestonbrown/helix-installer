@@ -15,7 +15,7 @@ const SERIAL: &str = "<serial>";
 /// `secrets` are the passwords seen in the run (the run state never holds them). Each is
 /// removed wherever it appears; an empty one is ignored. `mask` additionally hides IPv4 and
 /// IPv6 addresses, MAC addresses and the `serial` fact, which also vanishes from any log
-/// line that repeats it.
+/// line that repeats it. Host names (`k1.local`) are not masked.
 pub fn support_bundle(
     state: &RunState,
     job_logs: &[String],
@@ -106,32 +106,60 @@ fn is_mac_char(c: char) -> bool {
 }
 
 fn is_v6_char(c: char) -> bool {
-    c.is_ascii_hexdigit() || c == ':'
+    c.is_ascii_hexdigit() || c == ':' || c == '.'
 }
 
 fn is_v4_char(c: char) -> bool {
     c.is_ascii_digit() || c == '.'
 }
 
-/// Six hex pairs joined by one separator kind.
+/// Every window of six hex pairs joined by one separator kind, wherever it sits in the run,
+/// so a label glued on in front (`mac:aa:...`) does not hide it.
 fn mask_mac(run: &str) -> Option<String> {
     let sep = if run.contains(':') { ':' } else { '-' };
     let groups: Vec<&str> = run.split(sep).collect();
-    let pair = |g: &&str| g.len() == 2 && g.chars().all(|c| c.is_ascii_hexdigit());
-    (groups.len() == 6 && groups.iter().all(pair)).then(|| MAC.to_string())
+    let pair = |g: &str| g.len() == 2 && g.chars().all(|c| c.is_ascii_hexdigit());
+    let mut covered = vec![false; groups.len()];
+    for start in 0..groups.len().saturating_sub(5) {
+        if groups[start..start + 6].iter().all(|g| pair(g)) {
+            covered[start..start + 6].fill(true);
+        }
+    }
+    if !covered.contains(&true) {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for (i, g) in groups.iter().enumerate() {
+        if !covered[i] {
+            parts.push(g);
+        } else if i == 0 || !covered[i - 1] {
+            parts.push(MAC);
+        }
+    }
+    Some(parts.join(&sep.to_string()))
 }
 
 fn mask_ipv6(run: &str) -> Option<String> {
-    if is_ipv6(run) {
-        return Some(IP.to_string());
+    // Trailing dots and a colon are sentence punctuation, not part of the address.
+    let body = run.trim_end_matches('.');
+    let tail = &run[body.len()..];
+    if is_ipv6(body) || is_v4_mapped(body) {
+        return Some(format!("{IP}{tail}"));
     }
-    // A sentence-ending colon belongs to the prose, not the address.
-    let trimmed = run.strip_suffix(':')?;
-    is_ipv6(trimmed).then(|| format!("{IP}:"))
+    let trimmed = body.strip_suffix(':')?;
+    (is_ipv6(trimmed) || is_v4_mapped(trimmed)).then(|| format!("{IP}:{tail}"))
+}
+
+/// `::ffff:10.0.0.1`: an IPv6 prefix followed by a dotted IPv4 tail.
+fn is_v4_mapped(s: &str) -> bool {
+    let Some((head, v4)) = s.rsplit_once(':') else {
+        return false;
+    };
+    mask_ipv4(v4).is_some() && is_ipv6(&format!("{head}:0:0"))
 }
 
 fn is_ipv6(s: &str) -> bool {
-    if s.matches(':').count() < 2 || s.contains(":::") {
+    if s.contains('.') || s.matches(':').count() < 2 || s.contains(":::") {
         return false;
     }
     let compressed = s.matches("::").count();

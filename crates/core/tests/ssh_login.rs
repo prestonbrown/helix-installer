@@ -266,3 +266,108 @@ async fn a_resumed_run_asks_when_the_defaults_no_longer_work() {
     ));
     assert_eq!(r.state().facts["model"], json!("K1"));
 }
+
+#[tokio::test]
+async fn a_wrong_typed_login_is_asked_again_by_any_ssh_step() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", USER_PW);
+    f.ssh.on_command("cat /etc/model", out("K1\n"));
+    let mut r = resumed(&f, probe_after_login(true));
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    assert!(matches!(
+        r.advance(Some(login("root", "wrong"))).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    assert!(matches!(
+        r.advance(Some(login("root", USER_PW))).await,
+        Event::Done
+    ));
+    assert_eq!(r.state().facts["model"], json!("K1"));
+}
+
+#[tokio::test]
+async fn three_wrong_typed_logins_fail_any_ssh_step_with_the_recipe_help() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", USER_PW);
+    let mut r = resumed(&f, probe_after_login(true));
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    for _ in 0..2 {
+        assert!(matches!(
+            r.advance(Some(login("root", "wrong"))).await,
+            Event::NeedInput(Prompt::Login { .. })
+        ));
+    }
+    match r.advance(Some(login("root", "wrong"))).await {
+        Event::Failed { help, .. } => assert!(help.unwrap_or_default().contains(DOC)),
+        e => panic!("expected Failed, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_host_fails_a_resumed_step_instead_of_asking() {
+    let f = Fakes::new();
+    let mut r = resumed(&f, probe_after_login(true));
+    match r.advance(None).await {
+        Event::Failed { reason, .. } => assert!(reason.contains("unreachable"), "{reason}"),
+        e => panic!("expected Failed, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn wait_for_tries_the_stale_defaults_once_not_on_every_poll() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", USER_PW);
+    let mut r = resumed(
+        &f,
+        json!([
+            login_step(json!([{ "user": "root", "password": ROOT_PW }]), true),
+            { "type": "wait_for", "target": "helix_service", "timeout_s": 30, "message": "w" }
+        ]),
+    );
+    let mut ev = r.advance(None).await;
+    while matches!(ev, Event::Progress { .. }) {
+        ev = r.advance(None).await;
+    }
+    assert!(matches!(ev, Event::NeedInput(Prompt::Ask { .. })), "{ev:?}");
+    assert_eq!(f.ssh.connect_count(), 1);
+}
+
+#[tokio::test]
+async fn a_fresh_start_gets_three_new_tries() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", USER_PW);
+    let mut r = runner(&f, json!([login_step(json!([]), true)]));
+    r.advance(None).await;
+    r.advance(Some(login("root", "wrong"))).await;
+    r.advance(Some(login("root", "wrong"))).await;
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    assert!(matches!(
+        r.advance(Some(login("root", "wrong"))).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+}
+
+#[tokio::test]
+async fn an_unreadable_uid_is_a_failure_not_non_root() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", ROOT_PW);
+    f.ssh.on_command("id -u", out("uid=0(root)\n"));
+    let mut r = runner(
+        &f,
+        json!([login_step(
+            json!([{ "user": "root", "password": ROOT_PW }]),
+            false
+        )]),
+    );
+    assert!(matches!(r.advance(None).await, Event::Failed { .. }));
+    assert!(!r.state().facts.contains_key("needs_sudo"));
+}

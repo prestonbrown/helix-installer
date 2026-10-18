@@ -362,6 +362,9 @@ impl Runner {
         step: &Step,
         input: Option<Input>,
     ) -> StepOutcome {
+        if self.calls == 0 {
+            self.session.begin_step();
+        }
         let handler = self.handlers.get(step.type_name()).cloned();
         let mut ctx = StepCtx {
             env: &self.env,

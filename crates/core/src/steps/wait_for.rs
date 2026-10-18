@@ -125,7 +125,8 @@ async fn helix_service(ctx: &mut StepCtx<'_>) -> Poll {
         None => {}
     }
     if ctx.login().is_none() {
-        ctx.try_default_logins().await;
+        // An unreachable printer is reported by the poll itself.
+        let _ = ctx.try_default_logins().await;
     }
     if ctx.login().is_none() {
         return if moonraker_answered {
