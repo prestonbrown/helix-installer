@@ -97,6 +97,7 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   step_kind: "info",
   committed: false,
   guide: "https://helixscreen.org/docs/install-k1",
+  done_note: null,
   ...over,
 });
 
@@ -192,6 +193,15 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     run: run({ step: 7, step_kind: "helix_install", committed: true }),
   },
   done: { event: { event: "done" }, run: run({ step: 9, step_kind: null, committed: true }) },
+  up_to_date: {
+    event: { event: "done" },
+    run: run({
+      step: 9,
+      step_kind: null,
+      done_note:
+        "HelixScreen is up to date: 1.1.0-beta.9 is installed, and the newest beta release is 1.1.0-beta.9",
+    }),
+  },
   refused: {
     event: {
       event: "refused",
@@ -266,6 +276,8 @@ export function install(): void {
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
+      case "pending_update":
+        return null;
       case "app_info":
         return { version: "0.1.0", image_base: null };
       case "printers":

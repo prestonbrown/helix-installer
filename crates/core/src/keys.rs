@@ -3,8 +3,8 @@
 //! The key the published printer list is signed with, and where the list is published.
 
 /// The public half of the production manifest key (the text of its minisign `.pub` file or the
-/// bare base64 line). Empty until `docs/SIGNING.md` has been followed, so until then only a key
-/// given in `HELIX_INSTALLER_PUBKEY` verifies anything.
+/// bare base64 line). Empty until `docs/SIGNING.md` has been followed, so until then nothing
+/// verifies except in a debug build given a key in `HELIX_INSTALLER_PUBKEY`.
 pub const MANIFEST_PUBKEY: &str = "";
 
 /// Where the signed printer list is fetched from; the signature is at `<url>.minisig`.

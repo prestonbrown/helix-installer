@@ -367,7 +367,7 @@ async fn a_fixed_platform_installs_into_the_recipe_dir_as_an_update() {
     ]);
     let steps =
         json!([{ "type": "helix_install", "platform": "ad5m", "update": true, "dir": "/data" }]);
-    let mut r = f.runner("root", steps, json!({}));
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
 
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
@@ -478,7 +478,7 @@ async fn a_dry_run_uploads_runs_dry_run_and_removes_its_files() {
         (&pl(&["result", "ok"]), Some(0)),
     ]);
     let steps = json!([{ "type": "helix_install", "platform": "k1", "update": true, "dry_run": true, "dir": "/usr/data" }]);
-    let mut r = f.runner("root", steps, json!({}));
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
 
     let (ev, titles) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
@@ -1148,15 +1148,9 @@ async fn install_with(f: &Fakes, mut r: Runner) {
 }
 
 #[test]
-fn the_channel_defaults_to_stable_and_names_its_manifest() {
+fn an_unpinned_channel_is_left_to_the_run_and_each_channel_names_its_manifest() {
     let step: Step = serde_json::from_value(channel_step(None)[0].clone()).unwrap();
-    assert!(matches!(
-        step,
-        Step::HelixInstall {
-            channel: Channel::Stable,
-            ..
-        }
-    ));
+    assert!(matches!(step, Step::HelixInstall { channel: None, .. }));
     assert_eq!(
         releases_manifest_url(Channel::Stable),
         "https://releases.helixscreen.org/stable/manifest.json"

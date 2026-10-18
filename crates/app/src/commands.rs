@@ -169,6 +169,8 @@ pub struct RunInfo {
     pub committed: bool,
     /// The printer's install guide.
     pub guide: String,
+    /// Why a run that ended early is done, for the finish screen ("HelixScreen is up to date").
+    pub done_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +243,7 @@ fn run_info(r: &Runner) -> RunInfo {
             .map(|s| s.type_name().to_string()),
         committed: state.committed,
         guide: r.guide(),
+        done_note: state.done_note.clone(),
     }
 }
 
@@ -660,6 +663,11 @@ pub mod ipc {
     #[tauri::command]
     pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         crate::updater::install(app).await
+    }
+
+    #[tauri::command]
+    pub fn pending_update(app: tauri::AppHandle) -> Option<String> {
+        crate::updater::pending_version(&app)
     }
 
     #[tauri::command]

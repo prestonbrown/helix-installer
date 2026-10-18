@@ -98,6 +98,16 @@ describe("startRun", () => {
   });
 });
 
+describe("pendingUpdate", () => {
+  it("reads the version the startup check found, or null", async () => {
+    invoke.mockResolvedValueOnce("0.2.0");
+    expect(await api.pendingUpdate()).toBe("0.2.0");
+    expect(invoke).toHaveBeenCalledWith("pending_update", undefined);
+    invoke.mockResolvedValueOnce(null);
+    expect(await api.pendingUpdate()).toBeNull();
+  });
+});
+
 describe("advance", () => {
   it("sends the run id and the answer", async () => {
     invoke.mockResolvedValueOnce({ event: { event: "done" }, run: {} });

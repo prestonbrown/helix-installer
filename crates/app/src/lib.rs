@@ -18,6 +18,7 @@ use tauri::Manager;
 
 /// Overrides for development: where to fetch the printer list (`<url or path>`, signature at
 /// `<url or path>.minisig`) and the public key it is signed with (key text or a `.pub` path).
+/// The key override is honoured only in debug builds.
 const MANIFEST_ENV: &str = "HELIX_INSTALLER_MANIFEST";
 const PUBKEY_ENV: &str = "HELIX_INSTALLER_PUBKEY";
 /// `stable` or `beta`: the HelixScreen release channel every install reads, over the recipes'.
@@ -34,11 +35,13 @@ fn channel_override(value: Option<String>) -> Option<Channel> {
     channel
 }
 
-fn pubkey() -> String {
-    match std::env::var(PUBKEY_ENV) {
-        Ok(v) if Path::new(&v).is_file() => std::fs::read_to_string(&v).unwrap_or_default(),
-        Ok(v) => v,
-        Err(_) => MANIFEST_PUBKEY.to_string(),
+/// The key the printer list must be signed with. `override_` (key text or a `.pub` path) is
+/// honoured only when `allow_override`: a release build trusts the compiled-in key alone.
+fn pubkey(override_: Option<String>, allow_override: bool) -> String {
+    match override_.filter(|_| allow_override) {
+        Some(v) if Path::new(&v).is_file() => std::fs::read_to_string(&v).unwrap_or_default(),
+        Some(v) => v,
+        None => MANIFEST_PUBKEY.to_string(),
     }
 }
 
@@ -58,7 +61,7 @@ fn app_core(data_dir: PathBuf) -> AppCore {
         env: real_env(&data_dir),
         data_dir,
         discovery: Arc::new(LanDiscovery),
-        pubkey: pubkey(),
+        pubkey: pubkey(std::env::var(PUBKEY_ENV).ok(), cfg!(debug_assertions)),
         manifest_location: Some(manifest_location(std::env::var(MANIFEST_ENV).ok())),
         channel_override: channel_override(std::env::var(CHANNEL_ENV).ok()),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -90,6 +93,7 @@ pub fn run() {
             ipc::export_bundle,
             ipc::record_printer,
             ipc::install_update,
+            ipc::pending_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HelixScreen Installer");
@@ -109,5 +113,12 @@ mod tests {
         assert_eq!(channel_override(Some("nightly".into())), None);
         assert_eq!(channel_override(Some(String::new())), None);
         assert_eq!(channel_override(None), None);
+    }
+
+    #[test]
+    fn only_a_development_build_takes_the_key_from_the_environment() {
+        assert_eq!(pubkey(Some("RWdev".into()), true), "RWdev");
+        assert_eq!(pubkey(Some("RWdev".into()), false), MANIFEST_PUBKEY);
+        assert_eq!(pubkey(None, true), MANIFEST_PUBKEY);
     }
 }

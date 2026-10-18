@@ -15,6 +15,7 @@ use crate::manifest::{Artifact, Channel, PlatformSel};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
 use crate::transport::{Env, RemoteJob, TransportError};
+use crate::version::ReleaseVersion;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,6 +35,12 @@ pub const GITHUB_RELEASE_API: &str =
 /// release onto a MIPS printer's slow flash takes minutes without a line of output.
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
+/// Prints the installed HelixScreen's version from its `release_info.json`, which every install
+/// writes: in the running binary's tree first, then in each place install.sh installs to.
+pub const INSTALLED_VERSION_PROBE: &str = r#"p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); for d in ${e:+"${e%/bin/*}"} /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do if [ -f "$d/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/release_info.json" | head -n 1; exit 0; fi; done"#;
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The fact holding the installed HelixScreen's version (`v1.1.0-beta.9`).
+const VERSION_FACT: &str = "helix_version";
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Fact holding the remote paths this step uploaded, so a reopened run can still remove them.
 const UPLOADED_FACT: &str = "helix_install_uploaded";
@@ -69,8 +76,22 @@ impl Run {
 
 #[derive(Deserialize)]
 struct ReleaseManifest {
+    #[serde(default)]
+    version: Option<String>,
     tag: String,
     assets: BTreeMap<String, ReleaseAsset>,
+}
+
+impl ReleaseManifest {
+    /// The release's version, from `version` or else its tag.
+    fn release_version(&self) -> Result<ReleaseVersion, StepOutcome> {
+        let text = self.version.as_deref().unwrap_or(&self.tag);
+        ReleaseVersion::parse(text).ok_or_else(|| {
+            StepOutcome::failed(format!(
+                "the release list names an unreadable version: {text}"
+            ))
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -92,10 +113,12 @@ struct GithubAsset {
     digest: Option<String>,
 }
 
+/// `channel` is the recipe's pin, if any. An update with no pin, and no run-wide override,
+/// follows the installed version: a prerelease reads the beta channel, else stable.
 pub async fn run(
     ctx: &mut StepCtx<'_>,
     platform: &PlatformSel,
-    channel: Channel,
+    channel: Option<Channel>,
     run: Run,
     dir: Option<&str>,
     input: Option<Input>,
@@ -122,8 +145,27 @@ pub async fn run(
         );
     }
     // The run-wide override (testing, beta testers) wins over the recipe.
-    let channel = ctx.channel_override.unwrap_or(channel);
-    match launch(ctx, &platform, channel, run, dir.unwrap_or(DEFAULT_DIR)).await {
+    let pinned = ctx.channel_override.or(channel);
+    let (channel, installed) = match run.mode {
+        Mode::Update => match installed_version(ctx).await {
+            Ok(v) => {
+                let follow = if v.is_prerelease() {
+                    Channel::Beta
+                } else {
+                    Channel::Stable
+                };
+                (pinned.unwrap_or(follow), Some(v))
+            }
+            Err(stop) => return stop,
+        },
+        Mode::Install | Mode::Uninstall => (pinned.unwrap_or_default(), None),
+    };
+    let target = Target {
+        platform: &platform,
+        channel,
+        installed: installed.as_ref(),
+    };
+    match launch(ctx, target, run, dir.unwrap_or(DEFAULT_DIR)).await {
         Ok(started) => {
             *ctx.job = Some(started);
             progress(run.title().into(), None)
@@ -169,20 +211,84 @@ fn safe_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
+/// The installed HelixScreen's version: the `helix_version` fact Moonraker gave, else read over
+/// SSH (init.d printers report none to Moonraker). An update that cannot tell is refused, since
+/// it could otherwise install an older release over a newer one.
+async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, StepOutcome> {
+    let known = ctx
+        .facts
+        .get(VERSION_FACT)
+        .and_then(|v| v.as_str())
+        .and_then(ReleaseVersion::parse);
+    if let Some(v) = known {
+        return Ok(v);
+    }
+    let read = match ctx.ssh().await {
+        Ok(s) => {
+            s.exec(INSTALLED_VERSION_PROBE, None, VERSION_PROBE_TIMEOUT)
+                .await
+        }
+        Err(e) => Err(e),
+    };
+    let text = match read {
+        Ok(out) if out.exit == 0 => out.stdout.trim().to_string(),
+        Ok(_) => String::new(),
+        Err(e) => {
+            ctx.drop_ssh();
+            return Err(StepOutcome::failed(format!(
+                "could not read the installed HelixScreen version: {e}"
+            )));
+        }
+    };
+    match ReleaseVersion::parse(&text) {
+        Some(v) => {
+            ctx.facts
+                .insert(VERSION_FACT.into(), serde_json::json!(text));
+            Ok(v)
+        }
+        None => Err(StepOutcome::Refused {
+            doc: ctx.printer_doc(),
+            reason: "the installer cannot tell which HelixScreen version is on this printer, \
+                     so it will not update it: an update never installs an older version"
+                .into(),
+        }),
+    }
+}
+
+/// What a launch installs: the platform's build from `channel`'s newest release, and for an
+/// update only when that release is newer than `installed`.
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    platform: &'a str,
+    channel: Channel,
+    installed: Option<&'a ReleaseVersion>,
+}
+
 async fn launch(
     ctx: &mut StepCtx<'_>,
-    platform: &str,
-    channel: Channel,
+    target: Target<'_>,
     run: Run,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
+    let (platform, channel) = (target.platform, target.channel);
     let mode = run.mode;
+    let list_url = releases_manifest_url(channel);
+    let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
+    if let Some(installed) = target.installed {
+        let offered = release.release_version()?;
+        if offered <= *installed {
+            return Err(StepOutcome::Complete {
+                note: format!(
+                    "HelixScreen is up to date: {installed} is installed, and the newest {} release is {offered}",
+                    channel.as_str()
+                ),
+            });
+        }
+    }
     let sudo_password = sudo_password(ctx).await?;
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
     };
-    let list_url = releases_manifest_url(channel);
-    let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
     // Uninstalling needs only the installer, so a release without this platform's build still
     // serves.
     let tarball = match mode {

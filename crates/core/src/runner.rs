@@ -5,7 +5,7 @@
 //! committed failure the UI must turn into recovery.
 
 use crate::facts::Facts;
-use crate::identify::{self, StartState, GENERIC_REFUSE_DOC};
+use crate::identify::{self, Identified, StartState, GENERIC_REFUSE_DOC};
 use crate::manifest::{verify_and_parse, Channel, Choice, Login, Manifest, Step};
 use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
@@ -290,10 +290,21 @@ impl Runner {
                 }
             }
 
+            // The committing step acts on the identification made before it; every later step
+            // that acts needs the printer identified again (`RunState::fresh`).
+            if self.state.committed
+                && step.acts_on_printer()
+                && !step.commits()
+                && !identify::answers_as(&manifest, &self.state.printer_id, &self.state.fresh)
+            {
+                return self.not_reidentified(&manifest);
+            }
+
             // Recorded on disk before the step acts, so a crash inside it resumes as committed.
             let mut changed = false;
             if step.commits() && !self.state.committed && commits_on(step, input.as_ref()) {
                 self.state.committed = true;
+                self.state.fresh.clear();
                 self.log(index, "passed the point of no return".into());
                 changed = true;
             }
@@ -313,6 +324,11 @@ impl Runner {
                 StepOutcome::Done => {
                     if step.commits() && self.state.identity.is_none() {
                         self.record_identity(index);
+                    }
+                    // The printer may have restarted while the step waited: what was probed
+                    // before it may describe another machine now answering at the address.
+                    if self.state.committed && matches!(step, Step::WaitFor { .. }) {
+                        self.state.fresh.clear();
                     }
                     self.log(index, format!("{}: done", step.type_name()));
                     self.state.step_index += 1;
@@ -347,6 +363,15 @@ impl Runner {
                 }
                 StepOutcome::Refused { doc, reason } => return self.fail(reason, Some(doc)),
                 StepOutcome::Failed { reason, help } => return self.fail(reason, help),
+                StepOutcome::Complete { note } => {
+                    self.log(index, note.clone());
+                    self.state.done_note = Some(note);
+                    self.state.status = RunStatus::Done;
+                    self.state.step_index = steps.len();
+                    self.state.started_step = None;
+                    self.calls = 0;
+                    return self.persist(Event::Done);
+                }
             }
         }
     }
@@ -388,10 +413,28 @@ impl Runner {
     /// Before the point of no return, facts a probe added can change which recipe the printer
     /// needs (an install that finds HelixScreen already there becomes an update). The run then
     /// moves to that recipe, skipping its leading steps that equal the steps already `done`,
-    /// and the switch is reported as progress. After the commit the recipe never changes.
+    /// and the switch is reported as progress; facts that leave the printer no recipe refuse
+    /// the run. Only a run on one of the printer's own install or update recipes switches, so a
+    /// restore stays a restore. After the commit the recipe never changes.
     fn switch_recipe(&mut self, manifest: &Manifest, done: &[Step]) -> Option<Event> {
-        let (state, to) =
-            identify::recipe_for(manifest, &self.state.printer_id, &self.state.facts)?;
+        let printer = manifest
+            .printers
+            .iter()
+            .find(|p| p.id == self.state.printer_id)?;
+        if !printer
+            .recipes
+            .iter()
+            .any(|c| c.recipe == self.state.recipe_id)
+        {
+            return None;
+        }
+        let (state, to) = match identify::choose_for(manifest, &printer.id, &self.state.facts)? {
+            Identified::Recipe {
+                state, recipe_id, ..
+            } => (state, recipe_id),
+            Identified::Refuse { doc, reason, .. } => return Some(self.refuse(doc, reason)),
+            Identified::Ambiguous { .. } => return None,
+        };
         if to == self.state.recipe_id {
             return None;
         }
@@ -418,6 +461,23 @@ impl Runner {
             detail: None,
             fraction: None,
         }))
+    }
+
+    /// Stops a committed run whose printer has not been identified again since the commit or
+    /// its last restart, before the step sends it anything.
+    fn not_reidentified(&mut self, manifest: &Manifest) -> Event {
+        let name = manifest
+            .printers
+            .iter()
+            .find(|p| p.id == self.state.printer_id)
+            .map_or(self.state.printer_id.clone(), |p| p.name.clone());
+        let reason = format!(
+            "the installer cannot confirm this is still the {name} the install started on: \
+             nothing it reported since the point of no return or its last restart identifies it, \
+             so nothing more is sent to it"
+        );
+        let doc = self.printer_doc();
+        self.fail(reason, Some(doc))
     }
 
     /// Captures the facts that name the printer, for re-identification after the commit.
@@ -450,6 +510,7 @@ impl Runner {
             manifest,
             host: &self.state.host,
             facts: &mut self.state.facts,
+            fresh: &mut self.state.fresh,
             job: &mut self.state.job,
             cache_dir: self.cache_dir.as_deref(),
             channel_override: self.channel_override,

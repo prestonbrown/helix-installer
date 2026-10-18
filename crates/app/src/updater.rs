@@ -49,6 +49,14 @@ pub async fn check<R: Runtime>(app: AppHandle<R>) {
     let _ = app.emit(UPDATE_EVENT, version);
 }
 
+/// The version the startup check found, for a window that was not yet listening when
+/// `UPDATE_EVENT` fired.
+pub fn pending_version<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let pending = app.try_state::<PendingUpdate>()?;
+    let slot = pending.0.lock().ok()?;
+    slot.as_ref().map(|u| u.version.clone())
+}
+
 /// Download and install the update the startup check found, then restart into it.
 pub async fn install<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let update = app
@@ -60,4 +68,25 @@ pub async fn install<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     app.restart()
+}
+
+// Not on Windows: a test binary that links the updater plugin cannot load there without the
+// app manifest the shipped binary embeds.
+#[cfg(all(test, not(windows)))]
+mod tests {
+    /// Tauri hands the plugin its `plugins.updater` section of the shipped config, and the
+    /// plugin refuses to start (aborting the app) unless that section parses, whatever key the
+    /// builder sets afterwards.
+    #[test]
+    fn the_shipped_config_gives_the_updater_a_section_it_accepts() {
+        let text = include_str!("../tauri.conf.json");
+        let conf: serde_json::Value = serde_json::from_str(text).unwrap();
+        let section = conf["plugins"]["updater"].clone();
+        let parsed: Result<tauri_plugin_updater::Config, _> = serde_json::from_value(section);
+        let parsed = parsed.unwrap_or_else(|e| panic!("plugins.updater: {e}"));
+        assert!(
+            parsed.pubkey.is_empty(),
+            "the key is compiled in through UPDATER_PUBKEY, not the config"
+        );
+    }
 }

@@ -453,7 +453,7 @@ pub enum Step {
     HelixInstall {
         platform: PlatformSel,
         #[serde(default)]
-        channel: Channel,
+        channel: Option<Channel>,
         #[serde(default)]
         update: bool,
         /// Runs `install.sh --uninstall` instead of installing; uploads no release.
@@ -497,6 +497,19 @@ impl Step {
             Step::MoonrakerGcode { .. }
                 | Step::SshRun { .. }
                 | Step::HelixInstall { dry_run: false, .. }
+        )
+    }
+
+    /// True for steps that send something to the printer itself: commands, installs, G-code and
+    /// Moonraker updates. After the point of no return each needs the printer identified again
+    /// first, by probes since the commit or the last wait.
+    pub fn acts_on_printer(&self) -> bool {
+        matches!(
+            self,
+            Step::SshRun { .. }
+                | Step::HelixInstall { .. }
+                | Step::MoonrakerGcode { .. }
+                | Step::MoonrakerUpdate { .. }
         )
     }
 

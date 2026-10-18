@@ -18,7 +18,7 @@ pub mod wait_for;
 pub mod write_stick;
 
 use crate::facts::Facts;
-use crate::identify;
+use crate::identify::{self, GENERIC_REFUSE_DOC};
 use crate::manifest::{Channel, Login, Manifest, Step};
 use crate::run_state::{LogEntry, IDENTITY_KEYS};
 use crate::runner::{unix_secs, Input, Prompt};
@@ -45,6 +45,11 @@ pub enum StepOutcome {
     Failed {
         reason: String,
         help: Option<String>,
+    },
+    /// Nothing is left to do: the run ends done here, skipping its remaining steps, and `note`
+    /// says why on the finish screen.
+    Complete {
+        note: String,
     },
 }
 
@@ -120,6 +125,8 @@ pub struct StepCtx<'a> {
     /// Probe output must go through `record_probe`, which enforces re-identification; write
     /// here directly only for facts the user supplied or the step itself decided.
     pub facts: &'a mut Facts,
+    /// After the commit, the probe results re-identification reads (`RunState::fresh`).
+    pub(crate) fresh: &'a mut Facts,
     /// A detached job on the printer, saved with the run so a reopened app can follow it.
     pub job: &'a mut Option<RemoteJob>,
     pub cache_dir: Option<&'a Path>,
@@ -302,22 +309,39 @@ impl StepCtx<'_> {
         });
     }
 
-    /// Merges probe results into the facts. After the point of no return the run stops instead
-    /// when the merged facts no longer match the run's printer by its identify rules, or a
-    /// model or serial differs from the one recorded at the commit.
+    /// The run's printer as the manifest names it.
+    pub(crate) fn printer_name(&self) -> &str {
+        self.manifest
+            .printers
+            .iter()
+            .find(|p| p.id == self.printer_id)
+            .map_or(self.printer_id, |p| p.name.as_str())
+    }
+
+    /// The run's printer's install guide, else the generic one.
+    pub(crate) fn printer_doc(&self) -> String {
+        self.manifest
+            .printers
+            .iter()
+            .find(|p| p.id == self.printer_id)
+            .map_or_else(
+                || GENERIC_REFUSE_DOC.to_string(),
+                |p| p.fallback.doc.clone(),
+            )
+    }
+
+    /// Merges probe results into the facts. After the point of no return they are also what
+    /// re-identifies the printer, and the run stops instead when they rule out the run's printer
+    /// by its identify rules (even before they are enough to confirm it), or a model or serial
+    /// differs from the one recorded at the commit.
     pub fn record_probe(&mut self, found: Facts) -> Result<(), StepOutcome> {
         if self.committed {
-            let mut merged = self.facts.clone();
-            merged.extend(found.clone());
-            if !identify::answers_as(self.manifest, self.printer_id, &merged) {
-                let name = self
-                    .manifest
-                    .printers
-                    .iter()
-                    .find(|p| p.id == self.printer_id)
-                    .map_or(self.printer_id, |p| p.name.as_str());
+            let mut fresh = self.fresh.clone();
+            fresh.extend(found.clone());
+            if !identify::could_answer_as(self.manifest, self.printer_id, &fresh) {
                 return Err(StepOutcome::failed(format!(
-                    "this is not the printer the install started on: it no longer answers as a {name}"
+                    "this is not the printer the install started on: it no longer answers as a {}",
+                    self.printer_name()
                 )));
             }
         }
@@ -331,6 +355,9 @@ impl StepCtx<'_> {
                     }
                 }
             }
+        }
+        if self.committed {
+            self.fresh.extend(found.clone());
         }
         self.facts.extend(found);
         Ok(())

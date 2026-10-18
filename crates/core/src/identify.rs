@@ -113,16 +113,28 @@ pub fn answers_as(m: &Manifest, printer_id: &str, f: &Facts) -> bool {
         .is_some_and(|p| printer_matches(p, f))
 }
 
-/// The start state and recipe `choose_recipe` picks for the manifest's printer `printer_id`
-/// from `f`, or `None` when the printer is unknown or no recipe applies.
-pub fn recipe_for(m: &Manifest, printer_id: &str, f: &Facts) -> Option<(StartState, String)> {
+/// Whether some identify rule of `printer_id` can still match `f` once the facts it lacks are
+/// known: no fact `f` holds contradicts the rule. Facts gathered a few at a time can rule a
+/// printer out before they are enough to identify it.
+pub fn could_answer_as(m: &Manifest, printer_id: &str, f: &Facts) -> bool {
+    m.printers
+        .iter()
+        .find(|p| p.id == printer_id)
+        .is_some_and(|p| {
+            p.identify.iter().any(|rule| {
+                !rule.is_empty()
+                    && rule
+                        .iter()
+                        .all(|(k, c)| f.get(k).is_none_or(|v| cond_matches(c, Some(v))))
+            })
+        })
+}
+
+/// What identification makes of the facts for the manifest's printer `printer_id`: a recipe,
+/// or its refusal. `None` when the manifest does not list the printer.
+pub fn choose_for(m: &Manifest, printer_id: &str, f: &Facts) -> Option<Identified> {
     let printer = m.printers.iter().find(|p| p.id == printer_id)?;
-    match choose_recipe(printer, f) {
-        Identified::Recipe {
-            state, recipe_id, ..
-        } => Some((state, recipe_id)),
-        _ => None,
-    }
+    Some(choose_recipe(printer, f))
 }
 
 /// A printer with no matching choice always refuses; `fallback.refuse` is not consulted.

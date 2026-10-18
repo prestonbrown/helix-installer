@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use helix_installer_core::version::{FwVersion, VersionRange};
+use helix_installer_core::version::{FwVersion, ReleaseVersion, VersionRange};
 
 fn v(s: &str) -> FwVersion {
     FwVersion::parse(s).unwrap_or_else(|| panic!("{s} should parse"))
@@ -99,4 +99,33 @@ fn inclusive_operators_accept_their_bound() {
     assert!(range("<=1.2.3").matches(&v("1.2.3")));
     assert!(!range(">=1.1.7").matches(&v("1.1.6")));
     assert!(!range("<=1.2.3").matches(&v("1.2.4")));
+}
+
+fn rel(s: &str) -> ReleaseVersion {
+    ReleaseVersion::parse(s).unwrap_or_else(|| panic!("{s} should parse"))
+}
+
+#[test]
+fn a_prerelease_sorts_below_its_release_and_above_the_one_before() {
+    assert!(rel("1.1.0-beta.9") < rel("1.1.0"));
+    assert!(rel("1.1.0") > rel("1.0.5"));
+    assert!(rel("1.1.0-beta.9") > rel("1.0.5"));
+    assert!(rel("v1.1.0-beta.9") < rel("1.1.0-beta.10"));
+    assert!(rel("1.1.0-alpha.3") < rel("1.1.0-beta.1"));
+    assert!(rel("1.1.0-beta") < rel("1.1.0-beta.1"));
+    assert_eq!(rel("v1.1.0-beta.9"), rel("1.1.0-beta.9"));
+    assert_eq!(rel("1.0.5"), rel("v1.0.5"));
+}
+
+#[test]
+fn a_release_version_says_whether_it_is_a_prerelease() {
+    assert!(rel("v1.1.0-beta.9").is_prerelease());
+    assert!(!rel("v1.0.5").is_prerelease());
+}
+
+#[test]
+fn a_release_version_needs_numbers() {
+    for bad in ["", "v", "beta", "1.x.0", "1.0.0-", "1.0.0-beta..1"] {
+        assert!(ReleaseVersion::parse(bad).is_none(), "{bad:?}");
+    }
 }

@@ -264,10 +264,16 @@
       <div class="badge ok" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
       </div>
-      <h1>HelixScreen is installed</h1>
-      <p class="lead">
-        Your {run?.printer_name} may restart on its own. When it has, its screen shows HelixScreen.
-      </p>
+      {#if run?.done_note}
+        <h1>Nothing to update</h1>
+        <p class="lead">{sentence(run.done_note)}</p>
+        <p>Nothing on your printer was changed.</p>
+      {:else}
+        <h1>HelixScreen is installed</h1>
+        <p class="lead">
+          Your {run?.printer_name} may restart on its own. When it has, its screen shows HelixScreen.
+        </p>
+      {/if}
       <div class="actions">
         <button class="primary" onclick={onexit}>Finish</button>
       </div>

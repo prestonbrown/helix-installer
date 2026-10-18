@@ -83,6 +83,8 @@ export interface RunInfo {
   step_kind: string | null;
   committed: boolean;
   guide: string;
+  /** Why a run that ended early is done ("HelixScreen is up to date: ..."). */
+  done_note: string | null;
 }
 
 export interface AdvanceView {

@@ -65,6 +65,11 @@ pub struct RunState {
     /// The `IDENTITY_KEYS` facts as they stood when the committing step completed.
     #[serde(default)]
     pub identity: Option<Facts>,
+    /// After the commit: what probes have returned since the commit or the last `wait_for`.
+    /// Every other fact may describe the printer as it was before it changed or restarted, so
+    /// re-identification reads only these.
+    #[serde(default)]
+    pub fresh: Facts,
     /// sha256 of the manifest and of the recipe's canonical JSON the run started with. A run
     /// only continues against the same recipe it was planned with.
     #[serde(default)]
@@ -80,6 +85,10 @@ pub struct RunState {
     pub log: Vec<LogEntry>,
     #[serde(default)]
     pub status: RunStatus,
+    /// Why a run that ended before its last step is done, for the finish screen ("HelixScreen
+    /// is up to date").
+    #[serde(default)]
+    pub done_note: Option<String>,
 }
 
 impl RunState {
@@ -99,12 +108,14 @@ impl RunState {
             facts,
             committed: false,
             identity: None,
+            fresh: Facts::new(),
             manifest_sha256: None,
             recipe_sha256: None,
             started_step: None,
             job: None,
             log: Vec::new(),
             status: RunStatus::Running,
+            done_note: None,
         }
     }
 }

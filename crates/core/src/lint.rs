@@ -230,6 +230,27 @@ fn first_change(steps: &[Step]) -> Option<usize> {
     })
 }
 
+/// After the commit the runner only lets a step act on the printer once probes since the
+/// commit or the last `wait_for` identify it again; a recipe without such a probe stops there
+/// on every printer.
+fn stale_after_commit(id: &str, steps: &[Step], commit: usize, err: &mut impl FnMut(&str, String)) {
+    let mut probed = false;
+    for (i, s) in steps.iter().enumerate().skip(commit + 1) {
+        match s {
+            Step::Probe { .. } => probed = true,
+            Step::WaitFor { .. } => probed = false,
+            _ if s.acts_on_printer() && !probed => err(
+                id,
+                format!(
+                    "step {i} acts on the printer after the commit, but no probe since the \
+                     commit or the last wait_for re-identifies it"
+                ),
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn lint_recipe(
     m: &Manifest,
     id: &str,
@@ -265,6 +286,9 @@ fn lint_recipe(
             ),
             _ => {}
         }
+    }
+    if let Some(&c) = commits.first() {
+        stale_after_commit(id, steps, c, err);
     }
     let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {
         if !m.artifacts.contains_key(name) {

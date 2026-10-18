@@ -51,6 +51,7 @@ const shots = [
   ["choose-drive-empty", "drive_empty", async (p) => (await install(p), p.getByText("Check again").waitFor())],
   ["progress", "progress", async (p) => (await install(p), p.waitForSelector(".bar"))],
   ["done", "done", async (p) => (await install(p), p.getByText("HelixScreen is installed").waitFor())],
+  ["up-to-date", "up_to_date", async (p) => (await install(p), p.getByText("Nothing to update").waitFor())],
   ["refused", "refused", async (p) => (await install(p), p.getByText("can't be set up").waitFor())],
   ["failed-not-committed", "failed", async (p) => (await install(p), p.getByText("The install stopped").waitFor())],
   ["recovery", "recovery", async (p) => (await install(p), p.getByText("Get help").waitFor())],

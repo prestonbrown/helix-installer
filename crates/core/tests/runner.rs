@@ -57,7 +57,10 @@ fn manifest_with(steps: Value, artifacts: Value) -> Arc<Manifest> {
             "id": "k1",
             "name": "Creality K1",
             "identify": [{ "model": "K1" }],
-            "recipes": [{ "when": { "state": "stock" }, "recipe": "r" }],
+            "recipes": [
+                { "when": { "state": "stock" }, "recipe": "r" },
+                { "when": { "state": "modded:moonraker" }, "recipe": "r" }
+            ],
             "restore": "r",
             "fallback": { "refuse": true, "doc": PRINTER_DOC }
         }],
@@ -1255,22 +1258,17 @@ async fn retrying_a_non_idempotent_step_can_stop_instead() {
     let f = Fakes::new();
     let flaky = Flaky::new(1);
     let m = manifest(json!([
-        { "type": "info", "text": "go", "commits": true },
-        { "type": "ssh_run", "command": "x", "timeout_s": 5 }
+        { "type": "ssh_run", "command": "x", "timeout_s": 5, "commits": true }
     ]));
     let mut r =
         Runner::new(f.env(), m, state("run1", json!({}))).with_handler("ssh_run", flaky.clone());
-    r.advance(None).await;
-    assert!(matches!(
-        r.advance(Some(Input::Next)).await,
-        Event::Failed { .. }
-    ));
+    assert!(matches!(r.advance(None).await, Event::Failed { .. }));
     assert!(is_rerun_question(&r.advance(None).await));
     assert!(matches!(
         r.advance(Some(Input::Choice("stop".into()))).await,
         Event::Failed {
             committed: true,
-            step: 1,
+            step: 0,
             ..
         }
     ));
@@ -1758,4 +1756,174 @@ fn advance_can_run_on_another_thread() {
     let mut r = Runner::new(f.env(), manifest(json!([])), state("send", json!({})));
     let fut = r.advance(None);
     assert_send(&fut);
+}
+
+/// The K1C facts identification found before the run started.
+fn k1c_facts() -> Facts {
+    serde_json::from_value(json!({
+        "has_moonraker": true,
+        "cpu_arch": "mips",
+        "klipper_objects": ["webhooks", "mcu", "mcu nozzle_mcu", "mcu leveling_mcu", "toolhead"]
+    }))
+    .unwrap()
+}
+
+/// Runs a committed K1C recipe to its end against a Moonraker answering as a K1C.
+async fn k1c_after_commit(steps: Value) -> (Event, Fakes) {
+    let f = Fakes::new();
+    answer_as(&f, "k1c");
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker.set_update_status(
+        ADDR,
+        json!({ "version_info": { "helixscreen": { "version": "v1.0.0" } } }),
+    );
+    let state = RunState::new("run1", "k1c", "r", Host::new(ADDR), k1c_facts());
+    let mut r = Runner::new(f.env(), k1c_and_ad5m(steps), state);
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Info { .. })
+    ));
+    let ev = settle(&mut r, Some(Input::Next)).await;
+    (ev, f)
+}
+
+fn not_reidentified(ev: &Event) -> bool {
+    matches!(ev, Event::Failed { committed: true, reason, .. }
+        if reason.contains("cannot confirm") && reason.contains("Creality K1C"))
+}
+
+const COMMIT: &str = r#"{ "type": "info", "text": "Install", "commits": true }"#;
+const WAIT: &str =
+    r#"{ "type": "wait_for", "target": "moonraker", "timeout_s": 60, "message": "Waiting" }"#;
+const GCODE: &str = r#"{ "type": "moonraker_gcode", "script": "DISPLAY_OFF HELIX=1" }"#;
+
+fn steps(list: &[&str]) -> Value {
+    Value::Array(
+        list.iter()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn after_the_commit_the_facts_from_before_it_do_not_let_a_step_act() {
+    let (ev, f) = k1c_after_commit(steps(&[COMMIT, WAIT, GCODE])).await;
+    assert!(not_reidentified(&ev), "{ev:?}");
+    assert!(f.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn a_probe_without_identifying_facts_does_not_reidentify_the_printer() {
+    let update_status = r#"{ "type": "probe", "moonraker": "update_status" }"#;
+    let (ev, f) = k1c_after_commit(steps(&[COMMIT, WAIT, update_status, GCODE])).await;
+    assert!(not_reidentified(&ev), "{ev:?}");
+    assert!(f.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn a_probe_that_finds_only_part_of_a_rule_does_not_reidentify_the_printer() {
+    // The objects match, but the CPU half of the rule has only its pre-commit value.
+    let objects = r#"{ "type": "probe", "moonraker": "objects_list" }"#;
+    let (ev, f) = k1c_after_commit(steps(&[COMMIT, WAIT, objects, GCODE])).await;
+    assert!(not_reidentified(&ev), "{ev:?}");
+    assert!(f.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn fresh_probes_that_identify_the_printer_let_the_next_step_act() {
+    let system = r#"{ "type": "probe", "moonraker": "system_info" }"#;
+    let objects = r#"{ "type": "probe", "moonraker": "objects_list" }"#;
+    let (ev, f) = k1c_after_commit(steps(&[COMMIT, WAIT, system, objects, GCODE])).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(f.moonraker.gcodes().len(), 1);
+}
+
+#[tokio::test]
+async fn a_wait_after_the_probes_makes_their_facts_stale_again() {
+    let system = r#"{ "type": "probe", "moonraker": "system_info" }"#;
+    let objects = r#"{ "type": "probe", "moonraker": "objects_list" }"#;
+    let (ev, f) = k1c_after_commit(steps(&[COMMIT, system, objects, WAIT, GCODE])).await;
+    assert!(not_reidentified(&ev), "{ev:?}");
+    assert!(f.moonraker.gcodes().is_empty());
+}
+
+#[tokio::test]
+async fn the_committing_step_acts_on_the_identification_made_before_it() {
+    let f = Fakes::new();
+    let m = k1c_and_ad5m(json!([
+        { "type": "moonraker_gcode", "script": "DISPLAY_OFF HELIX=1", "commits": true }
+    ]));
+    let state = RunState::new("run1", "k1c", "r", Host::new(ADDR), k1c_facts());
+    let mut r = Runner::new(f.env(), m, state);
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    assert_eq!(f.moonraker.gcodes().len(), 1);
+}
+
+/// A printer with an install, an update and a separate restore recipe, each a probe of
+/// `probe_fact` over SSH, then a committing info naming the recipe.
+fn switching_manifest(probe_fact: &str) -> Arc<Manifest> {
+    let recipe = |text: &str| {
+        json!([
+            { "type": "ssh_login", "logins": [{ "user": "root", "password": PASSWORD }] },
+            { "type": "probe", "ssh": "probe", "fact": probe_fact },
+            { "type": "info", "text": text, "commits": true }
+        ])
+    };
+    let m: Manifest = serde_json::from_value(json!({
+        "manifest_version": 1,
+        "min_app_version": "0.1.0",
+        "printers": [{
+            "id": "k1", "name": "Creality K1",
+            "identify": [{ "model": "K1" }],
+            "recipes": [
+                { "when": { "state": "helix" }, "recipe": "update" },
+                { "when": { "state": "modded:moonraker" }, "recipe": "install" }
+            ],
+            "restore": "restore",
+            "fallback": { "refuse": true, "doc": PRINTER_DOC }
+        }],
+        "artifacts": {},
+        "recipes": {
+            "install": recipe("Install"), "update": recipe("Update"), "restore": recipe("Restore")
+        }
+    }))
+    .unwrap();
+    Arc::new(m)
+}
+
+fn switching_run(probe_fact: &str, recipe: &str, answer: &str) -> Runner {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", PASSWORD);
+    f.ssh.on_command("probe", out(answer));
+    let facts = json!({ "model": "K1", "has_moonraker": true });
+    let state = RunState::new(
+        "run1",
+        "k1",
+        recipe,
+        Host::new(ADDR),
+        serde_json::from_value(facts).unwrap(),
+    );
+    Runner::new(f.env(), switching_manifest(probe_fact), state)
+        .with_handler("ssh_login", Arc::new(TestLogin))
+}
+
+#[tokio::test]
+async fn a_restore_that_finds_helixscreen_stays_a_restore() {
+    let mut r = switching_run("helix_installed", "restore", "yes\n");
+    assert_eq!(info_text(&settle(&mut r, None).await), "Restore");
+    assert_eq!(r.state().recipe_id, "restore");
+}
+
+#[tokio::test]
+async fn a_probe_that_leaves_the_printer_no_recipe_refuses_before_the_commit() {
+    let mut r = switching_run("has_moonraker", "install", "no\n");
+    match settle(&mut r, None).await {
+        Event::Refused { doc, reason, .. } => {
+            assert_eq!(doc, PRINTER_DOC);
+            assert!(reason.contains("no install recipe"), "{reason}");
+        }
+        e => panic!("expected a refusal, got {e:?}"),
+    }
+    assert!(!r.state().committed);
 }

@@ -78,6 +78,13 @@
   onMount(async () => {
     // Fired only when a release is newer; absent in a build without an updater key.
     listen<string>("update-available", (e) => (newVersion = e.payload)).catch(() => {});
+    // The check may have finished before the listener was registered.
+    api
+      .pendingUpdate()
+      .then((v) => {
+        if (v) newVersion = v;
+      })
+      .catch(() => {});
     try {
       const info = await api.appInfo();
       session.version = info.version;

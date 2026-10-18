@@ -135,7 +135,12 @@ fn terminal_step_rule() {
 fn at_most_one_commit_step() {
     let mut v = base();
     v["recipes"]["install"][1]["commits"] = json!(true);
-    only(v, "commits");
+    let errs = run(v, false);
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("more than one step has commits")),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -432,6 +437,7 @@ fn a_restore_recipe_needs_a_commit_too() {
 fn a_commit_before_the_first_change_is_accepted() {
     let v = install(json!([
         committed(r#"{"type": "info", "text": "Do not turn the printer off"}"#),
+        step(PROBE),
         step(r#"{"type": "ssh_run", "command": "true", "timeout_s": 5}"#),
         step(HELIX)
     ]));
@@ -486,4 +492,51 @@ fn a_user_action_before_any_stick_changes_nothing() {
         committed(HELIX)
     ]));
     assert_eq!(run(v, false), vec![]);
+}
+
+const PROBE: &str = r#"{"type": "probe", "moonraker": "objects_list"}"#;
+const WAIT: &str = r#"{"type": "wait_for", "target": "moonraker", "timeout_s": 5, "message": "m"}"#;
+const GCODE: &str = r#"{"type": "moonraker_gcode", "script": "X"}"#;
+
+fn reidentify_errors(steps: Value) -> Vec<String> {
+    run(install(steps), false)
+        .into_iter()
+        .map(|e| e.message)
+        .filter(|m| m.contains("re-identif"))
+        .collect()
+}
+
+#[test]
+fn a_step_acting_after_the_commit_needs_a_probe_since_the_commit_or_the_last_wait() {
+    // The committing step acts on the identification made before it.
+    assert_eq!(
+        reidentify_errors(json!([committed(GCODE), step(PROBE), step(HELIX)])),
+        Vec::<String>::new()
+    );
+    let errs = reidentify_errors(json!([committed(GCODE), step(GCODE), step(HELIX)]));
+    assert_eq!(errs.len(), 2, "{errs:?}");
+    assert!(errs[0].contains("step 1"), "{errs:?}");
+    // A wait is a restart: what was probed before it no longer counts.
+    let errs = reidentify_errors(json!([
+        committed(GCODE),
+        step(PROBE),
+        step(WAIT),
+        step(HELIX)
+    ]));
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("step 3"), "{errs:?}");
+    assert_eq!(
+        reidentify_errors(json!([
+            committed(GCODE),
+            step(WAIT),
+            step(PROBE),
+            step(HELIX)
+        ])),
+        Vec::<String>::new()
+    );
+    // Before the commit nothing is stale.
+    assert_eq!(
+        reidentify_errors(json!([step(WAIT), committed(HELIX)])),
+        Vec::<String>::new()
+    );
 }

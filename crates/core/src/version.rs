@@ -65,6 +65,98 @@ impl fmt::Display for FwVersion {
     }
 }
 
+/// A HelixScreen release version: dotted numerics with an optional prerelease after `-`
+/// (`1.1.0-beta.9`). Ordered as semver orders them, so a prerelease sorts below its release
+/// (`1.1.0-beta.9 < 1.1.0`) and numeric prerelease parts compare as numbers
+/// (`beta.9 < beta.10`).
+#[derive(Debug, Clone)]
+pub struct ReleaseVersion {
+    core: FwVersion,
+    pre: Vec<PreId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PreId {
+    /// Numeric identifiers sort below alphanumeric ones.
+    Num(u64),
+    Text(String),
+}
+
+impl ReleaseVersion {
+    /// Parses `[v]X.Y.Z[-pre.release]`; `None` for anything else.
+    pub fn parse(s: &str) -> Option<ReleaseVersion> {
+        let s = s.trim();
+        let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
+        let (core, pre) = match s.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (s, None),
+        };
+        let core = parse_components(core).map(FwVersion)?;
+        let pre = match pre {
+            None => Vec::new(),
+            Some(pre) => pre
+                .split('.')
+                .map(|id| {
+                    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                        None
+                    } else if id.bytes().all(|b| b.is_ascii_digit()) {
+                        id.parse().ok().map(PreId::Num)
+                    } else {
+                        Some(PreId::Text(id.to_string()))
+                    }
+                })
+                .collect::<Option<Vec<_>>>()?,
+        };
+        Some(ReleaseVersion { core, pre })
+    }
+
+    pub fn is_prerelease(&self) -> bool {
+        !self.pre.is_empty()
+    }
+}
+
+impl Ord for ReleaseVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.core.cmp(&other.core).then_with(|| {
+            match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                // Vec ordering: a shorter list that is a prefix of the other sorts first.
+                (false, false) => self.pre.cmp(&other.pre),
+            }
+        })
+    }
+}
+
+impl PartialOrd for ReleaseVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ReleaseVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for ReleaseVersion {}
+
+impl fmt::Display for ReleaseVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.core)?;
+        for (i, id) in self.pre.iter().enumerate() {
+            f.write_str(if i == 0 { "-" } else { "." })?;
+            match id {
+                PreId::Num(n) => write!(f, "{n}")?,
+                PreId::Text(t) => f.write_str(t)?,
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RangeError(String);
 

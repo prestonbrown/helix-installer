@@ -986,6 +986,11 @@
         "moonraker": "objects_list"
       },
       {
+        "type": "probe",
+        "ssh": "uname -m",
+        "fact": "cpu_arch"
+      },
+      {
         "type": "helix_install",
         "platform": "k1",
         "dir": "/usr/data",
@@ -1211,6 +1216,10 @@
         "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
       },
       {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
         "type": "moonraker_update",
         "name": "helixscreen"
       },
@@ -1245,6 +1254,10 @@
         "timeout_s": 900,
         "message": "The printer restarts to add ZMOD's plugin list, which carries HelixScreen. Do not power off the printer.",
         "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
       },
       {
         "type": "moonraker_update",
@@ -1565,6 +1578,14 @@
         "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
       },
       {
+        "type": "probe",
+        "moonraker": "system_info"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
         "type": "moonraker_update",
         "name": "helixscreen"
       },
@@ -1726,6 +1747,10 @@
         "commits": true
       },
       {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
         "type": "moonraker_gcode",
         "script": "DISPLAY_OFF HELIX=1"
       },
@@ -1749,6 +1774,14 @@
         "type": "moonraker_update",
         "name": "helixscreen",
         "commits": true
+      },
+      {
+        "type": "probe",
+        "moonraker": "system_info"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
       },
       {
         "type": "moonraker_gcode",

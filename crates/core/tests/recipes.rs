@@ -11,7 +11,9 @@ use helix_installer_core::lint::lint_with;
 use helix_installer_core::manifest::{Channel, Login, Manifest};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
-use helix_installer_core::steps::helix_install::{releases_manifest_url, GITHUB_RELEASE_API};
+use helix_installer_core::steps::helix_install::{
+    releases_manifest_url, GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE,
+};
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -22,11 +24,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const ADDR: &str = "192.168.1.50";
-const TAG: &str = "v1.0.5";
 const TARBALL: &[u8] = b"helixscreen tarball bytes";
 const INSTALL_SH: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --progress) ;;\nesac\n";
-const INSTALL_SH_URL: &str =
-    "https://github.com/prestonbrown/helixscreen/releases/download/v1.0.5/install.sh";
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -88,48 +87,58 @@ struct Rig {
 
 impl Rig {
     fn new() -> Rig {
-        let fetch = Arc::new(FakeFetch::new());
-        let mut assets = serde_json::Map::new();
-        for p in ["pi", "pi32", "k1", "k2", "ad5m", "ad5x"] {
-            let url = format!(
-                "https://releases.helixscreen.org/releases/{TAG}/helixscreen-{p}-{TAG}.tar.gz"
-            );
-            assets.insert(
-                p.into(),
-                json!({ "url": url, "sha256": sha(TARBALL), "size": TARBALL.len() }),
-            );
-            fetch.add(&url, TARBALL.to_vec());
-        }
-        let release = json!({ "version": "1.0.5", "tag": TAG, "assets": assets });
-        for channel in [Channel::Stable, Channel::Beta] {
-            fetch.add(
-                &releases_manifest_url(channel),
-                release.to_string().into_bytes(),
-            );
-        }
-        let gh = json!({ "tag_name": TAG, "assets": [{
-            "name": "install.sh", "browser_download_url": INSTALL_SH_URL,
-            "digest": format!("sha256:{}", sha(INSTALL_SH)),
-        }]});
-        fetch.add(
-            &format!("{GITHUB_RELEASE_API}/{TAG}"),
-            gh.to_string().into_bytes(),
-        );
-        fetch.add(INSTALL_SH_URL, INSTALL_SH.to_vec());
         let ssh = FakeSsh::new();
         ssh.set_fallback(|cmd| match cmd {
             "id -u" => out("0\n", 0),
             _ => out("", 127),
         });
-        Rig {
+        let rig = Rig {
             moonraker: Arc::new(FakeMoonraker::new()),
             ssh,
-            fetch,
+            fetch: Arc::new(FakeFetch::new()),
             drives: Arc::new(FakeDrives::new()),
             net: Arc::new(FakeNet::new()),
             clock: Arc::new(FakeClock::new()),
             cache: tempfile::tempdir().unwrap(),
+        };
+        for channel in [Channel::Stable, Channel::Beta] {
+            rig.publish(channel, "1.0.5");
         }
+        rig
+    }
+
+    /// Makes `version` the newest release on `channel`, with a build for every platform and
+    /// its `install.sh` on GitHub.
+    fn publish(&self, channel: Channel, version: &str) {
+        let tag = format!("v{version}");
+        let mut assets = serde_json::Map::new();
+        for p in ["pi", "pi32", "k1", "k2", "ad5m", "ad5x"] {
+            let url = format!(
+                "https://releases.helixscreen.org/releases/{tag}/helixscreen-{p}-{tag}.tar.gz"
+            );
+            assets.insert(
+                p.into(),
+                json!({ "url": url, "sha256": sha(TARBALL), "size": TARBALL.len() }),
+            );
+            self.fetch.add(&url, TARBALL.to_vec());
+        }
+        let release = json!({ "version": version, "tag": tag, "assets": assets });
+        self.fetch.add(
+            &releases_manifest_url(channel),
+            release.to_string().into_bytes(),
+        );
+        let script_url = format!(
+            "https://github.com/prestonbrown/helixscreen/releases/download/{tag}/install.sh"
+        );
+        let gh = json!({ "tag_name": tag, "assets": [{
+            "name": "install.sh", "browser_download_url": script_url,
+            "digest": format!("sha256:{}", sha(INSTALL_SH)),
+        }]});
+        self.fetch.add(
+            &format!("{GITHUB_RELEASE_API}/{tag}"),
+            gh.to_string().into_bytes(),
+        );
+        self.fetch.add(&script_url, INSTALL_SH.to_vec());
     }
 
     fn env(&self) -> Env {
@@ -639,11 +648,32 @@ async fn a_k2_that_already_runs_helixscreen_switches_to_the_update() {
     let picked = identify(&m, &fleet("k2_plus"));
     let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
 
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.0.4\n", 0));
+
     let trace = drive(&mut r, next_only).await;
     assert!(trace.done(), "{:?}", trace.end);
     assert_eq!(r.state().recipe_id, "k2_update");
     assert_eq!(trace.prompts.len(), 1, "the root step is not asked twice");
     assert!(rig.installs()[0].0.ends_with("--progress --update"));
+}
+
+#[tokio::test]
+async fn a_k2_whose_installed_version_cannot_be_read_is_not_updated() {
+    let rig = k2_rig("creality_2024", true);
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let trace = drive(&mut r, next_only).await;
+    match &trace.end {
+        Event::Refused { reason, .. } => {
+            assert!(reason.contains("which HelixScreen version"), "{reason}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(rig.installer_runs().is_empty());
+    assert!(rig.ssh.uploads().is_empty());
 }
 
 #[tokio::test]
@@ -722,14 +752,21 @@ fn the_k1c_with_helper_script_and_helixscreen_identifies_for_the_update() {
     );
 }
 
-#[tokio::test]
-async fn the_k1c_updates_over_ssh_without_simple_af() {
+/// The fleet K1C (HelixScreen v1.1.0-beta.9) with stable 1.0.5 and `beta` published.
+fn k1c_update_rig(beta: &str) -> Rig {
     let rig = k1_rig(K1 {
         helix_there: true,
         leftovers: true,
         ..STOCK_K1
     });
     rig.installer_succeeds("k1");
+    rig.publish(Channel::Beta, beta);
+    rig
+}
+
+#[tokio::test]
+async fn the_k1c_on_a_beta_updates_to_the_next_beta_over_ssh_without_simple_af() {
+    let rig = k1c_update_rig("1.1.0-beta.10");
     let m = staging();
     let picked = identify(&m, &fleet("k1c_helper_script"));
     let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
@@ -740,7 +777,49 @@ async fn the_k1c_updates_over_ssh_without_simple_af() {
     assert!(!ran(&rig, SIMPLE_AF));
     assert_eq!(
         rig.installs()[0].0,
-        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.0.5.tar.gz' --progress --update"
+        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.1.0-beta.10.tar.gz' --progress --update"
+    );
+}
+
+#[tokio::test]
+async fn the_k1c_on_the_newest_beta_is_up_to_date_and_never_gets_the_older_stable() {
+    let rig = k1c_update_rig("1.1.0-beta.9");
+    let m = staging();
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(
+        rig.installer_runs().is_empty(),
+        "{:?}",
+        rig.installer_runs()
+    );
+    assert!(rig.ssh.uploads().is_empty());
+    assert!(!r.state().committed, "nothing on the printer changed");
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("HelixScreen is up to date"), "{note:?}");
+    assert!(note.contains("1.1.0-beta.9"), "{note:?}");
+}
+
+#[tokio::test]
+async fn a_recipe_pinned_to_stable_still_never_installs_below_the_installed_beta() {
+    let rig = k1c_update_rig("1.1.0-beta.10");
+    let mut m = staging();
+    for step in m.recipes.get_mut("k1_update").unwrap() {
+        if let helix_installer_core::manifest::Step::HelixInstall { channel, .. } = step {
+            *channel = Some(Channel::Stable);
+        }
+    }
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(
+        rig.installer_runs().is_empty(),
+        "{:?}",
+        rig.installer_runs()
     );
 }
 
@@ -842,6 +921,8 @@ async fn a_grid_picked_k1_that_already_runs_helixscreen_updates_instead_of_simpl
         ..STOCK_K1
     });
     rig.installer_succeeds("k1");
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.0.4\n", 0));
     let m = staging();
     let picked = identify_as(&m, "k1", &Facts::new());
     let mut r = rig.runner(&m, &picked, Facts::new());
@@ -961,11 +1042,18 @@ fn zmod_ad5x_objects() -> serde_json::Value {
 }
 
 fn moonraker_answers(rig: &Rig, objects: serde_json::Value) {
+    moonraker_answers_on(rig, objects, "mips");
+}
+
+/// Moonraker answers with `objects` on a `cpu` board (the AD5M's is armv7l).
+fn moonraker_answers_on(rig: &Rig, objects: serde_json::Value, cpu: &str) {
     rig.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "printer" }));
     rig.moonraker.set_objects_list(ADDR, objects);
-    rig.moonraker
-        .set_system_info(ADDR, json!({ "system_info": { "available_services": [] } }));
+    rig.moonraker.set_system_info(
+        ADDR,
+        json!({ "system_info": { "cpu_info": { "processor": cpu }, "available_services": [] } }),
+    );
 }
 
 /// Answers a FlashForge flash: the version `version`, the stick, Next on every screen, and the
@@ -1131,10 +1219,46 @@ async fn an_ad5x_that_answers_as_something_else_after_the_flash_stops() {
             committed: true,
             reason,
             ..
-        } => assert!(reason.contains("not the printer"), "{reason}"),
+        } => assert!(
+            reason.contains("not the printer") || reason.contains("cannot confirm"),
+            "{reason}"
+        ),
         other => panic!("expected a committed failure, got {other:?}"),
     }
     assert!(rig.moonraker.gcodes().is_empty());
+}
+
+/// Objects a ZMOD AD5M lists: ZMOD's own, but not the AD5X's IFS.
+fn zmod_ad5m_objects() -> serde_json::Value {
+    json!({ "objects": ["webhooks", "configfile", "mcu", "mcu eboard", "zmod", "extruder"] })
+}
+
+#[tokio::test]
+async fn an_ad5x_found_by_udp_whose_address_answers_as_another_zmod_printer_after_the_flash_stops()
+{
+    // After the reboot DHCP hands the AD5X's address to an AD5M on ZMOD. Its object list carries
+    // nothing of the AD5X's, and the UDP model from before the flash must not stand in for it.
+    let rig = Rig::new();
+    let m = with_test_firmware(&rig, "zmod_1.7.4_ad5x");
+    let f: Facts = serde_json::from_value(
+        json!({ "flashforge_udp.model": "AD5X", "model": "AD5X", "serial": "SERIAL" }),
+    )
+    .unwrap();
+    let picked = identify(&m, &f);
+    assert_eq!(picked, recipe("ad5x", StartState::Stock, "ad5x_zmod"));
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, flash_answers(&rig, "1.2.3", zmod_ad5m_objects())).await;
+    match &trace.end {
+        Event::Failed {
+            committed: true,
+            reason,
+            ..
+        } => assert!(reason.contains("FlashForge Adventurer 5X"), "{reason}"),
+        other => panic!("expected a committed failure, got {other:?}"),
+    }
+    assert!(rig.moonraker.gcodes().is_empty());
+    assert!(rig.moonraker.upgrades().is_empty());
 }
 
 #[tokio::test]
@@ -1306,6 +1430,8 @@ async fn the_forgex_ad5m_picked_as_a_pro_installs_over_ssh() {
 async fn a_forgex_ad5m_with_helixscreen_switches_to_the_update() {
     let rig = forgex_rig();
     rig.ssh.on_command(INIT_SCRIPTS_PROBE, out("yes\n", 0));
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.0.4\n", 0));
     let m = staging();
     let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
     let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
@@ -1324,7 +1450,11 @@ async fn a_zmod_ad5m_takes_the_macro_step() {
         "klipper_objects": ["mcu", "mcu eboard", "zmod", "zmod_color", "fan_generic fanM106"],
     }))
     .unwrap();
-    moonraker_answers(&rig, json!({ "objects": [] }));
+    moonraker_answers_on(
+        &rig,
+        json!({ "objects": f["klipper_objects"].clone() }),
+        "armv7l",
+    );
     let m = staging();
     let picked = identify_as(&m, "ad5m", &f);
     assert_eq!(picked, recipe("ad5m", modded(), "ad5m_zmod_enable"));
@@ -1450,7 +1580,8 @@ async fn a_zmod_printer_whose_extra_plugins_are_on_skips_their_restart() {
         ("ad5m", json!(["mcu", "mcu eboard", "zmod", "zmod_color"])),
     ] {
         let rig = Rig::new();
-        moonraker_answers(&rig, json!({ "objects": objects.clone() }));
+        let cpu = if printer == "ad5x" { "mips" } else { "armv7l" };
+        moonraker_answers_on(&rig, json!({ "objects": objects.clone() }), cpu);
         // ZMOD seeds HelixScreen's update_manager entry at v0.0.1 when the extra plugins go on;
         // nothing has been installed through it yet.
         let f: Facts = serde_json::from_value(json!({

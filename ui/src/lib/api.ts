@@ -77,6 +77,8 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const appInfo = () => call<AppInfo>("app_info");
 export const installUpdate = () => call<void>("install_update");
+/** The newer version the startup update check found, or null. */
+export const pendingUpdate = () => call<string | null>("pending_update");
 export const printers = () => call<PrinterView[]>("printers");
 export const discover = () => call<CandidateView[]>("discover");
 export const addManualHost = (ip: string) => call<CandidateView>("add_manual_host", { ip });
