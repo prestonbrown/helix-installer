@@ -1074,28 +1074,73 @@
       },
       {
         "type": "moonraker_gcode",
+        "script": "ENABLE_EXTRA_PLUGINS"
+      },
+      {
+        "type": "user_action",
+        "text": "The printer restarts now to add ZMOD's plugin list, which carries HelixScreen. Press Next once its screen is back."
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 900,
+        "message": "Waiting for the printer to come back. Do not power off the printer.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "moonraker_update",
+        "name": "helixscreen"
+      },
+      {
+        "type": "moonraker_gcode",
         "script": "DISPLAY_OFF HELIX=1"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 600,
-        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+        "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5x"
       }
     ],
     "ad5x_enable_helix": [
       {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 300,
+        "message": "Waiting for Klipper on the printer to be ready.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
         "type": "moonraker_gcode",
-        "script": "DISPLAY_OFF HELIX=1",
+        "script": "ENABLE_EXTRA_PLUGINS",
         "commits": true
+      },
+      {
+        "type": "user_action",
+        "text": "The printer restarts now to add ZMOD's plugin list, which carries HelixScreen. Press Next once its screen is back."
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 900,
+        "message": "Waiting for the printer to come back. Do not power off the printer.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "moonraker_update",
+        "name": "helixscreen"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_OFF HELIX=1"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 600,
-        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+        "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5x"
       }
     ],
     "ad5x_helix_update": [
@@ -1109,6 +1154,13 @@
       {
         "type": "info",
         "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5X guide explains it: https://helixscreen.org/docs/install-ad5x"
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 300,
+        "message": "Waiting for Klipper on the printer to be ready.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
       },
       {
         "type": "moonraker_gcode",
@@ -1310,7 +1362,7 @@
       },
       {
         "type": "probe",
-        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
+        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen /opt/config/mod_data/helixscreen_payload_root; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
         "fact": "helix_installed"
       },
       {
@@ -1337,7 +1389,7 @@
       },
       {
         "type": "probe",
-        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
+        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen /opt/config/mod_data/helixscreen_payload_root; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
         "fact": "helix_installed"
       },
       {
@@ -1350,16 +1402,42 @@
     ],
     "ad5m_zmod_enable": [
       {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 300,
+        "message": "Waiting for Klipper on the printer to be ready.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
         "type": "moonraker_gcode",
-        "script": "DISPLAY_OFF HELIX=1",
+        "script": "ENABLE_EXTRA_PLUGINS",
         "commits": true
+      },
+      {
+        "type": "user_action",
+        "text": "The printer restarts now to add ZMOD's plugin list, which carries HelixScreen. Press Next once its screen is back."
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 900,
+        "message": "Waiting for the printer to come back. Do not power off the printer.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "moonraker_update",
+        "name": "helixscreen"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_OFF HELIX=1"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 600,
-        "message": "ZMOD is switching the printer's screen to HelixScreen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_zmod_update": [
@@ -1400,6 +1478,13 @@
       {
         "type": "info",
         "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5M guide explains it: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 300,
+        "message": "Waiting for Klipper on the printer to be ready.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
       },
       {
         "type": "moonraker_gcode",

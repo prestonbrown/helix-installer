@@ -1010,8 +1010,13 @@ async fn a_stock_ad5x_picked_from_the_grid_gets_zmod_then_helixscreen() {
     );
     assert_eq!(
         rig.moonraker.gcodes(),
-        vec![(ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())]
+        vec![
+            (ADDR.to_string(), "ENABLE_EXTRA_PLUGINS".to_string()),
+            (ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())
+        ],
+        "ZMOD's HelixScreen update_manager entry comes with its extra plugins"
     );
+    assert_eq!(rig.moonraker.upgrades(), vec!["helixscreen".to_string()]);
     let texts = trace.texts();
     assert!(
         texts.iter().any(|t| t.contains("Remove the USB stick")),
@@ -1148,7 +1153,15 @@ async fn an_ad5x_with_zmod_only_switches_the_screen() {
 
     let trace = drive(&mut r, flash_answers(&rig, "", json!(null))).await;
     assert!(trace.done(), "{:?}", trace.end);
-    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_OFF HELIX=1");
+    assert_eq!(
+        rig.moonraker.gcodes(),
+        vec![
+            (ADDR.to_string(), "ENABLE_EXTRA_PLUGINS".to_string()),
+            (ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())
+        ],
+        "ZMOD's HelixScreen update_manager entry comes with its extra plugins"
+    );
+    assert_eq!(rig.moonraker.upgrades(), vec!["helixscreen".to_string()]);
 }
 
 #[tokio::test]
@@ -1171,6 +1184,7 @@ async fn an_ad5x_with_helixscreen_updates_through_zmods_update_manager() {
 async fn ad5x_restore_switches_back_to_the_stock_screen() {
     let rig = Rig::new();
     let m = staging();
+    moonraker_answers(&rig, zmod_ad5x_objects());
     let picked = recipe("ad5x", StartState::Helix(String::new()), "ad5x_restore");
     let mut r = rig.runner(&m, &picked, Facts::new());
     let trace = drive(&mut r, next_only).await;
@@ -1180,7 +1194,10 @@ async fn ad5x_restore_switches_back_to_the_stock_screen() {
         "{:?}",
         trace.texts()
     );
-    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_ON");
+    assert_eq!(
+        rig.moonraker.gcodes(),
+        vec![(ADDR.to_string(), "DISPLAY_ON".to_string())]
+    );
 }
 
 #[test]
@@ -1201,7 +1218,7 @@ fn forgex_objects() -> serde_json::Value {
     json!({ "objects": fleet("ad5m_forgex")["klipper_objects"].clone() })
 }
 
-const INIT_SCRIPTS_PROBE: &str = "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no";
+const INIT_SCRIPTS_PROBE: &str = "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen /opt/config/mod_data/helixscreen_payload_root; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no";
 
 /// A Forge-X AD5M on root/root after the flash, without HelixScreen.
 fn forgex_rig() -> Rig {
@@ -1295,8 +1312,7 @@ async fn a_zmod_ad5m_takes_the_macro_step() {
         "klipper_objects": ["mcu", "mcu eboard", "zmod", "zmod_color", "fan_generic fanM106"],
     }))
     .unwrap();
-    rig.moonraker
-        .set_system_info(ADDR, json!({ "system_info": { "available_services": [] } }));
+    moonraker_answers(&rig, json!({ "objects": [] }));
     let m = staging();
     let picked = identify_as(&m, "ad5m", &f);
     assert_eq!(picked, recipe("ad5m", modded(), "ad5m_zmod_enable"));
@@ -1304,7 +1320,15 @@ async fn a_zmod_ad5m_takes_the_macro_step() {
 
     let trace = drive(&mut r, flash_answers(&rig, "", json!(null))).await;
     assert!(trace.done(), "{:?}", trace.end);
-    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_OFF HELIX=1");
+    assert_eq!(
+        rig.moonraker.gcodes(),
+        vec![
+            (ADDR.to_string(), "ENABLE_EXTRA_PLUGINS".to_string()),
+            (ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())
+        ],
+        "ZMOD's HelixScreen update_manager entry comes with its extra plugins"
+    );
+    assert_eq!(rig.moonraker.upgrades(), vec!["helixscreen".to_string()]);
 }
 
 #[tokio::test]
@@ -1550,6 +1574,7 @@ fn an_ad5m_restores_by_the_mod_it_runs() {
 async fn a_zmod_ad5m_restore_switches_the_screen_back() {
     let rig = Rig::new();
     let m = staging();
+    moonraker_answers(&rig, json!({ "objects": [] }));
     let picked = recipe(
         "ad5m",
         StartState::Helix(String::new()),
@@ -1558,7 +1583,10 @@ async fn a_zmod_ad5m_restore_switches_the_screen_back() {
     let mut r = rig.runner(&m, &picked, Facts::new());
     let trace = drive(&mut r, next_only).await;
     assert!(trace.done(), "{:?}", trace.end);
-    assert_eq!(rig.moonraker.gcodes()[0].1, "DISPLAY_ON");
+    assert_eq!(
+        rig.moonraker.gcodes(),
+        vec![(ADDR.to_string(), "DISPLAY_ON".to_string())]
+    );
     assert!(rig.ssh.commands().is_empty());
 }
 
