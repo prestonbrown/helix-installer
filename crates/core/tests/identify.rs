@@ -310,10 +310,41 @@ fn a_picked_model_missing_from_the_manifest_is_refused() {
 
 #[test]
 fn a_picked_model_still_needs_a_matching_recipe() {
-    let mut f = probe("empty");
+    let mut f = probe("k2_stock");
     f.insert("stock_version".into(), "1.0".into());
     assert!(matches!(
         identify_as(&manifest(), "k2", &f),
         Identified::Refuse { printer_id: Some(ref p), .. } if p == "k2"
     ));
+}
+
+fn not_recognised() -> Identified {
+    Identified::Refuse {
+        printer_id: None,
+        doc: GENERIC_REFUSE_DOC.to_string(),
+        reason: "printer not recognised".to_string(),
+    }
+}
+
+#[test]
+fn a_picked_model_never_names_a_printer_whose_answers_match_no_model() {
+    // A FlashForge reply whose product id the installer does not know: a serial, no model.
+    let f: Facts =
+        serde_json::from_str(r#"{"flashforge_udp.serial":"SNAD5M0001","serial":"SNAD5M0001"}"#)
+            .unwrap();
+    // Facts that would pick an AD5X recipe once the model is assumed still refuse.
+    let mut helix = f.clone();
+    helix.insert("helix_installed".into(), true.into());
+    assert_eq!(identify_as(&manifest(), "ad5x", &helix), not_recognised());
+    assert_eq!(identify_as(&manifest(), "ad5x", &f), not_recognised());
+}
+
+#[test]
+fn a_picked_model_never_names_an_unknown_moonraker_host() {
+    let f: Facts = serde_json::from_str(
+        r#"{"has_moonraker":true,"klipper_hostname":"voron24","cpu_arch":"aarch64"}"#,
+    )
+    .unwrap();
+    assert_eq!(identify_as(&manifest(), "pi5", &f), not_recognised());
+    assert_eq!(identify_as(&manifest(), "k1", &f), not_recognised());
 }

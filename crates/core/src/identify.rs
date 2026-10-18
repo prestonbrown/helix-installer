@@ -113,13 +113,7 @@ pub fn identify(m: &Manifest, f: &Facts) -> Identified {
         .filter(|p| printer_matches(p, f))
         .collect();
     let printer = match matched.as_slice() {
-        [] => {
-            return Identified::Refuse {
-                printer_id: None,
-                doc: GENERIC_REFUSE_DOC.to_string(),
-                reason: "printer not recognised".to_string(),
-            }
-        }
+        [] => return not_recognised(),
         [one] => *one,
         many => {
             return Identified::Ambiguous {
@@ -150,18 +144,27 @@ fn choose_recipe(printer: &Printer, f: &Facts) -> Identified {
     }
 }
 
+fn not_recognised() -> Identified {
+    Identified::Refuse {
+        printer_id: None,
+        doc: GENERIC_REFUSE_DOC.to_string(),
+        reason: "printer not recognised".to_string(),
+    }
+}
+
 /// Identifies the printer as the model the user picked, which is how a printer that answers
-/// nothing (stock firmware) or answers like several models is named. Facts that match other
-/// models but not the picked one refuse: the user's word never overrides what the printer says.
+/// nothing (stock firmware) or answers like several models is named. The pick only chooses
+/// among the models the facts are consistent with: a printer that answered anything at all
+/// and matches no model is not recognised, and one that matches other models but not the
+/// picked one refuses. The user's word never overrides what the printer says.
 pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
     let Some(printer) = m.printers.iter().find(|p| p.id == printer_id) else {
-        return Identified::Refuse {
-            printer_id: None,
-            doc: GENERIC_REFUSE_DOC.to_string(),
-            reason: "printer not recognised".to_string(),
-        };
+        return not_recognised();
     };
     let matched_any = m.printers.iter().any(|p| printer_matches(p, f));
+    if !f.is_empty() && !matched_any {
+        return not_recognised();
+    }
     if matched_any && !printer_matches(printer, f) {
         return Identified::Refuse {
             printer_id: Some(printer.id.clone()),
