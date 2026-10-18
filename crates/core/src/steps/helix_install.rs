@@ -62,7 +62,7 @@ pub async fn run(
     dir: Option<&str>,
     input: Option<Input>,
 ) -> StepOutcome {
-    if let Some(ask) = job::need_login(ctx, input) {
+    if let Some(ask) = ctx.need_login(input).await {
         return ask;
     }
     let platform = match resolve_platform(ctx, platform) {

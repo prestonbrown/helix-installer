@@ -375,6 +375,11 @@ impl Runner {
             identity: self.state.identity.as_ref(),
             log: &mut self.state.log,
             step: self.state.step_index,
+            printer_id: &self.state.printer_id,
+            recipe: manifest
+                .recipes
+                .get(&self.state.recipe_id)
+                .map_or(&[], Vec::as_slice),
             session: &mut self.session,
         };
         match handler {

@@ -15,7 +15,7 @@ pub async fn run(
     timeout_s: u64,
     input: Option<Input>,
 ) -> StepOutcome {
-    if let Some(ask) = job::need_login(ctx, input) {
+    if let Some(ask) = ctx.need_login(input).await {
         return ask;
     }
     let Some(running) = ctx.job.clone() else {

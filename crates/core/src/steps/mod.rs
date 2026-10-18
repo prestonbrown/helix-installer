@@ -11,6 +11,7 @@ pub mod moonraker;
 pub mod probe;
 pub mod progress;
 pub mod require;
+pub mod ssh_login;
 pub mod ssh_run;
 pub mod wait_for;
 pub mod write_stick;
@@ -68,6 +69,8 @@ pub struct Session {
     ssh: Option<Box<dyn SshSession>>,
     job_cursor: Option<job::JobCursor>,
     stick: Option<write_stick::Stage>,
+    /// Logins the user typed that the printer refused since the last success.
+    login_tries: u32,
 }
 
 /// Everything a step may read or change while it runs.
@@ -88,6 +91,9 @@ pub struct StepCtx<'a> {
     pub committed: bool,
     /// The run's step index, for log entries.
     pub step: usize,
+    pub printer_id: &'a str,
+    /// The steps of the run's recipe.
+    pub recipe: &'a [Step],
     pub(crate) identity: Option<&'a Facts>,
     pub(crate) log: &'a mut Vec<LogEntry>,
     pub(crate) session: &'a mut Session,
@@ -105,8 +111,69 @@ impl StepCtx<'_> {
         self.session.ssh = None;
     }
 
+    /// Connects with `login` and, only if the printer accepts it, holds it and the session.
+    pub(crate) async fn try_login(&mut self, login: Login) -> Result<(), TransportError> {
+        let ssh = self.env.ssh.connect(self.host, &login).await?;
+        self.session.login = Some(login);
+        self.session.ssh = Some(ssh);
+        Ok(())
+    }
+
+    /// Holds a login for an SSH step: the one the user just gave, else the recipe's own
+    /// `ssh_login` defaults tried quietly (a reopened run has lost the login it had in memory),
+    /// else a prompt. `None` means a login is held and the step may go on.
+    pub(crate) async fn need_login(&mut self, input: Option<Input>) -> Option<StepOutcome> {
+        if let Some(Input::Login(login)) = input {
+            self.set_login(login);
+        }
+        if self.login().is_some() {
+            return None;
+        }
+        self.try_default_logins().await;
+        match self.login() {
+            Some(_) => None,
+            None => Some(StepOutcome::NeedInput(self.login_prompt(None))),
+        }
+    }
+
+    /// Holds the first of the recipe's `ssh_login` defaults the printer accepts, if any.
+    pub(crate) async fn try_default_logins(&mut self) {
+        for login in self.default_logins() {
+            match self.try_login(login).await {
+                Ok(()) => return,
+                Err(TransportError::Auth) => {}
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// The logins of the recipe's first `ssh_login` step.
+    pub(crate) fn default_logins(&self) -> Vec<Login> {
+        self.recipe
+            .iter()
+            .find_map(|s| match s {
+                Step::SshLogin { logins, .. } => Some(logins.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Asks for a login, suggesting the user that last worked, else `fallback_user`.
+    pub(crate) fn login_prompt(&self, fallback_user: Option<&str>) -> Prompt {
+        let user_hint = self
+            .facts
+            .get("ssh_user")
+            .and_then(|v| v.as_str())
+            .or(fallback_user)
+            .map(str::to_string);
+        Prompt::Login { user_hint }
+    }
+
     /// The open SSH session to the run's host, connecting with the held login if none is open.
     pub async fn ssh(&mut self) -> Result<&mut (dyn SshSession + 'static), TransportError> {
+        if self.session.login.is_none() {
+            self.try_default_logins().await;
+        }
         if self.session.ssh.is_none() {
             let login = self
                 .session
@@ -177,7 +244,14 @@ pub(crate) async fn run_builtin(
             ..
         } => ask::run(ctx, fact, question, choices, input),
         Step::Probe { .. } => match step.probe() {
-            Some(p) => probe::run(ctx, &p).await,
+            Some(p) => {
+                if matches!(p, crate::manifest::Probe::Ssh { .. }) {
+                    if let Some(ask) = ctx.need_login(input).await {
+                        return ask;
+                    }
+                }
+                probe::run(ctx, &p).await
+            }
             None => {
                 StepOutcome::failed("probe needs exactly one of moonraker, ssh+fact, tcp_port+fact")
             }
@@ -207,8 +281,10 @@ pub(crate) async fn run_builtin(
         Step::WriteStick {
             artifacts, rename, ..
         } => write_stick::run(ctx, artifacts, rename, input).await,
-        Step::SshLogin { .. } => {
-            StepOutcome::failed(format!("unsupported step {}", step.type_name()))
-        }
+        Step::SshLogin {
+            logins,
+            ask_if_failed,
+            ..
+        } => ssh_login::run(ctx, logins, *ask_if_failed, input).await,
     }
 }

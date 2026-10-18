@@ -4,7 +4,6 @@
 //! the moment it exits, dies or goes silent.
 
 use super::{StepCtx, StepOutcome};
-use crate::runner::{Input, Prompt};
 use crate::transport::{RemoteJob, TransportError};
 use std::time::{Duration, SystemTime};
 
@@ -148,21 +147,4 @@ pub(crate) fn lost(ctx: &mut StepCtx<'_>, what: &str, e: TransportError) -> Step
         reason: format!("lost contact with the printer while {what} runs: {e}"),
         help: Some("It keeps running on the printer; retry to follow it.".into()),
     }
-}
-
-/// Takes a login the user just gave, and asks for one when none is held: a reopened run has
-/// lost the login it had in memory.
-pub(crate) fn need_login(ctx: &mut StepCtx<'_>, input: Option<Input>) -> Option<StepOutcome> {
-    if let Some(Input::Login(login)) = input {
-        ctx.set_login(login);
-    }
-    if ctx.login().is_some() {
-        return None;
-    }
-    let user_hint = ctx
-        .facts
-        .get("ssh_user")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    Some(StepOutcome::NeedInput(Prompt::Login { user_hint }))
 }
