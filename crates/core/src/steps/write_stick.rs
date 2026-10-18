@@ -5,7 +5,7 @@
 //! partitioned or deleted; every file is hashed again as it reads back from the stick.
 
 use super::{StepCtx, StepOutcome};
-use crate::cache::{cached_path, hash_file};
+use crate::cache::{cached_path, hash_file_blocking};
 use crate::runner::{Input, Prompt};
 use crate::transport::drives_sys::is_plain_file_name;
 use crate::transport::Drive;
@@ -235,7 +235,7 @@ async fn write(
         return o;
     }
     for f in files {
-        match hash_file(&f.src) {
+        match hash_file_blocking(&f.src).await {
             Ok(h) if h == f.sha256 => {}
             Ok(_) => {
                 return StepOutcome::failed(format!(

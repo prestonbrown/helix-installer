@@ -184,3 +184,55 @@ async fn rejects_an_expected_hash_that_is_not_lowercase_hex() {
     }
     assert!(fetch.requests().is_empty());
 }
+
+/// Holds every download open until `writers` of them have their part files on disk, so the
+/// writers overlap the way two runs fetching one artifact do.
+struct OverlappingFetch {
+    body: Vec<u8>,
+    barrier: tokio::sync::Barrier,
+    dests: Mutex<Vec<std::path::PathBuf>>,
+}
+
+#[async_trait::async_trait]
+impl helix_installer_core::transport::Fetch for OverlappingFetch {
+    async fn get(
+        &self,
+        _url: &str,
+        dest: &std::path::Path,
+        _progress: &(dyn Fn(u64, Option<u64>) + Sync),
+    ) -> Result<(), TransportError> {
+        self.dests.lock().unwrap().push(dest.to_path_buf());
+        std::fs::write(dest, &self.body).map_err(|e| TransportError::Io(e.to_string()))?;
+        self.barrier.wait().await;
+        Ok(())
+    }
+    async fn get_text(&self, _url: &str) -> Result<String, TransportError> {
+        Err(TransportError::Http(404))
+    }
+}
+
+#[tokio::test]
+async fn concurrent_writers_of_one_artifact_never_share_a_part_file() {
+    let body = b"one artifact, two runs".to_vec();
+    let fetch = Arc::new(OverlappingFetch {
+        body: body.clone(),
+        barrier: tokio::sync::Barrier::new(2),
+        dests: Mutex::new(Vec::new()),
+    });
+    let mut env = env_with(Arc::new(FakeFetch::new()));
+    env.fetch = fetch.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let a = artifact(hex(&body));
+    let (one, two) = tokio::join!(
+        fetch_artifact(&env, &a, dir.path(), &|_, _| {}),
+        fetch_artifact(&env, &a, dir.path(), &|_, _| {}),
+    );
+    assert_eq!(one.unwrap(), dir.path().join(&a.sha256));
+    assert_eq!(two.unwrap(), dir.path().join(&a.sha256));
+    let dests = fetch.dests.lock().unwrap().clone();
+    assert_eq!(dests.len(), 2);
+    assert_ne!(dests[0], dests[1], "both writers used {:?}", dests[0]);
+    assert!(dests.iter().all(|d| d.parent() == Some(dir.path())));
+    assert_eq!(names(dir.path()), vec![a.sha256.clone()]);
+    assert_eq!(std::fs::read(dir.path().join(&a.sha256)).unwrap(), body);
+}

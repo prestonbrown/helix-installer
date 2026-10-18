@@ -4,7 +4,7 @@
 //! every file is hash-verified before it is visible in the cache.
 
 use super::{StepCtx, StepOutcome};
-use crate::cache::{cached_path, hash_file, is_sha256_hex, part_path};
+use crate::cache::{cached_path, hash_file_blocking, is_sha256_hex, part_path};
 use crate::manifest::Artifact;
 use crate::transport::{Env, TransportError};
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ pub async fn fetch_artifact(
     let final_path = cached_path(cache_dir, &a.sha256);
 
     if final_path.exists() {
-        if hash_file(&final_path).map_err(io)? == a.sha256 {
+        if hash_file_blocking(&final_path).await.map_err(io)? == a.sha256 {
             return Ok(final_path);
         }
         std::fs::remove_file(&final_path).map_err(io)?;
@@ -53,7 +53,7 @@ pub async fn fetch_artifact(
         let _ = std::fs::remove_file(&part);
         return Err(DownloadError::Network(e));
     }
-    let got = match hash_file(&part) {
+    let got = match hash_file_blocking(&part).await {
         Ok(h) => h,
         Err(e) => {
             let _ = std::fs::remove_file(&part);

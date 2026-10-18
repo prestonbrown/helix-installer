@@ -6,6 +6,9 @@
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static PART_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// True for the 64 lowercase hex digits a manifest sha256 must be; also what
 /// makes the value safe to use as a file name.
@@ -17,8 +20,11 @@ pub fn cached_path(cache_dir: &Path, sha256: &str) -> PathBuf {
     cache_dir.join(sha256)
 }
 
+/// A part-file path no other writer uses: unique per process and per call, so two runs
+/// fetching one artifact never write, truncate or rename each other's partial bytes.
 pub fn part_path(cache_dir: &Path, sha256: &str) -> PathBuf {
-    cache_dir.join(format!("{sha256}.part"))
+    let seq = PART_SEQ.fetch_add(1, Ordering::Relaxed);
+    cache_dir.join(format!("{sha256}.{}.{seq}.part", std::process::id()))
 }
 
 /// Lowercase hex sha256 of `bytes`.
@@ -34,6 +40,14 @@ pub(crate) fn hex(digest: &[u8]) -> String {
 /// sit in memory whole.
 pub fn hash_file(path: &Path) -> std::io::Result<String> {
     hash_reader(&mut std::fs::File::open(path)?)
+}
+
+/// `hash_file` on a blocking thread, so hashing a large image never stalls the async runtime.
+pub async fn hash_file_blocking(path: &Path) -> std::io::Result<String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || hash_file(&path))
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 /// Lowercase hex sha256 of everything `r` yields, read in 64 KiB chunks.
