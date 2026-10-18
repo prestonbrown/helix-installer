@@ -366,6 +366,15 @@ fn restore_choices_must_name_known_recipes() {
 }
 
 #[test]
+fn a_dry_run_install_changes_nothing_so_the_commit_may_follow_it() {
+    let v = install(json!([
+        {"type": "helix_install", "platform": "pi", "dry_run": true},
+        {"type": "helix_install", "platform": "pi", "commits": true}
+    ]));
+    assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
 fn binary_exits_2_on_unparseable_json() {
     let dir = assets();
     let path = dir.path().join("m.json");

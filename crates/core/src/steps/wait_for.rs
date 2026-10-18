@@ -5,11 +5,15 @@
 use super::{probe, StepCtx, StepOutcome};
 use crate::manifest::{Choice, WaitTarget};
 use crate::runner::{Input, Prompt};
+use crate::transport::{Env, Host};
 use std::time::Duration;
 
 const POLL: Duration = Duration::from_secs(2);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const PIDOF_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a `klipper_restart` wait gives Moonraker to stop answering before it takes the
+/// restart as already over.
+pub const RESTART_START_WINDOW: Duration = Duration::from_secs(120);
 
 enum Poll {
     Up,
@@ -50,6 +54,9 @@ pub async fn run(
     }
     let timeout = Duration::from_secs(timeout_s);
     let start = ctx.env.clock.now();
+    if target == WaitTarget::KlipperRestart {
+        wait_until_gone(ctx.env, ctx.host, RESTART_START_WINDOW.min(timeout)).await;
+    }
     loop {
         let silent = match poll(ctx, target).await {
             Poll::Up => return StepOutcome::Done,
@@ -77,6 +84,21 @@ pub async fn run(
     }
 }
 
+/// Polls until Moonraker stops answering or `window` passes, so the Moonraker still running
+/// from before a restart is never taken for the one after it. Takes the `Env`, not the
+/// `StepCtx`: a shared borrow of the context held across an await makes the runner's future
+/// not `Send`.
+async fn wait_until_gone(env: &Env, host: &Host, window: Duration) {
+    let start = env.clock.now();
+    while env.moonraker.printer_info(host).await.is_ok() {
+        let waited = env.clock.now().duration_since(start).unwrap_or_default();
+        if waited >= window {
+            return;
+        }
+        env.clock.sleep(POLL.min(window - waited)).await;
+    }
+}
+
 fn ask_if_showing() -> StepOutcome {
     let choice = |value: &str, label: &str| Choice {
         value: value.into(),
@@ -93,7 +115,7 @@ fn name(target: WaitTarget) -> String {
     match target {
         WaitTarget::Port(p) => format!("port {p}"),
         WaitTarget::Moonraker => "Moonraker".into(),
-        WaitTarget::KlipperReady => "Klipper".into(),
+        WaitTarget::KlipperReady | WaitTarget::KlipperRestart => "Klipper".into(),
         WaitTarget::Ssh => "SSH".into(),
         WaitTarget::HelixService => "HelixScreen".into(),
     }
@@ -105,10 +127,12 @@ async fn poll(ctx: &mut StepCtx<'_>, target: WaitTarget) -> Poll {
     let up = |b: bool| if b { Poll::Up } else { Poll::NotYet };
     match target {
         WaitTarget::Moonraker => up(env.moonraker.printer_info(host).await.is_ok()),
-        WaitTarget::KlipperReady => match env.moonraker.printer_info(host).await {
-            Ok(info) => up(info.get("state").and_then(|s| s.as_str()) == Some("ready")),
-            Err(_) => Poll::NotYet,
-        },
+        WaitTarget::KlipperReady | WaitTarget::KlipperRestart => {
+            match env.moonraker.printer_info(host).await {
+                Ok(info) => up(info.get("state").and_then(|s| s.as_str()) == Some("ready")),
+                Err(_) => Poll::NotYet,
+            }
+        }
         WaitTarget::Port(p) => up(env.net.tcp_banner(host, p, CONNECT_TIMEOUT).await.is_ok()),
         WaitTarget::Ssh => up(matches!(
             env.net.tcp_banner(host, host.ssh_port, CONNECT_TIMEOUT).await,

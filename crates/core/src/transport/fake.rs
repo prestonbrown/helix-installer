@@ -19,6 +19,9 @@ struct MoonrakerState {
     objects_list: HashMap<String, Value>,
     gcodes: Vec<(String, String)>,
     upgrades: Vec<String>,
+    /// Answers `printer_info` gives in turn, the last one repeated; `None` is unreachable.
+    printer_info_script: HashMap<String, std::collections::VecDeque<Option<Value>>>,
+    printer_info_calls: HashMap<String, u32>,
 }
 
 /// Canned JSON per host address; a host with nothing registered is unreachable.
@@ -33,6 +36,20 @@ impl FakeMoonraker {
     }
     pub fn set_printer_info(&self, addr: &str, v: Value) {
         lock(&self.state).printer_info.insert(addr.into(), v);
+    }
+    /// `printer_info` answers these in turn, repeating the last (`None`: unreachable). Wins
+    /// over `set_printer_info`.
+    pub fn script_printer_info(&self, addr: &str, answers: Vec<Option<Value>>) {
+        lock(&self.state)
+            .printer_info_script
+            .insert(addr.into(), answers.into());
+    }
+    pub fn printer_info_calls(&self, addr: &str) -> u32 {
+        lock(&self.state)
+            .printer_info_calls
+            .get(addr)
+            .copied()
+            .unwrap_or(0)
     }
     pub fn set_system_info(&self, addr: &str, v: Value) {
         lock(&self.state).system_info.insert(addr.into(), v);
@@ -55,8 +72,17 @@ impl FakeMoonraker {
 #[async_trait]
 impl Moonraker for FakeMoonraker {
     async fn printer_info(&self, host: &Host) -> Result<Value> {
-        lock(&self.state)
-            .printer_info
+        let mut st = lock(&self.state);
+        *st.printer_info_calls.entry(host.addr.clone()).or_default() += 1;
+        if let Some(q) = st.printer_info_script.get_mut(&host.addr) {
+            let answer = if q.len() > 1 {
+                q.pop_front().flatten()
+            } else {
+                q.front().cloned().flatten()
+            };
+            return answer.ok_or(TransportError::Unreachable);
+        }
+        st.printer_info
             .get(&host.addr)
             .cloned()
             .ok_or(TransportError::Unreachable)

@@ -305,6 +305,10 @@ pub enum WaitTarget {
     Moonraker,
     /// Moonraker answers and reports Klipper `ready`.
     KlipperReady,
+    /// The printer restarts: Moonraker stops answering, then comes back with Klipper `ready`.
+    /// If it never stops answering within `RESTART_START_WINDOW`, the restart is taken as
+    /// already over (a retried step) and only `ready` is waited for.
+    KlipperRestart,
     Ssh,
     HelixService,
 }
@@ -455,6 +459,10 @@ pub enum Step {
         /// Runs `install.sh --uninstall` instead of installing; uploads no release.
         #[serde(default)]
         uninstall: bool,
+        /// Runs the same install with `--dry-run`, which changes nothing on the printer and
+        /// stops at install.sh's confirm point, to check its platform and result first.
+        #[serde(default)]
+        dry_run: bool,
         #[serde(default)]
         dir: Option<String>,
         #[serde(default)]
@@ -486,7 +494,9 @@ impl Step {
     pub fn is_idempotent(&self) -> bool {
         !matches!(
             self,
-            Step::MoonrakerGcode { .. } | Step::SshRun { .. } | Step::HelixInstall { .. }
+            Step::MoonrakerGcode { .. }
+                | Step::SshRun { .. }
+                | Step::HelixInstall { dry_run: false, .. }
         )
     }
 
@@ -515,6 +525,11 @@ impl Step {
             Step::Require { range, equals, .. } if range.is_some() == equals.is_some() => {
                 Some("require needs exactly one of range and equals")
             }
+            Step::HelixInstall {
+                dry_run: true,
+                uninstall: true,
+                ..
+            } => Some("helix_install cannot be a dry run of an uninstall"),
             _ => None,
         }
     }

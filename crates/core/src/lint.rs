@@ -220,7 +220,7 @@ fn first_change(steps: &[Step]) -> Option<usize> {
         Step::SshRun { .. }
         | Step::MoonrakerGcode { .. }
         | Step::MoonrakerUpdate { .. }
-        | Step::HelixInstall { .. } => true,
+        | Step::HelixInstall { dry_run: false, .. } => true,
         Step::WriteStick { .. } => {
             stick_written = true;
             false

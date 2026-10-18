@@ -471,6 +471,49 @@ async fn a_wrong_platform_from_a_job_run_through_sudo_is_killed_through_sudo() {
 }
 
 #[tokio::test]
+async fn a_dry_run_uploads_runs_dry_run_and_removes_its_files() {
+    let f = Fakes::standard(&["k1"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "k1"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "k1", "update": true, "dry_run": true, "dir": "/usr/data" }]);
+    let mut r = f.runner("root", steps, json!({}));
+
+    let (ev, titles) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(titles.iter().any(|t| t.contains("Checking")), "{titles:?}");
+    assert_eq!(
+        spawned(&f)[0].0,
+        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.0.5.tar.gz' --progress --update --dry-run"
+    );
+    assert!(
+        f.ssh
+            .commands()
+            .iter()
+            .any(|c| c.starts_with("rm -f ") && c.contains("helixscreen-k1")),
+        "{:?}",
+        f.ssh.commands()
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_that_fails_fails_the_step_with_the_installers_reason() {
+    let f = Fakes::standard(&["k1"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "k1"]), None),
+        (
+            &pl(&["result", "fail", "not enough space on /usr/data"]),
+            Some(1),
+        ),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "k1", "dry_run": true }]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("not enough space"), "{ev:?}");
+}
+
+#[tokio::test]
 async fn an_installer_reporting_another_platform_fails() {
     let f = Fakes::standard(&["pi"]);
     f.ssh.script_job(vec![

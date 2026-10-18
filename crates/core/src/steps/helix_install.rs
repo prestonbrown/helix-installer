@@ -40,6 +40,7 @@ const UPLOADED_FACT: &str = "helix_install_uploaded";
 const TOO_OLD: &str = "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer.";
 const TITLE: &str = "Installing HelixScreen";
 const UNINSTALL_TITLE: &str = "Removing HelixScreen";
+const DRY_RUN_TITLE: &str = "Checking the printer with the HelixScreen installer";
 
 /// What `install.sh` is asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +50,19 @@ pub enum Mode {
     Uninstall,
 }
 
-impl Mode {
+/// What install.sh is asked to do, and whether only as a `--dry-run`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Run {
+    pub mode: Mode,
+    pub dry_run: bool,
+}
+
+impl Run {
     fn title(self) -> &'static str {
-        match self {
-            Mode::Uninstall => UNINSTALL_TITLE,
-            Mode::Install | Mode::Update => TITLE,
+        match (self.dry_run, self.mode) {
+            (true, _) => DRY_RUN_TITLE,
+            (false, Mode::Uninstall) => UNINSTALL_TITLE,
+            (false, Mode::Install | Mode::Update) => TITLE,
         }
     }
 }
@@ -87,7 +96,7 @@ pub async fn run(
     ctx: &mut StepCtx<'_>,
     platform: &PlatformSel,
     channel: Channel,
-    mode: Mode,
+    run: Run,
     dir: Option<&str>,
     input: Option<Input>,
 ) -> StepOutcome {
@@ -99,13 +108,13 @@ pub async fn run(
         Err(stop) => return stop,
     };
     if let Some(running) = ctx.job.clone() {
-        return follow(ctx, &running, &platform, mode).await;
+        return follow(ctx, &running, &platform, run).await;
     }
     if ctx.calls == 0 {
-        let verb = if mode == Mode::Uninstall {
-            "remove"
-        } else {
-            "install"
+        let verb = match (run.dry_run, run.mode) {
+            (true, _) => "check the printer for",
+            (false, Mode::Uninstall) => "remove",
+            (false, _) => "install",
         };
         return progress(
             format!("Preparing to {verb} HelixScreen ({platform})"),
@@ -114,10 +123,10 @@ pub async fn run(
     }
     // The run-wide override (testing, beta testers) wins over the recipe.
     let channel = ctx.channel_override.unwrap_or(channel);
-    match launch(ctx, &platform, channel, mode, dir.unwrap_or(DEFAULT_DIR)).await {
+    match launch(ctx, &platform, channel, run, dir.unwrap_or(DEFAULT_DIR)).await {
         Ok(started) => {
             *ctx.job = Some(started);
-            progress(mode.title().into(), None)
+            progress(run.title().into(), None)
         }
         Err(stop) => stop,
     }
@@ -164,9 +173,10 @@ async fn launch(
     ctx: &mut StepCtx<'_>,
     platform: &str,
     channel: Channel,
-    mode: Mode,
+    run: Run,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
+    let mode = run.mode;
     let sudo_password = sudo_password(ctx).await?;
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
@@ -202,14 +212,16 @@ async fn launch(
         .map(|(_, name)| format!("{dir}/{name}"));
     let command = match &tarball_remote {
         Some(remote) => format!(
-            "sh {} --local {} --progress{}",
+            "sh {} --local {} --progress{}{}",
             sh_quote(&script_remote),
             sh_quote(remote),
             if mode == Mode::Update {
                 " --update"
             } else {
                 ""
-            }
+            },
+            // install.sh's --dry-run exits at its confirm point, before the first change.
+            if run.dry_run { " --dry-run" } else { "" }
         ),
         None => format!("sh {} --uninstall --progress", sh_quote(&script_remote)),
     };
@@ -414,7 +426,7 @@ async fn follow(
     ctx: &mut StepCtx<'_>,
     running: &RemoteJob,
     platform: &str,
-    mode: Mode,
+    run: Run,
 ) -> StepOutcome {
     let followed = match job::follow(ctx, running, HELIX_INSTALL_SILENCE, is_progress).await {
         Ok(f) => f,
@@ -482,7 +494,7 @@ async fn follow(
                         fraction: (total > 0).then(|| (done as f32 / total as f32).min(1.0)),
                     }
                 }
-                None => progress(mode.title().into(), None),
+                None => progress(run.title().into(), None),
             }
         }
         Followed::Exited(code) => {

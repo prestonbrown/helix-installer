@@ -379,3 +379,17 @@ fn a_require_step_needs_exactly_one_of_range_and_equals() {
         );
     }
 }
+
+#[test]
+fn a_dry_run_cannot_be_an_uninstall() {
+    let m = serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "printers": [], "artifacts": {},
+        "recipes": { "r": [{ "type": "helix_install", "platform": "pi", "dry_run": true, "uninstall": true }] }
+    });
+    let bytes = serde_json::to_vec(&m).unwrap();
+    let err = verify_and_parse(&bytes, &sign(&bytes), &pubkey(), "1.0.0").unwrap_err();
+    assert!(
+        matches!(&err, ManifestError::Malformed(m) if m.contains("dry run")),
+        "{err:?}"
+    );
+}

@@ -144,11 +144,15 @@ impl Rig {
     }
 
     /// The installer on the printer reports `platform` and succeeds.
+    /// The installer on the printer reports `platform` and succeeds: once for the dry run
+    /// that comes before an install, once for the install (an uninstall uses the first).
     fn installer_succeeds(&self, platform: &str) {
-        self.ssh.script_job(vec![
-            (&pl(&["platform", platform]), None),
-            (&pl(&["result", "ok"]), Some(0)),
-        ]);
+        for _ in 0..2 {
+            self.ssh.script_job(vec![
+                (&pl(&["platform", platform]), None),
+                (&pl(&["result", "ok"]), Some(0)),
+            ]);
+        }
     }
 
     fn runner(&self, m: &Manifest, picked: &Identified, facts: Facts) -> Runner {
@@ -167,6 +171,14 @@ impl Rig {
 
     /// The `sh … install.sh …` commands the installer was started with.
     fn installs(&self) -> Vec<(String, Option<Vec<u8>>)> {
+        self.installer_runs()
+            .into_iter()
+            .filter(|(c, _)| !c.contains("--dry-run"))
+            .collect()
+    }
+
+    /// Every `install.sh` started, dry runs included, in order.
+    fn installer_runs(&self) -> Vec<(String, Option<Vec<u8>>)> {
         self.ssh
             .calls()
             .into_iter()
@@ -651,7 +663,7 @@ async fn k2_restore_runs_the_uninstaller() {
 
 // ---------------------------------------------------------------- Creality K1
 
-const SIMPLE_AF: &str = "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
+const SIMPLE_AF: &str = "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull || { echo 'FATAL: could not update /usr/data/pellcorp (git pull failed); check the printer can reach github.com, then retry'; exit 1; }; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
 const K1_MODEL_PROBE: &str = r#"case "$(/usr/bin/get_sn_mac.sh model 2>/dev/null)" in CR-K1|K1C|"CR-K1 Max") echo yes;; *) echo no;; esac"#;
 const OTA_PROBE: &str = r"sed -n 's/^ota_version=6\.//p' /etc/ota_info";
 const LEFTOVERS_PROBE: &str = r#"if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ] || { [ -d /opt ] && [ ! -L /opt ] && [ -n "$(ls -1 /opt)" ]; }; then echo yes; else echo no; fi"#;
@@ -1348,6 +1360,147 @@ async fn ad5m_restore_uninstalls_and_points_at_forgex_for_fully_stock() {
         rig.installs()[0].0,
         "sh '/data/install.sh' --uninstall --progress"
     );
+}
+
+// ---------------------------------------------------------------- dry runs
+
+/// Every recipe that installs HelixScreen asks install.sh for a dry run of the same install
+/// first, and that dry run comes before the commit unless the recipe committed earlier.
+#[test]
+fn every_install_is_preceded_by_its_dry_run() {
+    use helix_installer_core::manifest::Step;
+    let m = staging();
+    let mut checked = 0;
+    for (id, steps) in &m.recipes {
+        for (i, s) in steps.iter().enumerate() {
+            let Step::HelixInstall {
+                platform,
+                update,
+                uninstall: false,
+                dry_run: false,
+                dir,
+                ..
+            } = s
+            else {
+                continue;
+            };
+            let Some(Step::HelixInstall {
+                platform: p,
+                update: u,
+                dry_run: true,
+                dir: d,
+                commits: false,
+                ..
+            }) = i.checked_sub(1).map(|j| &steps[j])
+            else {
+                panic!("{id}: step {i} installs without a dry run right before it");
+            };
+            assert_eq!(
+                (serde_json::to_value(p).unwrap(), u, d),
+                (serde_json::to_value(platform).unwrap(), update, dir),
+                "{id}"
+            );
+            let commit = steps.iter().position(|s| s.commits()).unwrap();
+            assert!(commit <= i, "{id}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 10, "{checked}");
+}
+
+#[tokio::test]
+async fn a_dry_run_naming_another_platform_stops_the_install_before_the_commit() {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "pi", "raspberry");
+    rig.ssh.script_job(vec![
+        (&pl(&["platform", "snapmaker-u1"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let m = staging();
+    let mut f = fleet("pi3_mainsailos");
+    f.remove("helix_installed");
+    let picked = identify(&m, &f);
+    let mut r = rig.runner(&m, &picked, f);
+
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::Login { .. } => login("pi", "raspberry"),
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    match &trace.end {
+        Event::Failed {
+            committed: false,
+            reason,
+            ..
+        } => assert!(reason.contains("snapmaker-u1"), "{reason}"),
+        other => panic!("expected an uncommitted failure, got {other:?}"),
+    }
+    let runs = rig.installer_runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(
+        runs[0].0,
+        "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.0.5.tar.gz' --progress --dry-run"
+    );
+}
+
+#[tokio::test]
+async fn a_zmod_printer_whose_extra_plugins_are_on_skips_their_restart() {
+    for (printer, objects) in [
+        ("ad5x", zmod_ad5x_objects()["objects"].clone()),
+        ("ad5m", json!(["mcu", "mcu eboard", "zmod", "zmod_color"])),
+    ] {
+        let rig = Rig::new();
+        moonraker_answers(&rig, json!({ "objects": objects.clone() }));
+        // ZMOD seeds HelixScreen's update_manager entry at v0.0.1 when the extra plugins go on;
+        // nothing has been installed through it yet.
+        let f: Facts = serde_json::from_value(json!({
+            "has_moonraker": true, "cpu_arch": if printer == "ad5x" { "mips" } else { "armv7l" },
+            "helix_installed": true, "helix_version": "v0.0.1", "klipper_objects": objects,
+        }))
+        .unwrap();
+        let m = staging();
+        let picked = identify_as(&m, printer, &f);
+        let Identified::Recipe { recipe_id, .. } = &picked else {
+            panic!("{printer}: {picked:?}")
+        };
+        assert!(
+            recipe_id.ends_with("_switch_screen"),
+            "{printer}: {recipe_id}"
+        );
+        let mut r = rig.runner(&m, &picked, f);
+        let trace = drive(&mut r, flash_answers(&rig, "", json!(null))).await;
+        assert!(trace.done(), "{printer}: {:?}", trace.end);
+        assert_eq!(
+            rig.moonraker.gcodes(),
+            vec![(ADDR.to_string(), "DISPLAY_OFF HELIX=1".to_string())],
+            "{printer}"
+        );
+        assert_eq!(rig.moonraker.upgrades(), vec!["helixscreen".to_string()]);
+    }
+}
+
+#[test]
+fn the_zmod_restart_is_waited_for_not_confirmed_by_the_user() {
+    use helix_installer_core::manifest::{Step, WaitTarget};
+    let m = staging();
+    for id in ["ad5x_zmod", "ad5x_enable_helix", "ad5m_zmod_enable"] {
+        let steps = &m.recipes[id];
+        let at = steps
+            .iter()
+            .position(|s| matches!(s, Step::MoonrakerGcode { script, .. } if script == "ENABLE_EXTRA_PLUGINS"))
+            .unwrap();
+        assert!(
+            matches!(
+                steps[at + 1],
+                Step::WaitFor {
+                    target: WaitTarget::KlipperRestart,
+                    ..
+                }
+            ),
+            "{id}: {:?}",
+            steps[at + 1]
+        );
+    }
 }
 
 // ---------------------------------------------------------------- refused printers

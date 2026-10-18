@@ -404,6 +404,7 @@ pub(crate) async fn run_builtin(
             channel,
             update,
             uninstall,
+            dry_run,
             dir,
             ..
         } => {
@@ -412,7 +413,11 @@ pub(crate) async fn run_builtin(
                 (false, true) => helix_install::Mode::Update,
                 (false, false) => helix_install::Mode::Install,
             };
-            helix_install::run(ctx, platform, *channel, mode, dir.as_deref(), input).await
+            let run = helix_install::Run {
+                mode,
+                dry_run: *dry_run,
+            };
+            helix_install::run(ctx, platform, *channel, run, dir.as_deref(), input).await
         }
         Step::WriteStick {
             artifacts, rename, ..

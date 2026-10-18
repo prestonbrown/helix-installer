@@ -330,6 +330,51 @@ async fn wait_for_klipper_ready_waits_past_a_moonraker_that_answers_early() {
 }
 
 #[tokio::test]
+async fn wait_for_klipper_restart_ignores_the_moonraker_from_before_the_restart() {
+    let f = Fakes::new();
+    // Up and ready (the old boot), then gone, then booting, then ready again.
+    f.moonraker.script_printer_info(
+        ADDR,
+        vec![
+            Some(json!({ "state": "ready" })),
+            Some(json!({ "state": "ready" })),
+            None,
+            None,
+            Some(json!({ "state": "startup" })),
+            Some(json!({ "state": "ready" })),
+        ],
+    );
+    let m = manifest(json!([
+        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 600, "message": "Waiting" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    assert_eq!(
+        f.moonraker.printer_info_calls(ADDR),
+        6,
+        "it waited for the second ready"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_klipper_restart_that_never_sees_moonraker_go_takes_it_as_already_restarted() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    let m = manifest(json!([
+        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 600, "message": "Waiting" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    let start = f.clock.now();
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    let waited = f.clock.now().duration_since(start).unwrap();
+    assert!(
+        waited >= Duration::from_secs(120) && waited < Duration::from_secs(130),
+        "{waited:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_step_is_retried_by_the_next_advance() {
     let f = Fakes::new();
     let m = manifest(json!([
