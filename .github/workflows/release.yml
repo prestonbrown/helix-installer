@@ -158,7 +158,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: crates/app
-          tauriScript: npm --prefix ../../ui exec -- tauri
+          tauriScript: node ../../ui/node_modules/@tauri-apps/cli/tauri.js
           tagName: ${{ needs.plan.outputs.tag }}
           releaseName: HelixScreen Installer ${{ needs.plan.outputs.tag }}
           releaseBody: Unsigned builds are listed in each build job's Signing summary. Review, then publish.
