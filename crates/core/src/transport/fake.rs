@@ -684,6 +684,7 @@ struct SerialState {
     resets: u32,
     erases: u32,
     vanish_on_erase: bool,
+    reboot_after_write: bool,
     vanish_on_write: Option<u32>,
     corrupt_writes: bool,
     silent_boot: bool,
@@ -786,6 +787,11 @@ impl FakeSerial {
     pub fn erases(&self) -> u32 {
         lock(&self.state).erases
     }
+    /// The next write leaves the bootloader as a flasher that resets after each write does: the
+    /// board boots its app, and every later command on that session times out.
+    pub fn reboot_after_next_write(&self) {
+        lock(&self.state).reboot_after_write = true;
+    }
     /// The next whole-chip erase unplugs the board part way through.
     pub fn vanish_on_erase(&self) {
         lock(&self.state).vanish_on_erase = true;
@@ -813,6 +819,7 @@ impl Serial for FakeSerial {
             state: self.state.clone(),
             port: port.into(),
             chip: board.chip.clone(),
+            booted: false,
         }))
     }
 }
@@ -821,6 +828,8 @@ struct FakeFlashSession {
     state: std::sync::Arc<Mutex<SerialState>>,
     port: String,
     chip: ChipInfo,
+    /// Left the bootloader: the session no longer answers.
+    booted: bool,
 }
 
 impl FakeFlashSession {
@@ -831,6 +840,9 @@ impl FakeFlashSession {
     }
 
     fn board<T>(&self, f: impl FnOnce(&mut Board) -> T) -> Result<T> {
+        if self.booted {
+            return Err(TransportError::Timeout);
+        }
         lock(&self.state)
             .boards
             .get_mut(&self.port)
@@ -888,6 +900,7 @@ impl FlashSession for FakeFlashSession {
         }
         self.board(|b| b.flash.push((offset, bytes)))?;
         progress(data.len() as u64);
+        self.booted = std::mem::take(&mut lock(&self.state).reboot_after_write);
         Ok(())
     }
     async fn erase_all(&mut self) -> Result<()> {

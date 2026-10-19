@@ -367,7 +367,7 @@ async fn follow(ctx: &mut StepCtx<'_>, mut task: Task) -> StepOutcome {
     };
     match ended {
         Ok(Ok(log)) => booted(ctx, &task, &log),
-        Ok(Err(stop)) => stopped(ctx, stop),
+        Ok(Err(stop)) => stopped(ctx, stop, task.erase),
         Err(e) => StepOutcome::Failed {
             reason: format!("the write to the {} stopped: {e}", ctx.printer_name()),
             help: Some(MID_FLASH_HELP.into()),
@@ -412,8 +412,30 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
     }
 }
 
-fn stopped(ctx: &mut StepCtx<'_>, stop: Stop) -> StepOutcome {
+/// What a flash that stopped part way tells the user. A panel erased for a first install is blank
+/// from the erase until a write completes, and says so.
+fn stopped(ctx: &mut StepCtx<'_>, stop: Stop, erased: bool) -> StepOutcome {
     let name = ctx.printer_name().to_string();
+    // Only a reset failure comes after every part was written and checked.
+    let blank = erased && !matches!(stop, Stop::Reset(_));
+    match stopped_on(&name, stop) {
+        StepOutcome::Failed { reason, .. } if blank => StepOutcome::Failed {
+            reason: format!(
+                "{reason}; the {name} was erased for the install and is blank until a flash \
+                 completes"
+            ),
+            help: Some(format!(
+                "The {name} is blank until a flash completes: it shows nothing and will not \
+                 start. This cannot damage it: its chip always accepts a new write over USB. Keep \
+                 it plugged in (plug it back in if it came loose) and choose Try this step again \
+                 to write it."
+            )),
+        },
+        other => other,
+    }
+}
+
+fn stopped_on(name: &str, stop: Stop) -> StepOutcome {
     match stop {
         Stop::Write {
             error: TransportError::Disconnected,

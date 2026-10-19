@@ -375,7 +375,7 @@ async fn a_panel_unplugged_mid_flash_says_what_state_it_is_in_and_is_not_retried
     let (committed, reason, help) = failure(&drive(&mut r).await.end);
     assert!(committed);
     assert!(reason.contains("while it was being written"), "{reason}");
-    assert!(help.contains("may not start"), "{help}");
+    assert!(help.contains("blank until a flash completes"), "{help}");
     assert!(help.contains("Try this step again"), "{help}");
     let opened = rig.serial.connects().len();
     assert_eq!(opened, 2);
@@ -581,7 +581,7 @@ async fn a_panel_unplugged_while_it_is_erased_says_so() {
     let (committed, reason, help) = failure(&drive(&mut r).await.end);
     assert!(committed);
     assert!(reason.contains("erased"), "{reason}");
-    assert!(help.contains("may not start"), "{help}");
+    assert!(help.contains("blank until a flash completes"), "{help}");
     assert!(rig.serial.writes().is_empty());
 }
 
@@ -673,4 +673,28 @@ async fn the_point_of_no_return_is_recorded_before_the_first_erase() {
     }
     assert!(r.state().committed);
     assert_eq!(rig.serial.erases(), 1);
+}
+
+#[tokio::test]
+async fn a_first_install_stopped_after_the_erase_says_the_panel_is_blank_and_try_again_finishes_it()
+{
+    let rig = Rig::new();
+    // A flasher that resets the chip after a write leaves the stub: the next check times out.
+    rig.serial.reboot_after_next_write();
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(reason.contains("blank"), "{reason}");
+    assert!(help.contains("blank until"), "{help}");
+    assert!(help.contains("Try this step again"), "{help}");
+    assert_eq!(rig.serial.erases(), 1);
+    assert_eq!(rig.serial.read_back(PORT, APP_OFFSET, 4), vec![0xff; 4]);
+
+    // Try this step again writes the panel from the start, erase included, and finishes.
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(
+        rig.serial.read_back(PORT, APP_OFFSET, 0x1000),
+        app_image("helixscreen_esp32", "v1.1.0-beta.10")
+    );
 }

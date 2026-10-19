@@ -19,6 +19,10 @@ const CONNECT_BAUD: u32 = 115_200;
 /// Writes run faster. The K-Touch's CH340 drops bytes when reading at 921600, so reads stay at
 /// `CONNECT_BAUD` and writes use the rate HelixScreen's own K-Touch guide gives.
 const WRITE_BAUD: u32 = 460_800;
+/// What espflash does after each write: stay in the flasher stub. `write_bins_to_flash` ends with
+/// `reset_after`, so any other mode reboots the chip after the first part and every later write
+/// and MD5 times out. `reset()` boots the app once, at the very end.
+const AFTER_EACH_WRITE: ResetAfterOperation = ResetAfterOperation::NoResetNoStub;
 
 pub struct EspflashSerial;
 
@@ -134,7 +138,7 @@ impl Serial for EspflashSerial {
             let connection = Connection::new(
                 serial,
                 info,
-                ResetAfterOperation::HardReset,
+                AFTER_EACH_WRITE,
                 ResetBeforeOperation::DefaultReset,
                 CONNECT_BAUD,
             );
@@ -349,4 +353,16 @@ fn tempfile_dir() -> Result<std::path::PathBuf> {
         std::env::temp_dir().join(format!("helix-installer-read-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| TransportError::Io(e.to_string()))?;
     Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// espflash's `write_bins_to_flash` ends with `reset_after`, so any reset mode but staying in
+    /// the stub reboots the chip after the first part and every later write and MD5 times out.
+    #[test]
+    fn the_connection_stays_in_the_stub_between_parts() {
+        assert_eq!(AFTER_EACH_WRITE, ResetAfterOperation::NoResetNoStub);
+    }
 }
