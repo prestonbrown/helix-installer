@@ -68,7 +68,16 @@ access to the release bucket. Optional variables (environment or repository): `R
 (default `helixscreen-releases`) and `R2_PUBLIC_URL` (`https://releases.helixscreen.org`; when
 set, the job downloads what it published and verifies it again).
 
-## 5. Publish
+## 5. Turn publishing on
+
+The publish job is skipped until this repository variable is set, so CI stays green before
+signing is configured:
+
+```sh
+gh variable set MANIFEST_PUBLISH_ENABLED --body true -R prestonbrown/helix-installer
+```
+
+## 6. Publish
 
 Merge to `main`, approve the `manifest-publish` deployment when GitHub asks. The job writes
 `installer/manifest.json`, `installer/manifest.json.minisig` and `installer/img/`. The app

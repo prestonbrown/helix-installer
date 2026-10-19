@@ -67,7 +67,9 @@ jobs:
 
   publish:
     needs: [lint, changed]
-    if: needs.changed.outputs.manifest == 'true'
+    # Off until the repository variable MANIFEST_PUBLISH_ENABLED is 'true' (docs/SIGNING.md):
+    # before signing is set up there is nothing to publish, so the job is skipped, not red.
+    if: needs.changed.outputs.manifest == 'true' && vars.MANIFEST_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     # Required reviewer on this environment gates every publish; the secrets below live in it.
     # Each secret is given only to the step that uses it, never to the build or a third-party
