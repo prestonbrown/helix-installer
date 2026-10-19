@@ -85,6 +85,10 @@ pub struct Session {
     login_tries: u32,
     /// The recipe's default logins were already tried during this step run.
     defaults_tried: bool,
+    /// sudo accepted the sudo password the user typed for the held login.
+    sudo_checked: bool,
+    /// Typed sudo passwords sudo refused since the last one it took.
+    sudo_tries: u32,
 }
 
 impl Session {
@@ -106,13 +110,10 @@ impl Session {
         }
     }
 
-    /// The password of the login held now, for stripping from a support bundle.
+    /// The password, passphrase and sudo password of the login held now, for stripping from a
+    /// support bundle.
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.login
-            .iter()
-            .map(|l| l.password.clone())
-            .filter(|p| !p.is_empty())
-            .collect()
+        self.login.iter().flat_map(Login::secrets).collect()
     }
 }
 
@@ -156,6 +157,7 @@ impl StepCtx<'_> {
     pub fn set_login(&mut self, login: Login) {
         self.session.login = Some(login);
         self.session.ssh = None;
+        self.session.sudo_checked = false;
     }
 
     /// Connects with `login` and, only if the printer accepts it, holds it and the session.
@@ -163,14 +165,25 @@ impl StepCtx<'_> {
         let ssh = self.env.ssh.connect(self.host, &login).await?;
         self.session.login = Some(login);
         self.session.ssh = Some(ssh);
+        self.session.sudo_checked = false;
         Ok(())
     }
 
     /// Holds a login for an SSH step: the one the user just gave (checked against the printer,
     /// three tries in all), else the recipe's own `ssh_login` defaults tried quietly (a reopened
-    /// run has lost the login it had in memory), else a prompt. `None` means a login is held
-    /// and the step may go on.
+    /// run has lost the login it had in memory), else a prompt. A typed sudo password is held
+    /// with the login. `None` means a login is held and the step may go on.
     pub(crate) async fn need_login(&mut self, input: Option<Input>) -> Option<StepOutcome> {
+        let input = match input {
+            Some(Input::SudoPassword(pw)) => {
+                if let Some(l) = self.session.login.as_mut() {
+                    l.sudo_password = Some(pw);
+                    self.session.sudo_checked = false;
+                }
+                Some(Input::Next)
+            }
+            other => other,
+        };
         match input {
             Some(Input::Login(login)) => {
                 self.session.login_tries += 1;
@@ -269,9 +282,12 @@ impl StepCtx<'_> {
             Step::SshLogin { password_hint, .. } => password_hint.clone(),
             _ => None,
         });
+        let keys = self.env.ssh.key_status();
         Prompt::Login {
             user_hint,
             password_hint,
+            has_ssh_key: keys.available,
+            key_locked: keys.locked,
         }
     }
 
@@ -362,6 +378,14 @@ impl StepCtx<'_> {
         self.facts.extend(found);
         Ok(())
     }
+}
+
+/// Removes what a run kept on the printer for a later step once the run is done: a dry run's
+/// uploads the install did not consume, and the logs of jobs that failed along the way. Runs
+/// that never kept anything do not connect.
+pub(crate) async fn end_of_run(ctx: &mut StepCtx<'_>) {
+    helix_install::remove_uploaded(ctx).await;
+    job::remove_kept_logs(ctx).await;
 }
 
 /// Runs a step the runner implements itself. Step types that need a handler fail until one is

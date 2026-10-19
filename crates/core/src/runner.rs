@@ -6,7 +6,7 @@
 
 use crate::facts::Facts;
 use crate::identify::{self, Identified, StartState, GENERIC_REFUSE_DOC};
-use crate::manifest::{verify_and_parse, Channel, Choice, Login, Manifest, Step};
+use crate::manifest::{verify_and_parse, Channel, Choice, Login, Manifest, Secret, Step};
 use crate::run_state::{self, recipe_sha256, LogEntry, RunState, RunStatus, IDENTITY_KEYS};
 use crate::steps::{self, Session, StepCtx, StepHandler, StepOutcome};
 use crate::transport::{Drive, Env};
@@ -33,9 +33,19 @@ pub enum Prompt {
         choices: Vec<Choice>,
     },
     /// `password_hint` says where this printer shows its password, when the recipe knows.
+    /// `has_ssh_key` says this computer has an SSH key or agent to sign in with instead, and
+    /// `key_locked` that a key file needs its passphrase typed before it can be used.
     Login {
         user_hint: Option<String>,
         password_hint: Option<String>,
+        has_ssh_key: bool,
+        key_locked: bool,
+    },
+    /// sudo on the printer needs `user`'s password, which a key login does not carry.
+    /// `refused` says sudo turned down the one typed last.
+    SudoPassword {
+        user: String,
+        refused: bool,
     },
     /// `message` says why `drives` is empty, when it is.
     ChooseDrive {
@@ -56,6 +66,8 @@ pub enum Input {
     Next,
     Choice(String),
     Login(Login),
+    /// Answers `Prompt::SudoPassword`.
+    SudoPassword(Secret),
     Drive(String),
     Cancel,
 }
@@ -104,6 +116,9 @@ pub struct Runner {
     /// The step the probes before it were last re-run for, so a printer they do not identify
     /// stops the run instead of being probed again and again.
     replayed_for: Option<usize>,
+    /// The step reporting progress and the largest fraction it has reported, so its bar never
+    /// moves backwards: install.sh reuses a step number after a skip.
+    progress_floor: Option<(usize, f32)>,
 }
 
 impl Runner {
@@ -123,6 +138,7 @@ impl Runner {
             calls: 0,
             manifest_error: None,
             replayed_for: None,
+            progress_floor: None,
         }
     }
 
@@ -270,6 +286,7 @@ impl Runner {
         if matches!(self.state.status, RunStatus::Failed { .. }) {
             self.state.fresh.clear();
             self.replayed_for = None;
+            self.progress_floor = None;
         }
         self.state.status = RunStatus::Running;
 
@@ -283,6 +300,7 @@ impl Runner {
                 }
                 self.state.status = RunStatus::Done;
                 self.log(index, "recipe complete".into());
+                self.end_of_run(&manifest).await;
                 return self.persist(Event::Done);
             };
 
@@ -388,13 +406,14 @@ impl Runner {
                     detail,
                     fraction,
                 } => {
+                    let fraction = self.never_backwards(index, fraction);
                     return self.persist(Event::Progress {
                         step: index,
                         total: steps.len(),
                         title,
                         detail,
                         fraction,
-                    })
+                    });
                 }
                 StepOutcome::Refused { doc, reason } if !self.state.committed => {
                     return self.refuse(doc, reason)
@@ -408,6 +427,7 @@ impl Runner {
                     self.state.step_index = steps.len();
                     self.state.started_step = None;
                     self.calls = 0;
+                    self.end_of_run(&manifest).await;
                     return self.persist(Event::Done);
                 }
             }
@@ -543,7 +563,15 @@ impl Runner {
             self.session.begin_step();
         }
         let handler = self.handlers.get(step.type_name()).cloned();
-        let mut ctx = StepCtx {
+        let mut ctx = self.step_ctx(manifest);
+        match handler {
+            Some(h) => h.run(&mut ctx, step, input).await,
+            None => steps::run_builtin(&mut ctx, step, input).await,
+        }
+    }
+
+    fn step_ctx<'a>(&'a mut self, manifest: &'a Manifest) -> StepCtx<'a> {
+        StepCtx {
             env: &self.env,
             manifest,
             host: &self.state.host,
@@ -563,11 +591,31 @@ impl Runner {
                 .get(&self.state.recipe_id)
                 .map_or(&[], Vec::as_slice),
             session: &mut self.session,
-        };
-        match handler {
-            Some(h) => h.run(&mut ctx, step, input).await,
-            None => steps::run_builtin(&mut ctx, step, input).await,
         }
+    }
+
+    /// Removes what the run left on the printer for a later step (see `steps::end_of_run`).
+    async fn end_of_run(&mut self, manifest: &Manifest) {
+        let mut ctx = self.step_ctx(manifest);
+        steps::end_of_run(&mut ctx).await;
+    }
+
+    /// `fraction`, raised to the most `step` has reported. A step that has reported a fraction
+    /// keeps showing one.
+    fn never_backwards(&mut self, step: usize, fraction: Option<f32>) -> Option<f32> {
+        let floor = self
+            .progress_floor
+            .filter(|(s, _)| *s == step)
+            .map(|(_, f)| f);
+        let shown = match (fraction, floor) {
+            (Some(f), Some(m)) => Some(f.max(m)),
+            (None, m) => m,
+            (f, None) => f,
+        };
+        if let Some(f) = shown {
+            self.progress_floor = Some((step, f));
+        }
+        shown
     }
 
     fn printer_doc(&self) -> String {

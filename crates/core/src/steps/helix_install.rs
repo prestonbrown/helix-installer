@@ -11,10 +11,10 @@ use super::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use super::sudo::{self, SudoPlan};
 use super::{StepCtx, StepOutcome};
 use crate::identify::GENERIC_REFUSE_DOC;
-use crate::manifest::{Artifact, Channel, PlatformSel};
+use crate::manifest::{Artifact, Channel, PlatformSel, Step};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
-use crate::transport::{Env, RemoteJob, TransportError};
+use crate::transport::{Env, RemoteJob, SshSession, TransportError};
 use crate::version::ReleaseVersion;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -44,7 +44,11 @@ const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The fact holding the installed HelixScreen's version (`v1.1.0-beta.9`).
 const VERSION_FACT: &str = "helix_version";
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
-/// Fact holding the remote paths this step uploaded, so a reopened run can still remove them.
+/// Hashing a 70 MB release on a K1's MIPS core takes seconds; a slow one is still cheaper than
+/// sending it again.
+const REMOTE_HASH_TIMEOUT: Duration = Duration::from_secs(120);
+/// Fact holding the remote paths this run uploaded, so a later step or a reopened run can still
+/// remove them.
 const UPLOADED_FACT: &str = "helix_install_uploaded";
 const TOO_OLD: &str = "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer.";
 const TITLE: &str = "Installing HelixScreen";
@@ -174,7 +178,13 @@ pub async fn run(
             *ctx.job = Some(started);
             progress(run.title().into(), None)
         }
-        Err(stop) => stop,
+        // Waiting on the user keeps a dry run's files for the launch that follows; any other
+        // stop leaves nothing behind.
+        Err(stop @ StepOutcome::NeedInput(_)) => stop,
+        Err(stop) => {
+            remove_uploaded(ctx).await;
+            stop
+        }
     }
 }
 
@@ -357,19 +367,34 @@ async fn launch(
     if !handles_progress(&String::from_utf8_lossy(&script_text)) {
         return Err(StepOutcome::failed(TOO_OLD));
     }
-    let uploaded: Vec<&str> = tarball_remote
-        .iter()
-        .map(String::as_str)
-        .chain([script_remote.as_str()])
-        .collect();
+    // Files an earlier step of this run (the dry run) uploaded are sent again only if they no
+    // longer read back as the verified ones.
+    let earlier = uploaded_files(ctx);
+    let mut sends: Vec<(PathBuf, String, String)> = Vec::new();
+    if let (Some((local, _)), Some(remote), Some(t)) = (&tarball_local, &tarball_remote, &tarball) {
+        sends.push((local.clone(), remote.clone(), t.sha256.clone()));
+    }
+    sends.push((
+        script_local.clone(),
+        script_remote.clone(),
+        script.sha256.clone(),
+    ));
+    let mut uploaded = earlier.clone();
+    for (_, remote, _) in &sends {
+        if !uploaded.contains(remote) {
+            uploaded.push(remote.clone());
+        }
+    }
     ctx.facts
         .insert(UPLOADED_FACT.into(), serde_json::json!(uploaded));
     let sent = async {
         let ssh = ctx.ssh().await?;
-        if let (Some((local, _)), Some(remote)) = (&tarball_local, &tarball_remote) {
+        for (local, remote, sha256) in &sends {
+            if earlier.contains(remote) && remote_matches(ssh, local, remote, sha256).await {
+                continue;
+            }
             ssh.upload(local, remote).await?;
         }
-        ssh.upload(&script_local, &script_remote).await?;
         ssh.spawn_detached(&command, sudo_password.as_deref()).await
     }
     .await;
@@ -417,8 +442,47 @@ fn handles_progress(script: &str) -> bool {
         .any(|l| l.contains("--progress)") || l.contains("--progress|"))
 }
 
-/// Removes the exact files this step uploaded. A failure is logged, never a step failure.
-async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
+/// The remote paths this run uploaded and has not removed yet.
+fn uploaded_files(ctx: &StepCtx<'_>) -> Vec<String> {
+    ctx.facts
+        .get(UPLOADED_FACT)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// True when `remote` on the printer has `local`'s size and the sha256 it was verified against,
+/// by `sha256sum` or BusyBox's. Anything else, a printer without either tool included, is false.
+async fn remote_matches(
+    ssh: &mut (dyn SshSession + 'static),
+    local: &std::path::Path,
+    remote: &str,
+    sha256: &str,
+) -> bool {
+    let Ok(size) = std::fs::metadata(local).map(|m| m.len()) else {
+        return false;
+    };
+    let p = sh_quote(remote);
+    let cmd = format!("wc -c < {p} && {{ sha256sum {p} 2>/dev/null || busybox sha256sum {p} ; }}");
+    let Ok(out) = ssh.exec(&cmd, None, REMOTE_HASH_TIMEOUT).await else {
+        return false;
+    };
+    let mut lines = out.stdout.lines();
+    let got_size = lines.next().and_then(|l| l.trim().parse::<u64>().ok());
+    let got_sha = lines
+        .next()
+        .and_then(|l| l.split_whitespace().next())
+        .map(str::to_ascii_lowercase);
+    out.exit == 0 && got_size == Some(size) && got_sha.as_deref() == Some(sha256)
+}
+
+/// Removes the exact files this run uploaded. A failure is logged, never a step failure.
+pub(crate) async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
     let Some(files) = ctx.facts.remove(UPLOADED_FACT) else {
         return;
     };
@@ -450,22 +514,14 @@ async fn remove_uploaded(ctx: &mut StepCtx<'_>) {
 }
 
 /// install.sh calls sudo itself, which cannot prompt from a detached job, so a login without
-/// passwordless sudo runs the whole installer through sudo with the held password. Run as
+/// passwordless sudo runs the whole installer through sudo with the held password, or the one
+/// the user typed for sudo after a key login. Run as
 /// root, install.sh still installs for the Klipper service user: it finds that user from the
 /// klipper service, the process table and /home, never from who started it.
 async fn sudo_password(ctx: &mut StepCtx<'_>) -> Result<Option<String>, StepOutcome> {
     match sudo::plan(ctx).await? {
         SudoPlan::AsLoginUser => Ok(None),
         SudoPlan::WithPassword(pw) => Ok(Some(pw)),
-        SudoPlan::Unavailable { user } => Err(StepOutcome::Failed {
-            reason: format!(
-                "this printer's account ({user}) needs passwordless sudo to install HelixScreen"
-            ),
-            help: Some(format!(
-                "Allow {user} to run sudo without a password, then retry: {}",
-                sudo::SUDO_DOC
-            )),
-        }),
     }
 }
 
@@ -529,7 +585,7 @@ async fn stop_wrong_platform(
         Err(stop) => return stop,
     };
     let killed = job::kill(ctx, running, sudo_password.as_deref()).await;
-    job::forget(ctx);
+    job::ended(ctx, running, false).await;
     let reason = format!("the installer found platform {found}, but this printer needs {platform}");
     match killed {
         Ok(()) => {
@@ -540,6 +596,20 @@ async fn stop_wrong_platform(
             "{reason}, and it could not be stopped ({why}); it may still be running on the printer"
         )),
     }
+}
+
+/// A later step of the recipe installs for real.
+fn install_follows(ctx: &StepCtx<'_>) -> bool {
+    ctx.recipe.iter().skip(ctx.step + 1).any(|s| {
+        matches!(
+            s,
+            Step::HelixInstall {
+                dry_run: false,
+                uninstall: false,
+                ..
+            }
+        )
+    })
 }
 
 fn is_progress(line: &str) -> bool {
@@ -580,8 +650,12 @@ async fn follow(
     }
 
     if let Some((ok, reason)) = result {
-        job::forget(ctx);
-        remove_uploaded(ctx).await;
+        job::ended(ctx, running, ok).await;
+        // A dry run that passed leaves its files for the install after it, which sends them
+        // again only if they changed.
+        if !(ok && run.dry_run && install_follows(ctx)) {
+            remove_uploaded(ctx).await;
+        }
         if !ok {
             let reason = reason.unwrap_or_else(|| "no reason given".into());
             return StepOutcome::failed(format!("the HelixScreen installer failed: {reason}"));
@@ -623,14 +697,14 @@ async fn follow(
             }
         }
         Followed::Exited(code) => {
-            job::forget(ctx);
+            job::ended(ctx, running, false).await;
             remove_uploaded(ctx).await;
             StepOutcome::failed(format!(
                 "the installer exited ({code}) without reporting a result{tail}"
             ))
         }
         Followed::Died => {
-            job::forget(ctx);
+            job::ended(ctx, running, false).await;
             remove_uploaded(ctx).await;
             StepOutcome::failed("the installer stopped without reporting a result")
         }

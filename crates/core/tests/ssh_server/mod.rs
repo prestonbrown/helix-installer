@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use russh::keys::ssh_key::private::Ed25519Keypair;
-use russh::keys::PrivateKey;
+use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth, Msg, Response, Session};
 use russh::{Channel, ChannelId, ChannelMsg, MethodKind, MethodSet, Preferred};
 use std::borrow::Cow;
@@ -62,6 +62,12 @@ pub struct ServerCfg {
     pub truncate_uploads: bool,
     /// Negotiate only 2015-era algorithms: dh group14-sha1, aes128-cbc, hmac-sha1.
     pub legacy_only: bool,
+    /// Public keys `user` may log in with; the publickey method is offered when any are set.
+    pub authorized_keys: Vec<PublicKey>,
+    /// Offer the publickey method even with no authorized keys.
+    pub offer_publickey: bool,
+    /// Refused attempts before the server hangs up, as OpenSSH's MaxAuthTries does.
+    pub max_auth_attempts: Option<usize>,
 }
 
 impl Default for ServerCfg {
@@ -79,6 +85,9 @@ impl Default for ServerCfg {
             sudo_requiretty: false,
             truncate_uploads: false,
             legacy_only: false,
+            authorized_keys: Vec::new(),
+            offer_publickey: false,
+            max_auth_attempts: None,
         }
     }
 }
@@ -96,8 +105,10 @@ pub struct Records {
     pub detach_tools: Vec<(String, bool)>,
     /// Commands started as detached jobs, and whether sudo started them.
     pub launched: Vec<(String, bool)>,
-    /// Methods that authenticated a user: "password" or "keyboard-interactive".
+    /// Methods that authenticated a user: "password", "keyboard-interactive" or "publickey".
     pub auth_methods: Vec<String>,
+    /// Every method a client tried, accepted or not, in order.
+    pub auth_attempts: Vec<String>,
 }
 
 pub struct ServerState {
@@ -197,6 +208,9 @@ fn server_config(cfg: &ServerCfg) -> server::Config {
     seed[0] = cfg.host_key_seed;
     let key = PrivateKey::from(Ed25519Keypair::from_seed(&seed));
     let mut methods = MethodSet::empty();
+    if cfg.offer_publickey || !cfg.authorized_keys.is_empty() {
+        methods.push(MethodKind::PublicKey);
+    }
     if cfg.kbd_interactive_only {
         methods.push(MethodKind::KeyboardInteractive);
     } else {
@@ -223,6 +237,9 @@ fn server_config(cfg: &ServerCfg) -> server::Config {
         auth_rejection_time: Duration::from_millis(10),
         auth_rejection_time_initial: Some(Duration::ZERO),
         inactivity_timeout: Some(Duration::from_secs(60)),
+        max_auth_attempts: cfg
+            .max_auth_attempts
+            .unwrap_or(server::Config::default().max_auth_attempts),
         ..Default::default()
     }
 }
@@ -240,10 +257,49 @@ impl server::Handler for Handler {
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         let cfg = lock(&self.state.cfg).clone();
+        lock(&self.state.records)
+            .auth_attempts
+            .push("password".into());
         if !cfg.kbd_interactive_only && user == cfg.user && password == cfg.password {
             lock(&self.state.records)
                 .auth_methods
                 .push("password".into());
+            return Ok(Auth::Accept);
+        }
+        Ok(Auth::reject())
+    }
+
+    async fn auth_publickey_offered(
+        &mut self,
+        user: &str,
+        key: &PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        let cfg = lock(&self.state.cfg).clone();
+        lock(&self.state.records)
+            .auth_attempts
+            .push("publickey".into());
+        if user == cfg.user
+            && cfg
+                .authorized_keys
+                .iter()
+                .any(|k| k.key_data() == key.key_data())
+        {
+            return Ok(Auth::Accept);
+        }
+        Ok(Auth::reject())
+    }
+
+    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
+        let cfg = lock(&self.state.cfg).clone();
+        if user == cfg.user
+            && cfg
+                .authorized_keys
+                .iter()
+                .any(|k| k.key_data() == key.key_data())
+        {
+            lock(&self.state.records)
+                .auth_methods
+                .push("publickey".into());
             return Ok(Auth::Accept);
         }
         Ok(Auth::reject())

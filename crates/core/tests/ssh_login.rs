@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use helix_installer_core::facts::Facts;
-use helix_installer_core::manifest::Login;
-use helix_installer_core::manifest::Manifest;
+use helix_installer_core::manifest::{Login, Manifest, Secret};
 use helix_installer_core::run_state::{recipe_sha256, RunState};
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
-use helix_installer_core::transport::{Env, ExecOutput, Host};
+use helix_installer_core::transport::{Env, ExecOutput, Host, KeyStatus};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -79,10 +78,13 @@ fn runner(f: &Fakes, steps: Value) -> Runner {
 }
 
 fn login(user: &str, password: &str) -> Input {
-    Input::Login(Login {
-        user: user.into(),
-        password: password.into(),
-    })
+    Input::Login(Login::new(user, password))
+}
+
+fn key_login(user: &str, passphrase: Option<&str>) -> Input {
+    let mut l = Login::new(user, "");
+    l.passphrase = passphrase.map(Secret::new);
+    Input::Login(l)
 }
 
 #[tokio::test]
@@ -370,4 +372,105 @@ async fn an_unreadable_uid_is_a_failure_not_non_root() {
     );
     assert!(matches!(r.advance(None).await, Event::Failed { .. }));
     assert!(!r.state().facts.contains_key("needs_sudo"));
+}
+
+// ---------------------------------------------------------------- SSH keys
+
+#[tokio::test]
+async fn the_login_prompt_says_whether_this_computer_has_an_ssh_key() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", "something-else");
+    let mut r = runner(&f, json!([login_step(json!([]), true)]));
+    match r.advance(None).await {
+        Event::NeedInput(Prompt::Login {
+            has_ssh_key,
+            key_locked,
+            ..
+        }) => assert!(!has_ssh_key && !key_locked),
+        e => panic!("expected a login prompt, got {e:?}"),
+    }
+
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", "something-else");
+    f.ssh.set_key_status(KeyStatus {
+        available: true,
+        locked: true,
+    });
+    let mut r = runner(&f, json!([login_step(json!([]), true)]));
+    match r.advance(None).await {
+        Event::NeedInput(Prompt::Login {
+            has_ssh_key,
+            key_locked,
+            ..
+        }) => assert!(has_ssh_key && key_locked),
+        e => panic!("expected a login prompt, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_login_with_only_a_user_name_signs_in_with_the_computers_key() {
+    let f = Fakes::new();
+    f.ssh.accept_key(ADDR, "pi", None);
+    f.ssh.on_command("id -u", out("1000\n"));
+    let mut r = runner(&f, json!([login_step(json!([]), true)]));
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    assert!(matches!(
+        r.advance(Some(key_login("pi", None))).await,
+        Event::Done
+    ));
+    assert_eq!(r.state().facts["ssh_user"], json!("pi"));
+    assert_eq!(r.state().facts["needs_sudo"], json!(true));
+}
+
+#[tokio::test]
+async fn a_passphrase_protected_key_signs_in_once_the_passphrase_is_given() {
+    let f = Fakes::new();
+    f.ssh.accept_key(ADDR, "pi", Some("open sesame"));
+    let mut r = runner(&f, json!([login_step(json!([]), true)]));
+    let _ = r.advance(None).await;
+    assert!(matches!(
+        r.advance(Some(key_login("pi", None))).await,
+        Event::NeedInput(Prompt::Login { .. })
+    ));
+    assert!(matches!(
+        r.advance(Some(key_login("pi", Some("open sesame")))).await,
+        Event::Done
+    ));
+    assert_eq!(r.secrets(), vec!["open sesame".to_string()]);
+    let saved = serde_json::to_string(r.state()).unwrap();
+    assert!(!saved.contains("open sesame"), "{saved}");
+}
+
+#[test]
+fn a_login_never_prints_or_saves_its_passphrase_or_sudo_password() {
+    let mut l = Login::new("pi", "pw-visible-nowhere");
+    l.passphrase = Some(Secret::new("phrase-visible-nowhere"));
+    l.sudo_password = Some(Secret::new("sudo-visible-nowhere"));
+    let shown = format!("{l:?} {:?}", Input::Login(l.clone()));
+    assert!(!shown.contains("visible-nowhere"), "{shown}");
+    let saved = serde_json::to_string(&l).unwrap();
+    assert!(!saved.contains("phrase-visible-nowhere"), "{saved}");
+    assert!(!saved.contains("sudo-visible-nowhere"), "{saved}");
+}
+
+#[test]
+fn a_typed_login_reads_its_passphrase_from_the_ui() {
+    let input: Input = serde_json::from_value(json!({
+        "input": "login",
+        "value": { "user": "pi", "password": "", "passphrase": "pp" }
+    }))
+    .unwrap();
+    match input {
+        Input::Login(l) => {
+            assert_eq!(l.user, "pi");
+            assert_eq!(l.passphrase.as_ref().map(Secret::expose), Some("pp"));
+        }
+        i => panic!("{i:?}"),
+    }
+    let sudo: Input =
+        serde_json::from_value(json!({ "input": "sudo_password", "value": "sp" })).unwrap();
+    assert!(matches!(sudo, Input::SudoPassword(s) if s.expose() == "sp"));
 }

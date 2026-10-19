@@ -47,6 +47,16 @@ const shots = [
   ["user-action", "user_action", async (p) => (await install(p), p.getByRole("button", { name: "I've done this" }).waitFor())],
   ["ask", "ask", async (p) => (await install(p), p.waitForSelector(".answer"))],
   ["login", "login", async (p) => (await install(p), p.getByText("Sign in to your printer").waitFor())],
+  [
+    "login-key",
+    "login",
+    async (p) => {
+      await install(p);
+      await p.getByText("Use my SSH key instead of a password").click();
+      await p.getByText("Key passphrase").waitFor();
+    },
+  ],
+  ["sudo-password", "sudo", async (p) => (await install(p), p.getByText("Your printer needs your password").waitFor())],
   ["choose-drive", "drive", async (p) => (await install(p), p.waitForSelector(".drive"))],
   ["choose-drive-empty", "drive_empty", async (p) => (await install(p), p.getByText("Check again").waitFor())],
   ["progress", "progress", async (p) => (await install(p), p.waitForSelector(".bar"))],

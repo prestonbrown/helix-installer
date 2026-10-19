@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use helix_installer_core::bundle::support_bundle;
 use helix_installer_core::facts::Facts;
-use helix_installer_core::manifest::{Channel, Login, Manifest, Step};
+use helix_installer_core::manifest::{Channel, Login, Manifest, Secret, Step};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime};
 
 const ADDR: &str = "192.168.1.50";
 const PASSWORD: &str = "s3cret-pw";
+const SUDO_PW: &str = "typed-sudo-pw";
 const TAG: &str = "v1.0.5";
 const TARBALL: &[u8] = b"helixscreen tarball bytes";
 const INSTALL_SH: &[u8] =
@@ -268,10 +269,7 @@ struct TestLogin(String, String);
 #[async_trait]
 impl StepHandler for TestLogin {
     async fn run(&self, ctx: &mut StepCtx<'_>, _step: &Step, _input: Option<Input>) -> StepOutcome {
-        ctx.set_login(Login {
-            user: self.0.clone(),
-            password: self.1.clone(),
-        });
+        ctx.set_login(Login::new(self.0.clone(), self.1.clone()));
         StepOutcome::Done
     }
 }
@@ -718,8 +716,11 @@ async fn a_non_root_login_without_passwordless_sudo_runs_the_installer_through_s
         .into_iter()
         .filter(|(c, _)| !(c.starts_with("sh ") && c.contains("install.sh")))
         .collect();
+    // Only the removal of the root-owned job log goes through sudo as well.
     assert!(
-        others.iter().all(|(_, stdin)| stdin.is_none()),
+        others
+            .iter()
+            .all(|(c, stdin)| stdin.is_none() || c == "sudo -S -p '' rm -f '/tmp/fake-job-1.log'"),
         "{others:?}"
     );
     let saved = serde_json::to_string(r.state()).unwrap();
@@ -753,27 +754,103 @@ async fn sudo_refusing_the_login_password_fails_without_naming_it() {
 }
 
 #[tokio::test]
-async fn a_non_root_login_with_no_password_and_no_passwordless_sudo_stops_before_uploading() {
+async fn a_key_login_without_passwordless_sudo_asks_for_the_sudo_password_before_uploading() {
     let f = Fakes::standard(&["pi"]);
     f.ssh.accept(ADDR, "mks", "");
     sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(SUDO_PW);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
     let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
 
     let (ev, _) = settle(&mut r).await;
     match &ev {
-        Event::Failed { reason, help, .. } => {
-            assert!(reason.contains("passwordless sudo"), "{reason}");
-            assert!(
-                help.as_deref()
-                    .unwrap_or("")
-                    .contains("https://helixscreen.org/docs/install"),
-                "{help:?}"
-            );
+        Event::NeedInput(Prompt::SudoPassword { user, refused }) => {
+            assert_eq!(user, "mks");
+            assert!(!refused);
         }
-        e => panic!("expected Failed, got {e:?}"),
+        e => panic!("expected a sudo password prompt, got {e:?}"),
     }
     assert!(f.ssh.uploads().is_empty());
     assert!(spawned(&f).is_empty());
+
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new(SUDO_PW))))
+        .await;
+    let ev = match ev {
+        Event::Progress { .. } => settle(&mut r).await.0,
+        e => e,
+    };
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let s = spawned(&f);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].1.as_deref(), Some(SUDO_PW.as_bytes()));
+    assert!(f.ssh.commands().iter().all(|c| !c.contains(SUDO_PW)));
+    let saved = serde_json::to_string(r.state()).unwrap();
+    assert!(!saved.contains(SUDO_PW), "{saved}");
+    let logged = format!("{:?}", r.state().log);
+    assert!(!logged.contains(SUDO_PW), "{logged}");
+}
+
+#[tokio::test]
+async fn a_typed_sudo_password_sudo_refuses_is_asked_for_again_before_uploading() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(SUDO_PW);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(
+        matches!(ev, Event::NeedInput(Prompt::SudoPassword { .. })),
+        "{ev:?}"
+    );
+
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new("not-it"))))
+        .await;
+    match &ev {
+        Event::NeedInput(Prompt::SudoPassword { refused, .. }) => assert!(*refused),
+        e => panic!("expected the prompt again, got {e:?}"),
+    }
+    assert!(
+        f.ssh.uploads().is_empty(),
+        "nothing uploads on a wrong password"
+    );
+
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new(SUDO_PW))))
+        .await;
+    let ev = match ev {
+        Event::Progress { .. } => settle(&mut r).await.0,
+        e => e,
+    };
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+}
+
+#[tokio::test]
+async fn the_typed_sudo_password_is_held_as_a_secret_for_the_support_bundle() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(SUDO_PW);
+    let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
+    let _ = settle(&mut r).await;
+    let _ = r
+        .advance(Some(Input::SudoPassword(Secret::new(SUDO_PW))))
+        .await;
+    assert!(
+        r.secrets().contains(&SUDO_PW.to_string()),
+        "{:?}",
+        r.secrets().len()
+    );
+    let shown = format!("{:?}", Input::SudoPassword(Secret::new(SUDO_PW)));
+    assert!(!shown.contains(SUDO_PW), "{shown}");
 }
 
 #[tokio::test]
@@ -869,10 +946,7 @@ async fn a_reopened_run_asks_for_the_login_then_follows_its_recorded_job() {
         (&pl(&["step", "1", "1", "start", "Extracting", ""]), None),
         (&pl(&["result", "ok"]), Some(0)),
     ]);
-    let login = || Login {
-        user: "root".into(),
-        password: PASSWORD.into(),
-    };
+    let login = || Login::new("root", PASSWORD);
     let job = {
         let mut s = Ssh::connect(&f.ssh, &Host::new(ADDR), &login())
             .await
@@ -1001,16 +1075,32 @@ async fn ssh_run_whose_sudo_refuses_the_password_fails_naming_sudo() {
 }
 
 #[tokio::test]
-async fn ssh_run_for_a_login_with_no_password_runs_as_the_login_user() {
+async fn ssh_run_for_a_key_login_without_passwordless_sudo_asks_for_the_sudo_password() {
     let f = Fakes::standard(&[]);
     f.ssh.accept(ADDR, "mks", "");
     sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(SUDO_PW);
     f.ssh.script_job(vec![("", Some(0))]);
     let mut r = f.runner_with_password("mks", "", ssh_run("ls", 60), json!({}));
 
     let (ev, _) = settle(&mut r).await;
+    assert!(
+        matches!(ev, Event::NeedInput(Prompt::SudoPassword { .. })),
+        "{ev:?}"
+    );
+    assert!(job_calls(&f, "ls").is_empty());
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new(SUDO_PW))))
+        .await;
+    let ev = match ev {
+        Event::Progress { .. } => settle(&mut r).await.0,
+        e => e,
+    };
     assert!(matches!(ev, Event::Done), "{ev:?}");
-    assert_eq!(job_calls(&f, "ls"), vec![("ls".to_string(), None)]);
+    assert_eq!(
+        job_calls(&f, "ls"),
+        vec![("ls".to_string(), Some(SUDO_PW.as_bytes().to_vec()))]
+    );
 }
 
 #[tokio::test]
@@ -1223,11 +1313,20 @@ async fn the_override_wins_over_the_recipes_channel() {
 const OLD_INSTALL_SH: &[u8] =
     b"#!/bin/sh\ncase \"$1\" in\n  --update) U=1 ;;\n  --help) usage ;;\nesac\n";
 
+/// The removals of uploaded files; a job log's removal is `log_removals`.
 fn rm_commands(f: &Fakes) -> Vec<String> {
     f.ssh
         .commands()
         .into_iter()
-        .filter(|c| c.starts_with("rm "))
+        .filter(|c| c.starts_with("rm ") && !c.contains("fake-job-"))
+        .collect()
+}
+
+fn log_removals(f: &Fakes) -> Vec<String> {
+    f.ssh
+        .commands()
+        .into_iter()
+        .filter(|c| c.contains("rm -f ") && c.contains("fake-job-"))
         .collect()
 }
 
@@ -1305,4 +1404,293 @@ async fn a_cleanup_that_fails_does_not_fail_the_step() {
     let r = f.runner("root", install_step(json!("pi")), json!({}));
     install_with(&f, r).await;
     assert_eq!(rm_commands(&f).len(), 1);
+}
+
+// ---------------------------------------------------------------- job logs on the printer
+
+#[tokio::test]
+async fn a_finished_install_removes_its_job_log() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f.runner("root", install_step(json!("pi")), json!({}));
+    install_with(&f, r).await;
+    assert_eq!(
+        log_removals(&f),
+        vec!["rm -f '/tmp/fake-job-1.log'".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_failed_install_keeps_its_job_log_until_the_run_ends() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (pl(&["result", "fail", "no space"]).as_str(), None),
+        ("", Some(1)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(failure(&ev).contains("installer failed"), "{ev:?}");
+    assert!(log_removals(&f).is_empty(), "{:?}", log_removals(&f));
+    assert!(
+        r.job_logs().iter().any(|l| l.contains("no space")),
+        "the support bundle still has its lines"
+    );
+
+    // The retry succeeds, which ends the run: both logs go.
+    f.ssh.script_job(vec![
+        (pl(&["platform", "pi"]).as_str(), None),
+        (pl(&["result", "ok"]).as_str(), Some(0)),
+    ]);
+    let ev = r.advance(Some(Input::Choice("retry".into()))).await;
+    let ev = match ev {
+        Event::Progress { .. } => settle(&mut r).await.0,
+        e => e,
+    };
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let mut removed = log_removals(&f);
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "rm -f '/tmp/fake-job-1.log'".to_string(),
+            "rm -f '/tmp/fake-job-2.log'".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_job_log_written_through_sudo_is_removed_through_sudo() {
+    let f = Fakes::standard(&["pi"]);
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(PASSWORD);
+    let r = f.runner("mks", install_step(json!("pi")), json!({}));
+    install_with(&f, r).await;
+    let removal = f
+        .ssh
+        .calls()
+        .into_iter()
+        .find(|(c, _)| c.contains("fake-job-1.log"))
+        .expect("the log is removed");
+    assert_eq!(removal.0, "sudo -S -p '' rm -f '/tmp/fake-job-1.log'");
+    assert_eq!(
+        removal.1.as_deref(),
+        Some(format!("{PASSWORD}\n").as_bytes())
+    );
+}
+
+// ---------------------------------------------------------------- progress
+
+#[tokio::test]
+async fn progress_never_moves_backwards_within_a_step() {
+    // install.sh reuses a step number after a skip, so its own fractions read 2/6, 3/6, 2/6.
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (
+            &pl(&["step", "2", "6", "ok", "Installing libraries", ""]),
+            None,
+        ),
+        (&pl(&["step", "3", "6", "start", "Unpacking", ""]), None),
+        (&pl(&["step", "2", "6", "start", "Unpacked", ""]), None),
+        (
+            &pl(&["step", "4", "6", "ok", "Stopping the stock screen", ""]),
+            None,
+        ),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+    let mut seen = Vec::new();
+    for _ in 0..200 {
+        match r.advance(None).await {
+            Event::Progress { fraction, .. } => seen.push(fraction),
+            Event::Done => break,
+            e => panic!("unexpected {e:?}"),
+        }
+    }
+    let fractions: Vec<f32> = seen.iter().flatten().copied().collect();
+    assert!(fractions.len() >= 3, "{seen:?}");
+    assert!(
+        fractions.windows(2).all(|w| w[1] >= w[0]),
+        "progress went backwards: {seen:?}"
+    );
+    assert!(fractions.contains(&(4.0 / 6.0)), "{seen:?}");
+    // Once a fraction is known, the bar never goes back to "unknown" in the same step.
+    let first_known = seen.iter().position(Option::is_some).unwrap();
+    assert!(seen[first_known..].iter().all(Option::is_some), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_new_step_starts_its_progress_afresh() {
+    let f = Fakes::standard(&["k1"]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "k1"]), None),
+        (&pl(&["step", "5", "6", "ok", "Late step", ""]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "k1"]), None),
+        (&pl(&["step", "1", "6", "ok", "Early step", ""]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([
+        { "type": "helix_install", "platform": "k1", "dry_run": true },
+        { "type": "helix_install", "platform": "k1" }
+    ]);
+    let mut r = f.runner("root", steps, json!({}));
+    let mut by_step: Vec<(usize, f32)> = Vec::new();
+    for _ in 0..200 {
+        match r.advance(None).await {
+            Event::Progress {
+                step,
+                fraction: Some(x),
+                ..
+            } => by_step.push((step, x)),
+            Event::Progress { .. } => {}
+            Event::Done => break,
+            e => panic!("unexpected {e:?}"),
+        }
+    }
+    let second: Vec<f32> = by_step
+        .iter()
+        .filter(|(s, _)| *s == 2)
+        .map(|(_, x)| *x)
+        .collect();
+    assert_eq!(second.first(), Some(&(1.0 / 6.0)), "{by_step:?}");
+}
+
+// ---------------------------------------------------------------- reusing the dry run's upload
+
+/// What `sha256sum` (or busybox's) and `wc -c` print for the files the fakes serve, by path.
+fn remote_checks(tarball: &'static [u8], script: &'static [u8]) -> impl Fn(&str) -> ExecOutput {
+    move |cmd: &str| {
+        let bytes = if cmd.contains("helixscreen-") {
+            tarball
+        } else if cmd.contains("install.sh") {
+            script
+        } else {
+            return ExecOutput {
+                stdout: String::new(),
+                stderr: format!("{cmd}: not found"),
+                exit: 127,
+            };
+        };
+        if cmd.contains("sha256sum") {
+            let path = cmd.split('\'').nth(1).unwrap_or_default();
+            ExecOutput {
+                stdout: format!("{}\n{}  {path}\n", bytes.len(), sha(bytes)),
+                stderr: String::new(),
+                exit: 0,
+            }
+        } else {
+            ExecOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit: 0,
+            }
+        }
+    }
+}
+
+fn dry_run_then_install(f: &Fakes) -> Runner {
+    for _ in 0..2 {
+        f.ssh.script_job(vec![
+            (&pl(&["platform", "pi"]), None),
+            (&pl(&["result", "ok"]), Some(0)),
+        ]);
+    }
+    let steps = json!([
+        { "type": "helix_install", "platform": "pi", "dry_run": true },
+        { "type": "helix_install", "platform": "pi" }
+    ]);
+    f.runner("root", steps, json!({}))
+}
+
+#[tokio::test]
+async fn the_install_after_a_dry_run_reuses_its_upload_when_the_files_still_match() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.set_fallback(remote_checks(TARBALL, INSTALL_SH));
+    let mut r = dry_run_then_install(&f);
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+
+    let uploads: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        uploads.len(),
+        2,
+        "uploaded once, for the dry run: {uploads:?}"
+    );
+    let s = spawned(&f);
+    assert_eq!(s.len(), 2);
+    assert!(
+        s[1].0.contains("'/tmp/helixscreen-pi-v1.0.5.tar.gz'"),
+        "{s:?}"
+    );
+    // The dry run leaves its files for the install, which removes them once.
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+    let cmds = f.ssh.commands();
+    let install_spawn = cmds.iter().rposition(|c| c.starts_with("sh ")).unwrap();
+    let cleanup = cmds.iter().position(|c| c == CLEANUP).unwrap();
+    assert!(cleanup > install_spawn, "{cmds:?}");
+}
+
+#[tokio::test]
+async fn a_changed_remote_file_is_uploaded_again() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh
+        .set_fallback(remote_checks(b"something else", INSTALL_SH));
+    let mut r = dry_run_then_install(&f);
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let tarballs = f
+        .ssh
+        .uploads()
+        .into_iter()
+        .filter(|(p, _)| p.contains("helixscreen-pi"))
+        .count();
+    assert_eq!(tarballs, 2, "{:?}", f.ssh.uploads());
+}
+
+#[tokio::test]
+async fn a_printer_without_sha256sum_gets_the_upload_again() {
+    let f = Fakes::standard(&["pi"]);
+    let mut r = dry_run_then_install(&f);
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(f.ssh.uploads().len(), 4);
+}
+
+#[tokio::test]
+async fn a_dry_run_with_no_install_after_it_still_removes_its_files() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.set_fallback(remote_checks(TARBALL, INSTALL_SH));
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "dry_run": true }]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn an_install_that_stops_before_uploading_removes_what_the_dry_run_left() {
+    // The release has no pi32 build, so the install step stops before its own upload.
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.set_fallback(remote_checks(TARBALL, INSTALL_SH));
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([
+        { "type": "helix_install", "platform": "pi", "dry_run": true },
+        { "type": "helix_install", "platform": "pi32" }
+    ]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(
+        failure(&ev).contains("no build for platform pi32"),
+        "{ev:?}"
+    );
+    assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
 }

@@ -8,7 +8,7 @@ use helix_installer_core::identify::{
     identify, identify_as, restore_for, Identified, StartState, GENERIC_REFUSE_DOC,
 };
 use helix_installer_core::lint::lint_with;
-use helix_installer_core::manifest::{Channel, Login, Manifest};
+use helix_installer_core::manifest::{Channel, Login, Manifest, Step, WaitTarget};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
@@ -90,6 +90,7 @@ impl Rig {
         let ssh = FakeSsh::new();
         ssh.set_fallback(|cmd| match cmd {
             "id -u" => out("0\n", 0),
+            "pidof helix-screen" => out("1234\n", 0),
             _ => out("", 127),
         });
         let rig = Rig {
@@ -212,6 +213,7 @@ impl Trace {
                 Prompt::Login { user_hint, .. } => format!("login {user_hint:?}"),
                 Prompt::ChooseDrive { .. } => "choose drive".into(),
                 Prompt::Ambiguous { .. } => "ambiguous".into(),
+                Prompt::SudoPassword { user, .. } => format!("sudo password {user}"),
             })
             .collect()
     }
@@ -248,10 +250,7 @@ fn next_only(p: &Prompt, _: usize) -> Input {
 }
 
 fn login(user: &str, password: &str) -> Input {
-    Input::Login(Login {
-        user: user.into(),
-        password: password.into(),
-    })
+    Input::Login(Login::new(user, password))
 }
 
 // ---------------------------------------------------------------- the staging manifest
@@ -327,6 +326,7 @@ async fn generic_install_asks_for_the_login_and_installs_for_the_cpu() {
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "pi", "raspberry");
     rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
         "id -u" => out("1000\n", 0),
         "sudo -n true" => out("", 1),
         _ => out("", 127),
@@ -361,6 +361,7 @@ async fn generic_update_on_the_voron_passes_update_and_stays_on_stable() {
     rig.publish(Channel::Beta, "1.1.0-beta.10");
     rig.ssh.accept(ADDR, "biqu", "biqu");
     rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
         "id -u" => out("1000\n", 0),
         "sudo -n true" => out("", 0),
         c if c == board_probe() => out("yes\n", 0),
@@ -469,6 +470,7 @@ async fn qidi_install_warns_about_studio_then_falls_back_to_mks_with_sudo() {
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "mks", "makerbase");
     rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
         "id -u" => out("1000\n", 0),
         "sudo -n true" => out("", 1),
         _ => out("", 127),
@@ -499,6 +501,7 @@ async fn qidi_install_tries_qidi_first() {
     rig.ssh.accept(ADDR, "qidi", "qiditech");
     rig.ssh.accept(ADDR, "mks", "makerbase");
     rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
         "id -u" => out("1000\n", 0),
         "sudo -n true" => out("", 0),
         _ => out("", 127),
@@ -632,6 +635,7 @@ async fn k2_with_a_per_unit_password_asks_for_the_one_on_the_root_screen() {
         Prompt::Login {
             user_hint,
             password_hint,
+            ..
         } => {
             assert_eq!(user_hint.as_deref(), Some("root"));
             hint = password_hint.clone();
@@ -1348,6 +1352,11 @@ async fn an_ad5x_with_helixscreen_updates_through_zmods_update_manager() {
         "klipper_objects": zmod_ad5x_objects()["objects"].clone(),
     }))
     .unwrap();
+    // ZMOD's Moonraker reports HelixScreen's service once the update has restarted it.
+    rig.moonraker.set_system_info(
+        ADDR,
+        json!({ "system_info": { "service_state": { "helixscreen": { "active_state": "active" } } } }),
+    );
     let m = staging();
     let picked = identify(&m, &f);
     let mut r = rig.runner(&m, &picked, f);
@@ -1396,13 +1405,103 @@ fn forgex_objects() -> serde_json::Value {
 
 const INIT_SCRIPTS_PROBE: &str = "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen /opt/config/mod_data/helixscreen_payload_root; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no";
 
-/// A Forge-X AD5M on root/root after the flash, without HelixScreen.
+/// A Forge-X AD5M on root/root after the flash, without HelixScreen. Its installer succeeds,
+/// then the restart that starts HelixScreen is launched.
 fn forgex_rig() -> Rig {
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "root", "root");
     rig.ssh.on_command(INIT_SCRIPTS_PROBE, out("no\n", 0));
     rig.installer_succeeds("ad5m");
+    rig.ssh.script_job(vec![("", Some(0))]);
+    moonraker_answers_on(&rig, forgex_objects(), "armv7l");
     rig
+}
+
+/// The detached commands that were not `install.sh`.
+fn other_jobs(rig: &Rig) -> Vec<String> {
+    let installs: Vec<String> = rig.installer_runs().into_iter().map(|(c, _)| c).collect();
+    rig.ssh
+        .commands()
+        .into_iter()
+        .filter(|c| c.contains("reboot") && !installs.contains(c))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_forgex_install_restarts_the_printer_and_ends_only_once_helixscreen_runs() {
+    for (recipe_id, installed) in [
+        ("ad5m_forgex_install", "no\n"),
+        ("ad5m_forgex_update", "yes\n"),
+    ] {
+        let rig = forgex_rig();
+        rig.ssh.on_command(INIT_SCRIPTS_PROBE, out(installed, 0));
+        rig.ssh
+            .on_command(INSTALLED_VERSION_PROBE, out("v1.0.4\n", 0));
+        let m = staging();
+        let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
+        let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+        let trace = drive(&mut r, next_only).await;
+        assert!(trace.done(), "{recipe_id}: {:?}", trace.end);
+        assert_eq!(r.state().recipe_id, recipe_id);
+
+        let cmds = rig.ssh.commands();
+        let install = cmds
+            .iter()
+            .rposition(|c| {
+                c.starts_with("sh ") && c.contains("install.sh") && !c.contains("--dry-run")
+            })
+            .unwrap();
+        let reboot = cmds
+            .iter()
+            .position(|c| c.contains("reboot"))
+            .expect("a restart");
+        let seen = cmds
+            .iter()
+            .rposition(|c| c == "pidof helix-screen")
+            .expect("a check");
+        assert!(install < reboot && reboot < seen, "{recipe_id}: {cmds:?}");
+        assert_eq!(other_jobs(&rig).len(), 1, "{:?}", other_jobs(&rig));
+    }
+}
+
+#[tokio::test]
+async fn a_forgex_install_whose_helixscreen_never_starts_is_not_done() {
+    let rig = forgex_rig();
+    rig.ssh.on_command("pidof helix-screen", out("", 1));
+    let m = staging();
+    let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
+    let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+    let trace = drive(&mut r, next_only).await;
+    match &trace.end {
+        Event::Failed { reason, .. } => assert!(reason.contains("HelixScreen"), "{reason}"),
+        e => panic!("expected the run to fail, got {e:?}"),
+    }
+}
+
+#[test]
+fn every_install_and_update_recipe_ends_by_seeing_helixscreen_run() {
+    let m = staging();
+    let restores: Vec<&str> = m
+        .printers
+        .iter()
+        .filter_map(|p| p.restore.as_ref())
+        .flat_map(|r| r.recipes())
+        .collect();
+    for (id, steps) in &m.recipes {
+        if restores.contains(&id.as_str()) {
+            continue;
+        }
+        assert!(
+            matches!(
+                steps.last(),
+                Some(Step::WaitFor {
+                    target: WaitTarget::HelixService,
+                    ..
+                })
+            ),
+            "{id} does not end by waiting for HelixScreen"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1792,6 +1891,7 @@ async fn a_cb1_voron_whose_board_is_not_whitelisted_is_refused_before_any_change
     let rig = Rig::new();
     rig.ssh.accept(ADDR, "biqu", "biqu");
     rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
         "id -u" => out("1000\n", 0),
         c if c == board_probe() => out("no\n", 0),
         _ => out("", 127),

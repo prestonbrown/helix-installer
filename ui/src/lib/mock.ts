@@ -137,8 +137,19 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     run: run({ printer_name: "FlashForge Adventurer 5X", step: 1, total_steps: 8, step_kind: "ask" }),
   },
   login: {
-    event: { event: "need_input", prompt: "login", user_hint: "root", password_hint: null },
+    event: {
+      event: "need_input",
+      prompt: "login",
+      user_hint: "root",
+      password_hint: null,
+      has_ssh_key: true,
+      key_locked: true,
+    },
     run: run({ step: 3, step_kind: "ssh_login" }),
+  },
+  sudo: {
+    event: { event: "need_input", prompt: "sudo_password", user: "pi", refused: false },
+    run: run({ step: 4, step_kind: "helix_install" }),
   },
   drive: {
     event: {

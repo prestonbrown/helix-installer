@@ -107,10 +107,7 @@ struct TestLogin;
 #[async_trait]
 impl StepHandler for TestLogin {
     async fn run(&self, ctx: &mut StepCtx<'_>, _step: &Step, _input: Option<Input>) -> StepOutcome {
-        ctx.set_login(Login {
-            user: "root".into(),
-            password: PASSWORD.into(),
-        });
+        ctx.set_login(Login::new("root", PASSWORD));
         ctx.facts.insert("ssh_user".into(), json!("root"));
         StepOutcome::Done
     }
@@ -1481,10 +1478,7 @@ async fn wait_for_helix_service_asks_the_user_when_nothing_can_tell() {
 
 #[test]
 fn a_login_never_prints_its_password() {
-    let l = Login {
-        user: "root".into(),
-        password: PASSWORD.into(),
-    };
+    let l = Login::new("root", PASSWORD);
     let shown = format!("{l:?} {:?}", Input::Login(l.clone()));
     assert!(shown.contains("root"));
     assert!(!shown.contains(PASSWORD), "{shown}");

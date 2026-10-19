@@ -8,6 +8,7 @@
   import PrinterTile from "../lib/PrinterTile.svelte";
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
+  import { signInInput, sudoInput } from "../lib/login";
   import { formatBytes, isUrl, keepPowerOn, stepLabel } from "../lib/text";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
@@ -22,6 +23,9 @@
   let user = $state("");
   let password = $state("");
   let showPassword = $state(false);
+  let useKey = $state(false);
+  let passphrase = $state("");
+  let sudoPassword = $state("");
   let loginRefused = $state(false);
   let drive = $state<string | null>(null);
 
@@ -53,9 +57,17 @@
 
   function signIn(e: SubmitEvent) {
     e.preventDefault();
-    const value = { user: user.trim(), password };
+    const input = signInInput({ user, password, useKey, passphrase });
     password = "";
-    send({ input: "login", value });
+    passphrase = "";
+    send(input);
+  }
+
+  function giveSudoPassword(e: SubmitEvent) {
+    e.preventDefault();
+    const input = sudoInput(sudoPassword);
+    sudoPassword = "";
+    send(input);
   }
 
   function paragraphs(text: string): string[] {
@@ -172,34 +184,90 @@
     <section class="card body narrow">
       <h1>Sign in to your printer</h1>
       <p>
-        The installer needs your printer's user name and password to install HelixScreen. It uses them only
-        for this install and never saves them.
+        The installer needs your printer's user name and password, or your SSH key, to install HelixScreen. It
+        uses them only for this install and never saves them.
       </p>
-      {#if ev.password_hint}
+      {#if ev.password_hint && !useKey}
         <p>The password is {ev.password_hint}.</p>
       {/if}
       {#if loginRefused}
-        <div class="notice danger" role="alert">The printer didn't accept that password. Check it and try again.</div>
+        <div class="notice danger" role="alert">
+          {useKey
+            ? "The printer didn't accept your SSH key for that user name. Check the name, or sign in with a password."
+            : "The printer didn't accept that password. Check it and try again."}
+        </div>
       {/if}
       <form onsubmit={signIn}>
         <label class="field">
           <span>User name</span>
           <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={user} />
         </label>
+        {#if ev.has_ssh_key}
+          <label class="check">
+            <input type="checkbox" bind:checked={useKey} /> Use my SSH key instead of a password
+          </label>
+        {/if}
+        {#if useKey && ev.has_ssh_key}
+          {#if ev.key_locked}
+            <label class="field">
+              <span>Key passphrase</span>
+              <input
+                type={showPassword ? "text" : "password"}
+                autocomplete="off"
+                spellcheck="false"
+                bind:value={passphrase}
+              />
+            </label>
+            <p class="muted">The passphrase you chose when you made the key. Leave it empty if your key has none.</p>
+          {/if}
+        {:else}
+          <label class="field">
+            <span>Password</span>
+            <input
+              type={showPassword ? "text" : "password"}
+              autocomplete="off"
+              spellcheck="false"
+              bind:value={password}
+            />
+          </label>
+        {/if}
+        {#if !useKey || ev.key_locked}
+          <label class="check">
+            <input type="checkbox" bind:checked={showPassword} />
+            {useKey ? "Show the passphrase" : "Show the password"}
+          </label>
+        {/if}
+        <div class="actions">
+          <button class="primary" type="submit" disabled={busy || !user.trim()}>Sign in</button>
+          {@render stopLink()}
+        </div>
+      </form>
+    </section>
+  {:else if ev.event === "need_input" && ev.prompt === "sudo_password"}
+    <section class="card body narrow">
+      <h1>Your printer needs your password</h1>
+      <p>
+        You signed in with your SSH key. To install HelixScreen the printer also needs the password of the {ev.user}
+        account. The installer uses it only for this install and never saves it.
+      </p>
+      {#if ev.refused}
+        <div class="notice danger" role="alert">The printer didn't accept that password. Check it and try again.</div>
+      {/if}
+      <form onsubmit={giveSudoPassword}>
         <label class="field">
-          <span>Password</span>
+          <span>Password for {ev.user}</span>
           <input
             type={showPassword ? "text" : "password"}
             autocomplete="off"
             spellcheck="false"
-            bind:value={password}
+            bind:value={sudoPassword}
           />
         </label>
         <label class="check">
           <input type="checkbox" bind:checked={showPassword} /> Show the password
         </label>
         <div class="actions">
-          <button class="primary" type="submit" disabled={busy || !user.trim()}>Sign in</button>
+          <button class="primary" type="submit" disabled={busy || !sudoPassword}>Continue</button>
           {@render stopLink()}
         </div>
       </form>

@@ -11,10 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 fn login(user: &str, pw: &str) -> Login {
-    Login {
-        user: user.into(),
-        password: pw.into(),
-    }
+    Login::new(user, pw)
 }
 
 fn host() -> Host {

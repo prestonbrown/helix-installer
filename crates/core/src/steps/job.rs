@@ -3,6 +3,7 @@
 //! Following a detached job on the printer: its log read line by line across step runs, and
 //! the moment it exits, dies or goes silent.
 
+use super::sudo::{self, SudoPlan};
 use super::{StepCtx, StepOutcome};
 use crate::transport::ssh_russh::sh_quote;
 use crate::transport::{RemoteJob, TransportError};
@@ -10,6 +11,10 @@ use std::time::{Duration, SystemTime};
 
 const POLL: Duration = Duration::from_secs(2);
 const KILL_TIMEOUT: Duration = Duration::from_secs(15);
+const REMOVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Fact listing the logs of failed jobs, left on the printer until the run ends so a reopened
+/// app can still read them into a support bundle.
+const KEPT_LOGS_FACT: &str = "job_logs_kept";
 /// Output lines quoted in a failure.
 const TAIL_LINES: usize = 10;
 
@@ -188,6 +193,79 @@ pub(crate) async fn kill(
 pub(crate) fn forget(ctx: &mut StepCtx<'_>) {
     *ctx.job = None;
     ctx.session.retire_job_cursor();
+}
+
+/// The job has ended and its result is read: it is forgotten, and its log removed from the
+/// printer when it `succeeded`. A failed job's log stays until the run ends (`remove_kept_logs`).
+pub(crate) async fn ended(ctx: &mut StepCtx<'_>, job: &RemoteJob, succeeded: bool) {
+    forget(ctx);
+    if succeeded {
+        remove_logs(ctx, std::slice::from_ref(&job.log_path)).await;
+        return;
+    }
+    let mut kept = kept_logs(ctx);
+    if !kept.contains(&job.log_path) {
+        kept.push(job.log_path.clone());
+    }
+    ctx.facts
+        .insert(KEPT_LOGS_FACT.into(), serde_json::json!(kept));
+}
+
+fn kept_logs(ctx: &StepCtx<'_>) -> Vec<String> {
+    ctx.facts
+        .get(KEPT_LOGS_FACT)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Removes the logs failed jobs left on the printer; called when the run ends.
+pub(crate) async fn remove_kept_logs(ctx: &mut StepCtx<'_>) {
+    let kept = kept_logs(ctx);
+    ctx.facts.remove(KEPT_LOGS_FACT);
+    if !kept.is_empty() {
+        remove_logs(ctx, &kept).await;
+    }
+}
+
+/// A job started through sudo wrote its log as root, so the log is removed through sudo with the
+/// same password. A failure is logged, never a step failure.
+async fn remove_logs(ctx: &mut StepCtx<'_>, logs: &[String]) {
+    let sudo_password = match sudo::plan(ctx).await {
+        Ok(SudoPlan::WithPassword(pw)) => Some(pw),
+        _ => None,
+    };
+    let paths: Vec<String> = logs.iter().map(|p| sh_quote(p)).collect();
+    let rm = format!("rm -f {}", paths.join(" "));
+    let (cmd, stdin) = match sudo_password {
+        Some(pw) => (format!("sudo -S -p '' {rm}"), Some(format!("{pw}\n"))),
+        None => (rm, None),
+    };
+    let ran = match ctx.ssh().await {
+        Ok(s) => {
+            s.exec(&cmd, stdin.as_deref().map(str::as_bytes), REMOVE_TIMEOUT)
+                .await
+        }
+        Err(e) => Err(e),
+    };
+    match ran {
+        Ok(out) if out.exit == 0 => {}
+        Ok(out) => ctx.log(format!(
+            "could not remove the installer's job log from the printer (exit {})",
+            out.exit
+        )),
+        Err(e) => {
+            ctx.drop_ssh();
+            ctx.log(format!(
+                "could not remove the installer's job log from the printer: {e}"
+            ));
+        }
+    }
 }
 
 /// The connection failed while the job runs on. The job stays recorded so a retry follows it

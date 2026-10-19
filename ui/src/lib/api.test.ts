@@ -222,3 +222,19 @@ describe("error shapes", () => {
     expect(e.detail).toBe("ipc closed");
   });
 });
+
+describe("advance with secrets", () => {
+  it("sends the sudo password and a key passphrase as typed, and never into an error", async () => {
+    invoke.mockResolvedValueOnce({ event: { event: "done" }, run: {} });
+    await api.advance("run-1", { input: "sudo_password", value: "sudo-pw-1" });
+    expect(invoke).toHaveBeenCalledWith("advance", {
+      runId: "run-1",
+      input: { input: "sudo_password", value: "sudo-pw-1" },
+    });
+    rejectWith("unknown_run", 'no run "run-1"');
+    const e = await failure(
+      api.advance("run-1", { input: "login", value: { user: "pi", password: "", passphrase: "phrase-1" } }),
+    );
+    expect(JSON.stringify(e) + e.message + e.detail).not.toContain("phrase-1");
+  });
+});

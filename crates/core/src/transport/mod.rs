@@ -105,9 +105,23 @@ pub trait Moonraker: Send + Sync {
     async fn update_upgrade(&self, host: &Host, name: &str) -> Result<()>;
 }
 
+/// The SSH keys this computer could sign in with, as far as can be told without a printer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct KeyStatus {
+    /// An agent is running, or a default key file exists.
+    pub available: bool,
+    /// A default key file is passphrase-protected.
+    pub locked: bool,
+}
+
 #[async_trait]
 pub trait Ssh: Send + Sync {
+    /// Tries this computer's SSH keys before `login`'s password; a login with an empty password
+    /// uses the keys alone.
     async fn connect(&self, host: &Host, login: &Login) -> Result<Box<dyn SshSession>>;
+    fn key_status(&self) -> KeyStatus {
+        KeyStatus::default()
+    }
 }
 
 #[async_trait]

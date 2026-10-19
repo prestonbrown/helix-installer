@@ -24,7 +24,8 @@ fn base() -> Value {
             "install": [
                 {"type": "info", "text": "hi", "image": "step.png"},
                 {"type": "download", "artifact": "fw"},
-                {"type": "helix_install", "platform": "armv7", "commits": true}
+                {"type": "helix_install", "platform": "armv7", "commits": true},
+                {"type": "wait_for", "target": "helix_service", "timeout_s": 300, "message": "m"}
             ],
             "restore": [{"type": "ssh_run", "command": "true", "timeout_s": 5, "commits": true}]
         }
@@ -86,8 +87,10 @@ fn fallback_must_refuse_with_doc() {
 fn unknown_restore_and_recipe() {
     let mut v = base();
     v["printers"][0]["restore"] = json!("nope");
-    v["recipes"]["restore"] =
-        json!([{"type": "helix_install", "platform": "armv7", "commits": true}]);
+    v["recipes"]["restore"] = json!([
+        {"type": "helix_install", "platform": "armv7", "commits": true},
+        helix_running()
+    ]);
     only(v, "restore");
     let mut v = base();
     v["printers"][0]["recipes"][0]["recipe"] = json!("nope");
@@ -115,16 +118,16 @@ fn missing_images() {
 fn terminal_step_rule() {
     let mut v = base();
     v["recipes"]["install"] = json!([{"type": "info", "text": "x"}]);
-    only(v, "last step");
+    only(v, "helix_service");
     // SshRun is only a legal ending for a restore recipe.
     let mut v = base();
     v["recipes"]["install"] =
         json!([{"type": "ssh_run", "command": "true", "timeout_s": 5, "commits": true}]);
-    only(v, "last step");
+    only(v, "helix_service");
     let mut v = base();
     v["recipes"]["install"] =
         json!([{"type": "wait_for", "target": "moonraker", "timeout_s": 5, "message": "m"}]);
-    only(v, "last step");
+    only(v, "helix_service");
     let mut v = base();
     v["recipes"]["install"] =
         json!([{"type": "wait_for", "target": "helix_service", "timeout_s": 5, "message": "m"}]);
@@ -220,9 +223,12 @@ fn binary_prints_errors_and_exits_nonzero() {
 
 fn install_with(step: Value) -> Value {
     let mut v = base();
-    v["recipes"]["install"] =
-        json!([step, {"type": "helix_install", "platform": "armv7", "commits": true}]);
+    v["recipes"]["install"] = json!([step, {"type": "helix_install", "platform": "armv7", "commits": true}, helix_running()]);
     v
+}
+
+fn helix_running() -> Value {
+    json!({"type": "wait_for", "target": "helix_service", "timeout_s": 300, "message": "m"})
 }
 
 #[test]
@@ -277,14 +283,36 @@ fn empty_recipe_is_an_error() {
 }
 
 #[test]
-fn moonraker_update_and_require_are_terminals() {
+fn an_install_or_update_must_end_by_seeing_helixscreen_run() {
+    for last in [
+        json!({"type": "helix_install", "platform": "armv7", "commits": true}),
+        json!({"type": "moonraker_update", "name": "helixscreen", "commits": true}),
+        json!({"type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://x"}),
+        json!({"type": "wait_for", "target": "klipper_restart", "timeout_s": 5, "message": "m"}),
+    ] {
+        let mut v = base();
+        v["recipes"]["install"] = json!([last.clone()]);
+        let errs = run(v, false);
+        assert_eq!(errs.len(), 1, "{last}: {errs:?}");
+        assert!(
+            errs[0].message.contains("HelixScreen") && errs[0].message.contains("helix_service"),
+            "{errs:?}"
+        );
+    }
     let mut v = base();
-    v["recipes"]["install"] =
-        json!([{"type": "moonraker_update", "name": "helixscreen", "commits": true}]);
+    v["recipes"]["install"] = json!([
+        {"type": "moonraker_update", "name": "helixscreen", "commits": true},
+        helix_running()
+    ]);
     assert_eq!(run(v, false), vec![]);
+}
+
+#[test]
+fn a_restore_may_end_with_the_uninstall_itself() {
     let mut v = base();
-    v["recipes"]["install"] =
-        json!([{"type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://x"}]);
+    v["recipes"]["restore"] = json!([
+        {"type": "helix_install", "platform": "armv7", "uninstall": true, "commits": true}
+    ]);
     assert_eq!(run(v, false), vec![]);
 }
 
@@ -393,9 +421,12 @@ fn binary_exits_2_on_unparseable_json() {
     assert!(!out.stderr.is_empty());
 }
 
+/// An install recipe of `steps`, ending as every install must, by seeing HelixScreen run.
 fn install(steps: Value) -> Value {
     let mut v = base();
-    v["recipes"]["install"] = steps;
+    let mut steps = steps.as_array().unwrap().clone();
+    steps.push(helix_running());
+    v["recipes"]["install"] = Value::Array(steps);
     v
 }
 
@@ -539,4 +570,15 @@ fn a_step_acting_after_the_commit_needs_a_probe_since_the_commit_or_the_last_wai
         reidentify_errors(json!([step(WAIT), committed(HELIX)])),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn a_manifest_login_carries_no_typed_secret() {
+    let mut v = base();
+    v["recipes"]["install"] = json!([
+        {"type": "ssh_login", "logins": [{"user": "pi", "password": "x", "sudo_password": "y"}]},
+        {"type": "helix_install", "platform": "armv7", "commits": true},
+        helix_running()
+    ]);
+    only(v, "sudo_password");
 }

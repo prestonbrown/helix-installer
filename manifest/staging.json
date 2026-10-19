@@ -637,6 +637,13 @@
           }
         },
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
       }
     ],
     "generic_update": [
@@ -666,6 +673,13 @@
         },
         "update": true,
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
       }
     ],
     "generic_restore": [
@@ -714,6 +728,13 @@
         "type": "helix_install",
         "platform": "pi",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-qidi"
       }
     ],
     "qidi_update": [
@@ -742,6 +763,13 @@
         "platform": "pi",
         "update": true,
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-qidi"
       }
     ],
     "qidi_restore": [
@@ -803,6 +831,13 @@
         "platform": "k2",
         "dir": "/mnt/UDISK",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k2"
       }
     ],
     "k2_update": [
@@ -844,6 +879,13 @@
         "update": true,
         "dir": "/mnt/UDISK",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k2"
       }
     ],
     "k2_restore": [
@@ -1000,6 +1042,13 @@
         "type": "helix_install",
         "platform": "k1",
         "dir": "/usr/data"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
       }
     ],
     "k1_modded": [
@@ -1041,6 +1090,13 @@
         "platform": "k1",
         "dir": "/usr/data",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
       }
     ],
     "k1_update": [
@@ -1084,6 +1140,13 @@
         "update": true,
         "dir": "/usr/data",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
       }
     ],
     "k1_restore": [
@@ -1280,6 +1343,13 @@
         "type": "moonraker_update",
         "name": "helixscreen",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to restart with the update.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5x"
       }
     ],
     "ad5x_restore": [
@@ -1391,6 +1461,29 @@
         "type": "helix_install",
         "platform": "ad5m",
         "dir": "/data"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_run",
+        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "timeout_s": 60
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_restart",
+        "timeout_s": 900,
+        "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_pro_forgex": [
@@ -1487,6 +1580,29 @@
         "type": "helix_install",
         "platform": "ad5m",
         "dir": "/data"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_run",
+        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "timeout_s": 60
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_restart",
+        "timeout_s": 900,
+        "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_forgex_install": [
@@ -1520,6 +1636,29 @@
         "platform": "ad5m",
         "commits": true,
         "dir": "/data"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_run",
+        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "timeout_s": 60
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_restart",
+        "timeout_s": 900,
+        "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_forgex_update": [
@@ -1555,6 +1694,29 @@
         "update": true,
         "commits": true,
         "dir": "/data"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_run",
+        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "timeout_s": 60
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_restart",
+        "timeout_s": 900,
+        "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_zmod_enable": [
@@ -1606,6 +1768,13 @@
         "type": "moonraker_update",
         "name": "helixscreen",
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to restart with the update.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
       }
     ],
     "ad5m_restore": [
@@ -1690,6 +1859,13 @@
           }
         },
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
       }
     ],
     "generic_update_board": [
@@ -1731,6 +1907,13 @@
         },
         "update": true,
         "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
       }
     ],
     "ad5x_switch_screen": [

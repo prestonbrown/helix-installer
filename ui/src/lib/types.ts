@@ -56,7 +56,16 @@ export type Prompt =
   | { prompt: "info"; text: string; image: string | null }
   | { prompt: "user_action"; text: string; image: string | null }
   | { prompt: "ask"; question: string; choices: Choice[] }
-  | { prompt: "login"; user_hint: string | null; password_hint: string | null }
+  | {
+      prompt: "login";
+      user_hint: string | null;
+      password_hint: string | null;
+      /** This computer has an SSH key or agent the installer can sign in with. */
+      has_ssh_key: boolean;
+      /** A key file needs its passphrase before it can be used. */
+      key_locked: boolean;
+    }
+  | { prompt: "sudo_password"; user: string; refused: boolean }
   | { prompt: "choose_drive"; drives: Drive[]; needed_bytes: number; message: string | null }
   | { prompt: "ambiguous"; candidates: string[] };
 
@@ -105,6 +114,7 @@ export interface RunSummary {
 export type Input =
   | { input: "next" }
   | { input: "choice"; value: string }
-  | { input: "login"; value: { user: string; password: string } }
+  | { input: "login"; value: { user: string; password: string; passphrase?: string } }
+  | { input: "sudo_password"; value: string }
   | { input: "drive"; value: string }
   | { input: "cancel" };

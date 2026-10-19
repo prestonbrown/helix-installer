@@ -13,10 +13,7 @@ use tokio::sync::Notify;
 const T: Duration = Duration::from_secs(10);
 
 fn login(user: &str, pw: &str) -> Login {
-    Login {
-        user: user.into(),
-        password: pw.into(),
-    }
+    Login::new(user, pw)
 }
 
 fn host(port: u16) -> Host {

@@ -200,11 +200,16 @@ fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str,
     }
 }
 
+/// An install or update is done only once HelixScreen is seen running, so it ends waiting for
+/// it. A restore may end with the step that removes HelixScreen or puts the stock screen back.
 fn is_terminal(s: &Step, is_restore: bool) -> bool {
     match s {
         Step::WaitFor { target, .. } => *target == WaitTarget::HelixService,
-        Step::HelixInstall { .. } | Step::MoonrakerUpdate { .. } | Step::Require { .. } => true,
-        Step::SshRun { .. } | Step::MoonrakerGcode { .. } => is_restore,
+        Step::HelixInstall { .. }
+        | Step::MoonrakerUpdate { .. }
+        | Step::Require { .. }
+        | Step::SshRun { .. }
+        | Step::MoonrakerGcode { .. } => is_restore,
         _ => false,
     }
 }
@@ -261,9 +266,15 @@ fn lint_recipe(
 ) {
     match steps.last() {
         None => err(id, "recipe has no steps".into()),
-        Some(last) if !is_terminal(last, is_restore) => err(
+        Some(last) if !is_terminal(last, is_restore) && is_restore => err(
             id,
             "last step does not leave the run done or refused".into(),
+        ),
+        Some(last) if !is_terminal(last, is_restore) => err(
+            id,
+            "an install or update must end with a wait_for helix_service step, so it is done \
+             only once HelixScreen runs"
+                .into(),
         ),
         _ => {}
     }
@@ -314,6 +325,19 @@ fn lint_recipe(
                 for img in choices.iter().filter_map(|c| c.image.as_deref()) {
                     check_image(id, img, asset_root, err);
                 }
+            }
+            Step::SshLogin { logins, .. }
+                if logins
+                    .iter()
+                    .any(|l| l.passphrase.is_some() || l.sudo_password.is_some()) =>
+            {
+                err(
+                    id,
+                    format!(
+                        "step {i}: a manifest login names no passphrase or sudo_password; \
+                         those are typed by the user"
+                    ),
+                )
             }
             Step::Probe { .. } if s.probe().is_none() => err(
                 id,

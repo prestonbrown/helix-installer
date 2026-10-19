@@ -134,6 +134,9 @@ type QueuedJob = (Vec<(String, Option<i32>)>, bool);
 #[derive(Default)]
 struct SshState {
     accepted: Vec<(String, String, String)>,
+    /// (addr, user, passphrase the key needs) for logins this computer's key opens.
+    keys: Vec<(String, String, Option<String>)>,
+    key_status: KeyStatus,
     table: HashMap<String, ExecOutput>,
     fallback: Option<Fallback>,
     calls: Vec<(String, Option<Vec<u8>>)>,
@@ -163,6 +166,15 @@ impl FakeSsh {
             .accepted
             .push((addr.into(), user.into(), password.into()));
     }
+    /// The host accepts this computer's key for `user`, unlocked with `passphrase` if given.
+    pub fn accept_key(&self, addr: &str, user: &str, passphrase: Option<&str>) {
+        lock(&self.state)
+            .keys
+            .push((addr.into(), user.into(), passphrase.map(Into::into)));
+    }
+    pub fn set_key_status(&self, status: KeyStatus) {
+        lock(&self.state).key_status = status;
+    }
     pub fn on_command(&self, cmd: &str, out: ExecOutput) {
         lock(&self.state).table.insert(cmd.into(), out);
     }
@@ -187,8 +199,9 @@ impl FakeSsh {
             .collect();
         lock(&self.state).queued_jobs.push((chunks, dies));
     }
-    /// `spawn_detached` with a sudo password other than `password` fails with `Auth`, as
-    /// sudo does after a wrong password. Without this any password is taken.
+    /// `spawn_detached` with a sudo password other than `password` fails with `Auth`, and an
+    /// `exec` of `sudo -S` fed another one on stdin exits 1, as sudo does after a wrong
+    /// password. Without this any password is taken.
     pub fn sudo_accepts(&self, password: &str) {
         lock(&self.state).sudo_password = Some(password.into());
     }
@@ -237,14 +250,20 @@ impl Ssh for FakeSsh {
     async fn connect(&self, host: &Host, login: &Login) -> Result<Box<dyn SshSession>> {
         let mut st = lock(&self.state);
         st.connects += 1;
-        if !st.accepted.iter().any(|(a, _, _)| *a == host.addr) {
+        if !st.accepted.iter().any(|(a, _, _)| *a == host.addr)
+            && !st.keys.iter().any(|(a, _, _)| *a == host.addr)
+        {
             return Err(TransportError::Unreachable);
         }
-        if !st
+        let by_password = st
             .accepted
             .iter()
-            .any(|(a, u, p)| *a == host.addr && *u == login.user && *p == login.password)
-        {
+            .any(|(a, u, p)| *a == host.addr && *u == login.user && *p == login.password);
+        let given = login.passphrase.as_ref().map(|p| p.expose());
+        let by_key = st.keys.iter().any(|(a, u, needs)| {
+            *a == host.addr && *u == login.user && needs.as_deref().is_none_or(|n| given == Some(n))
+        });
+        if !by_password && !by_key {
             return Err(TransportError::Auth);
         }
         let drop_at = st.drop_next_session_after.take();
@@ -253,6 +272,10 @@ impl Ssh for FakeSsh {
             calls: 0,
             drop_at,
         }))
+    }
+
+    fn key_status(&self) -> KeyStatus {
+        lock(&self.state).key_status
     }
 }
 
@@ -283,6 +306,36 @@ impl SshSession for FakeSshSession {
         self.tick()?;
         let mut st = lock(&self.state);
         st.calls.push((cmd.into(), stdin.map(|b| b.to_vec())));
+        // `sudo -S` reads the password from stdin: one `sudo_accepts` does not take is refused.
+        if let Some(inner) = cmd.strip_prefix("sudo -S -p '' ") {
+            let typed = stdin
+                .map(|b| {
+                    String::from_utf8_lossy(b)
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            if st
+                .sudo_password
+                .as_deref()
+                .is_some_and(|want| want != typed)
+            {
+                return Ok(ExecOutput {
+                    stdout: String::new(),
+                    stderr: "Sorry, try again.\nsudo: 1 incorrect password attempt\n".into(),
+                    exit: 1,
+                });
+            }
+            if inner == "true" {
+                return Ok(ExecOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit: 0,
+                });
+            }
+        }
         if let Some(o) = st.table.get(cmd) {
             return Ok(o.clone());
         }

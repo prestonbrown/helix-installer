@@ -6,12 +6,20 @@
 //!
 //! Host keys are trusted on first use and pinned in a small JSON file; a printer whose key
 //! changes is refused until the user says it was reflashed (`forget_host`).
+//!
+//! A login tries this computer's SSH keys first, the OS agent's then the default key files, and
+//! only then the password.
 
 use super::*;
 use crate::fs_atomic::write_atomic;
 use crate::manifest::Login;
-use russh::client::{self, KeyboardInteractiveAuthResponse};
-use russh::keys::{HashAlg, PublicKeyOrCertificate};
+use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
+use russh::keys::agent::client::{AgentClient, AgentStream};
+use russh::keys::agent::AgentIdentity;
+use russh::keys::{
+    decode_secret_key, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey,
+    PublicKeyOrCertificate,
+};
 use russh::{cipher, kex, mac, Channel, ChannelMsg, ChannelReadHalf, MethodKind, Preferred};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -26,6 +34,13 @@ const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Keyboard-interactive servers may send several rounds of prompts; past this many the
 /// login is treated as failed instead of looping forever.
 const MAX_KBD_ROUNDS: usize = 8;
+/// Keys offered before the password. A server that counts refusals hangs up after a few
+/// (OpenSSH's MaxAuthTries is 6); the password then goes over a fresh connection.
+const MAX_KEY_OFFERS: usize = 6;
+/// The key files tried, in order, in the user's `.ssh` directory.
+const KEY_FILE_NAMES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+/// How long reaching the agent may take; a Windows pipe that stays busy is given up on.
+const AGENT_TIMEOUT: Duration = Duration::from_secs(3);
 const EXIT_MARKER: &str = "HELIX-EXIT ";
 const STARTED_MARKER: &str = "HELIX-STARTED ";
 /// How long a launched job has to write its `HELIX-STARTED` line, and how often to look.
@@ -167,17 +182,209 @@ fn known_hosts_entry(host: &Host) -> String {
     }
 }
 
-/// The russh-backed `Ssh`. One `connect` is one login attempt with one credential; which
-/// credentials to try, and in what order, is the caller's policy.
+/// Where this computer's SSH keys are: the agent's socket (on Windows, its named pipe) and the
+/// key files to try, in order.
+#[derive(Debug, Clone, Default)]
+pub struct KeySources {
+    pub agent: Option<PathBuf>,
+    pub key_files: Vec<PathBuf>,
+}
+
+impl KeySources {
+    /// `id_ed25519`, `id_ecdsa` and `id_rsa` in `dir`, the order OpenSSH tries them in.
+    pub fn default_files(dir: &Path) -> Vec<PathBuf> {
+        KEY_FILE_NAMES.iter().map(|n| dir.join(n)).collect()
+    }
+
+    /// The agent the user's session names and the default key files in their `~/.ssh`.
+    pub fn from_env() -> KeySources {
+        KeySources {
+            agent: default_agent(),
+            key_files: home_dir()
+                .map(|h| Self::default_files(&h.join(".ssh")))
+                .unwrap_or_default(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn default_agent() -> Option<PathBuf> {
+    std::env::var_os("SSH_AUTH_SOCK")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The Windows OpenSSH agent service listens on this pipe.
+#[cfg(windows)]
+fn default_agent() -> Option<PathBuf> {
+    Some(PathBuf::from(r"\\.\pipe\openssh-ssh-agent"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn default_agent() -> Option<PathBuf> {
+    None
+}
+
+fn home_dir() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+type Agent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
+
+#[cfg(unix)]
+async fn open_agent(path: &Path) -> Option<Agent> {
+    let client = AgentClient::connect_uds(path).await.ok()?;
+    Some(client.dynamic())
+}
+
+#[cfg(windows)]
+async fn open_agent(path: &Path) -> Option<Agent> {
+    let client = AgentClient::connect_named_pipe(path).await.ok()?;
+    Some(client.dynamic())
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn open_agent(_path: &Path) -> Option<Agent> {
+    None
+}
+
+/// The hash an RSA signature uses, from the server's `server-sig-algs` (`None` when it sent
+/// none). A server that names no SHA-2 algorithm, such as dropbear 2019.78 on a K1, gets plain
+/// `ssh-rsa` (SHA-1).
+pub fn rsa_signature_hash(server_sig_algs: Option<Option<HashAlg>>) -> Option<HashAlg> {
+    server_sig_algs.flatten()
+}
+
+/// The private key in `path`: as stored, or decrypted with `passphrase` when it is
+/// passphrase-protected. `None` for a missing, unreadable or still-locked file.
+fn load_key(path: &Path, passphrase: Option<&str>) -> Option<PrivateKey> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match decode_secret_key(&text, None) {
+        Ok(key) => Some(key),
+        Err(russh::keys::Error::KeyIsEncrypted) => decode_secret_key(&text, Some(passphrase?)).ok(),
+        Err(_) => None,
+    }
+}
+
+/// How the key attempts of one connection ended.
+enum KeyAuth {
+    Accepted,
+    Refused,
+    /// The server hung up during them, as one that counts refusals does.
+    Disconnected,
+}
+
+/// The RSA hash for this connection, asked of the server once and only if an RSA key is offered.
+struct RsaHash(Option<Option<Option<HashAlg>>>);
+
+impl RsaHash {
+    async fn for_key(
+        &mut self,
+        handle: &client::Handle<HostKeyCheck>,
+        key: &PublicKey,
+    ) -> Option<HashAlg> {
+        if !key.algorithm().is_rsa() {
+            return None;
+        }
+        if self.0.is_none() {
+            self.0 = Some(handle.best_supported_rsa_hash().await.ok().flatten());
+        }
+        rsa_signature_hash(self.0.flatten())
+    }
+}
+
+/// Offers the agent's keys, then `files`' keys it has not already offered, at most
+/// `MAX_KEY_OFFERS` in all. A server that does not take publickey is never offered one.
+async fn authenticate_with_keys(
+    handle: &mut client::Handle<HostKeyCheck>,
+    user: &str,
+    agent: Option<&Path>,
+    files: &[PrivateKey],
+) -> KeyAuth {
+    let methods = match handle.authenticate_none(user).await {
+        Ok(AuthResult::Success) => return KeyAuth::Accepted,
+        Ok(AuthResult::Failure {
+            remaining_methods, ..
+        }) => remaining_methods,
+        Err(_) => return KeyAuth::Disconnected,
+    };
+    if !methods.contains(&MethodKind::PublicKey) {
+        return KeyAuth::Refused;
+    }
+    let mut rsa = RsaHash(None);
+    let mut offered: Vec<PublicKey> = Vec::new();
+    let agent = match agent {
+        Some(path) => tokio::time::timeout(AGENT_TIMEOUT, open_agent(path))
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    if let Some(mut agent) = agent {
+        let identities = agent.request_identities().await.unwrap_or_default();
+        for identity in identities {
+            let AgentIdentity::PublicKey { key, .. } = identity else {
+                continue;
+            };
+            if offered.len() >= MAX_KEY_OFFERS {
+                break;
+            }
+            offered.push(key.clone());
+            let hash = rsa.for_key(handle, &key).await;
+            let result = handle
+                .authenticate_publickey_with(user, key, hash, &mut agent)
+                .await;
+            if let Ok(AuthResult::Success) = result {
+                return KeyAuth::Accepted;
+            }
+            // An agent that cannot sign one key may still sign the next.
+            if handle.is_closed() {
+                return KeyAuth::Disconnected;
+            }
+        }
+    }
+    for key in files {
+        let public = key.public_key();
+        if offered.iter().any(|k| k.key_data() == public.key_data()) {
+            continue;
+        }
+        if offered.len() >= MAX_KEY_OFFERS {
+            break;
+        }
+        offered.push(public.clone());
+        let hash = rsa.for_key(handle, public).await;
+        let signed = PrivateKeyWithHashAlg::new(Arc::new(key.clone()), hash);
+        match handle.authenticate_publickey(user, signed).await {
+            Ok(AuthResult::Success) => return KeyAuth::Accepted,
+            Ok(_) if !handle.is_closed() => {}
+            _ => return KeyAuth::Disconnected,
+        }
+    }
+    KeyAuth::Refused
+}
+
+/// The russh-backed `Ssh`. One `connect` is one login: this computer's keys, then the login's
+/// password. Which logins to try, and in what order, is the caller's policy.
 pub struct SshRussh {
     known: Arc<KnownHosts>,
     config: Arc<client::Config>,
     connect_timeout: Duration,
     start_timeout: Duration,
+    keys: KeySources,
 }
 
 impl SshRussh {
-    /// `known_hosts_path` is the JSON file that pins each printer's host key.
+    /// Where to find this computer's SSH keys; `new` reads them from the environment.
+    pub fn with_keys(mut self, keys: KeySources) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    /// `known_hosts_path` is the JSON file that pins each printer's host key. Keys come from
+    /// the user's agent and `~/.ssh` (`KeySources::from_env`).
     pub fn new(known_hosts_path: impl Into<PathBuf>) -> Self {
         let config = client::Config {
             preferred: Preferred {
@@ -200,6 +407,7 @@ impl SshRussh {
             config: Arc::new(config),
             connect_timeout: CONNECT_TIMEOUT,
             start_timeout: START_TIMEOUT,
+            keys: KeySources::from_env(),
         }
     }
 
@@ -278,8 +486,8 @@ impl client::Handler for HostKeyCheck {
     }
 }
 
-/// Password first; keyboard-interactive when the server offers it instead (some dropbear
-/// builds offer nothing else), answering every prompt with the password.
+/// The password; keyboard-interactive when the server offers it instead (some dropbear builds
+/// offer nothing else), answering every prompt with the password.
 async fn authenticate(handle: &mut client::Handle<HostKeyCheck>, login: &Login) -> Result<()> {
     let first = handle
         .authenticate_password(login.user.clone(), login.password.clone())
@@ -317,16 +525,82 @@ async fn authenticate(handle: &mut client::Handle<HostKeyCheck>, login: &Login) 
 #[async_trait]
 impl Ssh for SshRussh {
     async fn connect(&self, host: &Host, login: &Login) -> Result<Box<dyn SshSession>> {
-        let mut handle = tokio::time::timeout(self.connect_timeout, self.handshake(host))
-            .await
-            .map_err(|_| TransportError::Timeout)??;
+        // Decrypting a passphrase-protected key runs a deliberately slow KDF: off the runtime,
+        // and before the login's clock starts.
+        let paths = self.keys.key_files.clone();
+        let passphrase = login.passphrase.as_ref().map(|p| p.expose().to_string());
+        let files = tokio::task::spawn_blocking(move || {
+            paths
+                .iter()
+                .filter_map(|p| load_key(p, passphrase.as_deref()))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+
+        let mut handle = self.timed_handshake(host).await?;
+        let keyed = tokio::time::timeout(
+            self.connect_timeout,
+            authenticate_with_keys(&mut handle, &login.user, self.keys.agent.as_deref(), &files),
+        )
+        .await
+        .map_err(|_| TransportError::Timeout)?;
+        match keyed {
+            KeyAuth::Accepted => return Ok(self.session(handle)),
+            KeyAuth::Refused if login.password.is_empty() => return Err(TransportError::Auth),
+            KeyAuth::Refused => {}
+            KeyAuth::Disconnected if login.password.is_empty() => {
+                return Err(TransportError::Protocol(
+                    "the printer closed the connection while this computer's SSH keys were tried"
+                        .into(),
+                ))
+            }
+            KeyAuth::Disconnected => handle = self.timed_handshake(host).await?,
+        }
         tokio::time::timeout(self.connect_timeout, authenticate(&mut handle, login))
             .await
             .map_err(|_| TransportError::Timeout)??;
-        Ok(Box::new(RusshSession {
+        Ok(self.session(handle))
+    }
+
+    fn key_status(&self) -> KeyStatus {
+        let agent = self
+            .keys
+            .agent
+            .as_deref()
+            .is_some_and(|a| std::fs::metadata(a).is_ok());
+        let mut status = KeyStatus {
+            available: agent,
+            locked: false,
+        };
+        for path in &self.keys.key_files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            status.available = true;
+            if matches!(
+                decode_secret_key(&text, None),
+                Err(russh::keys::Error::KeyIsEncrypted)
+            ) {
+                status.locked = true;
+            }
+        }
+        status
+    }
+}
+
+impl SshRussh {
+    async fn timed_handshake(&self, host: &Host) -> Result<client::Handle<HostKeyCheck>> {
+        tokio::time::timeout(self.connect_timeout, self.handshake(host))
+            .await
+            .map_err(|_| TransportError::Timeout)?
+    }
+
+    fn session(&self, handle: client::Handle<HostKeyCheck>) -> Box<dyn SshSession> {
+        Box::new(RusshSession {
             handle,
             start_timeout: self.start_timeout,
-        }))
+        })
     }
 }
 

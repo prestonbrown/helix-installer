@@ -28,11 +28,9 @@ pub async fn run(
                 fraction: None,
             };
         }
-        // A login without a password to give sudo runs the command as itself, as a root
-        // login would; the command then fails on its own if it needed root.
         let sudo_password = match sudo::plan(ctx).await {
             Ok(SudoPlan::WithPassword(pw)) => Some(pw),
-            Ok(SudoPlan::AsLoginUser | SudoPlan::Unavailable { .. }) => None,
+            Ok(SudoPlan::AsLoginUser) => None,
             Err(stop) => return stop,
         };
         let started = match ctx.ssh().await {
@@ -66,15 +64,15 @@ pub async fn run(
     let tail = job::tail(ctx, |_| true);
     match followed {
         Followed::Exited(0) => {
-            job::forget(ctx);
+            job::ended(ctx, &running, true).await;
             StepOutcome::Done
         }
         Followed::Exited(code) => {
-            job::forget(ctx);
+            job::ended(ctx, &running, false).await;
             StepOutcome::failed(format!("the command failed (exit {code}){tail}"))
         }
         Followed::Died => {
-            job::forget(ctx);
+            job::ended(ctx, &running, false).await;
             StepOutcome::failed(format!("the command stopped without finishing{tail}"))
         }
         Followed::Silent => StepOutcome::failed(format!(

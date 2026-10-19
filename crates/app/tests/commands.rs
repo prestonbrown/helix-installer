@@ -363,12 +363,7 @@ async fn a_full_run_through_the_commands_reaches_done_and_keeps_the_password_out
         Event::NeedInput(Prompt::Ask { choices, .. }) => assert_eq!(choices.len(), 2),
         other => panic!("expected the question, got {other:?}"),
     }
-    let login = |password: &str| {
-        Input::Login(Login {
-            user: "root".into(),
-            password: password.into(),
-        })
-    };
+    let login = |password: &str| Input::Login(Login::new("root", password));
     assert!(matches!(
         settle(&c, &run, Some(Input::Choice("home".into()))).await,
         Event::NeedInput(Prompt::Login { .. })

@@ -255,19 +255,75 @@ pub struct Verified {
     pub firmware: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+/// Something the user typed that must never be shown or kept: it deserializes from a plain
+/// string, has no `Serialize`, and its `Debug` prints `<redacted>`.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(s: impl Into<String>) -> Secret {
+        Secret(s.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Login {
     pub user: String,
+    /// Empty when the login relies on this computer's SSH key alone.
+    #[serde(default)]
     pub password: String,
+    /// Unlocks a passphrase-protected key file on this computer. Typed by the user, held in
+    /// memory only, never written out.
+    #[serde(default, skip_serializing)]
+    pub passphrase: Option<Secret>,
+    /// What sudo on the printer is fed when the login has no password of its own to give it.
+    /// Typed by the user, held in memory only, never written out.
+    #[serde(default, skip_serializing)]
+    pub sudo_password: Option<Secret>,
 }
 
-/// Never prints the password, so a logged login cannot leak it.
+impl Login {
+    pub fn new(user: impl Into<String>, password: impl Into<String>) -> Login {
+        Login {
+            user: user.into(),
+            password: password.into(),
+            ..Login::default()
+        }
+    }
+
+    /// The secrets this login holds, for stripping from a support bundle.
+    pub fn secrets(&self) -> Vec<String> {
+        let typed = [&self.passphrase, &self.sudo_password]
+            .into_iter()
+            .flatten()
+            .map(|s| s.expose().to_string());
+        std::iter::once(self.password.clone())
+            .chain(typed)
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+}
+
+/// Never prints a password or passphrase, so a logged login cannot leak one.
 impl fmt::Debug for Login {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Login")
             .field("user", &self.user)
             .field("password", &"<redacted>")
+            .field("passphrase", &self.passphrase)
+            .field("sudo_password", &self.sudo_password)
             .finish()
     }
 }
