@@ -10,6 +10,7 @@ use helix_installer_core::transport::drives_sys::SysDrives;
 use helix_installer_core::transport::fetch_http::HttpFetch;
 use helix_installer_core::transport::moonraker_http::HttpMoonraker;
 use helix_installer_core::transport::net_tcp::TcpNet;
+use helix_installer_core::transport::serial_espflash::EspflashSerial;
 use helix_installer_core::transport::ssh_russh::SshRussh;
 use helix_installer_core::transport::{Env, SystemClock};
 use std::path::{Path, PathBuf};
@@ -53,6 +54,7 @@ fn real_env(data_dir: &Path) -> Env {
         fetch: Arc::new(HttpFetch::new()),
         clock: Arc::new(SystemClock),
         net: Arc::new(TcpNet),
+        serial: Arc::new(EspflashSerial),
     }
 }
 

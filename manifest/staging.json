@@ -597,6 +597,34 @@
         "refuse": true,
         "doc": "https://helixscreen.org/docs/install-anycubic-kobra"
       }
+    },
+    {
+      "id": "ktouch",
+      "name": "BTT K-Touch",
+      "identify": [
+        {
+          "usb": "1a86:7522"
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "ktouch_install"
+        },
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "ktouch_update"
+        }
+      ],
+      "restore": "ktouch_reflash",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      }
     }
   ],
   "artifacts": {
@@ -1976,6 +2004,107 @@
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
         "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5m"
+      }
+    ],
+    "ktouch_install": [
+      {
+        "type": "probe",
+        "serial": "esp32"
+      },
+      {
+        "type": "require",
+        "fact": "esp_chip",
+        "equals": "esp32s3",
+        "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "require",
+        "fact": "flash_mb",
+        "equals": "16",
+        "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "serial_flash",
+        "asset": "helixscreen-esp32-ktouch-{tag}.zip",
+        "chip": "esp32s3",
+        "flash_mb": 16,
+        "keep": [
+          "nvs",
+          "cfg"
+        ],
+        "channel": "beta",
+        "commits": true
+      },
+      {
+        "type": "info",
+        "text": "HelixScreen is on your K-Touch and it has restarted. Finish setting it up on the K-Touch's own screen. If it shows Set Up WiFi, join the HelixScreen network it names from your phone, open the address it shows, then choose your WiFi and enter your printer's address. If it joins your WiFi by itself, enter your printer's address in Settings > Connection > Host."
+      }
+    ],
+    "ktouch_update": [
+      {
+        "type": "probe",
+        "serial": "esp32"
+      },
+      {
+        "type": "require",
+        "fact": "esp_chip",
+        "equals": "esp32s3",
+        "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "require",
+        "fact": "flash_mb",
+        "equals": "16",
+        "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "serial_flash",
+        "asset": "helixscreen-esp32-ktouch-{tag}.zip",
+        "chip": "esp32s3",
+        "flash_mb": 16,
+        "keep": [
+          "nvs",
+          "cfg"
+        ],
+        "channel": "beta",
+        "update": true,
+        "commits": true
+      }
+    ],
+    "ktouch_reflash": [
+      {
+        "type": "probe",
+        "serial": "esp32"
+      },
+      {
+        "type": "require",
+        "fact": "esp_chip",
+        "equals": "esp32s3",
+        "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "require",
+        "fact": "flash_mb",
+        "equals": "16",
+        "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "serial_flash",
+        "asset": "helixscreen-esp32-ktouch-{tag}.zip",
+        "chip": "esp32s3",
+        "flash_mb": 16,
+        "keep": [
+          "nvs",
+          "cfg"
+        ],
+        "channel": "beta",
+        "commits": true
       }
     ]
   }

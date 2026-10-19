@@ -1,0 +1,488 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The K-Touch recipes in `manifest/staging.json`, run end to end against a fake board on a fake
+//! USB port: what is written, what is never written, and what the user is told when it goes
+//! wrong.
+
+#[path = "support/ktouch.rs"]
+mod ktouch;
+
+use helix_installer_core::facts::Facts;
+use helix_installer_core::identify::{identify, Identified, StartState};
+use helix_installer_core::manifest::{Channel, Manifest};
+use helix_installer_core::run_state::RunState;
+use helix_installer_core::runner::{Event, Input, Prompt, Runner};
+use helix_installer_core::steps::helix_install::{releases_manifest_url, GITHUB_RELEASE_API};
+use helix_installer_core::transport::fake::{
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSerial, FakeSsh,
+};
+use helix_installer_core::transport::{ChipInfo, Env, Host};
+use ktouch::*;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+const PORT: &str = "/dev/ttyUSB0";
+const MAC: &str = "dc:da:0c:11:22:33";
+const NVS: u32 = 0x9000;
+const CFG: u32 = 0xfe0000;
+const DOC: &str = "https://helixscreen.org/docs/install-esp32";
+
+fn staging() -> Manifest {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../manifest/staging.json");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn sha(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn s3(mac: &str) -> ChipInfo {
+    ChipInfo {
+        chip: "esp32s3".into(),
+        flash_bytes: 16 * 1024 * 1024,
+        mac: Some(mac.into()),
+    }
+}
+
+fn usb_facts() -> Facts {
+    Facts::from([("usb".to_string(), json!("1a86:7522"))])
+}
+
+struct Rig {
+    serial: FakeSerial,
+    fetch: Arc<FakeFetch>,
+    cache: tempfile::TempDir,
+}
+
+impl Rig {
+    /// A K-Touch on `PORT` running BTT's own firmware, with its WiFi and settings in flash, and
+    /// HelixScreen `v1.1.0-beta.10` as the newest beta.
+    fn new() -> Rig {
+        let rig = Rig {
+            serial: FakeSerial::new(),
+            fetch: Arc::new(FakeFetch::new()),
+            cache: tempfile::tempdir().unwrap(),
+        };
+        rig.plug(PORT, s3(MAC));
+        rig.publish("v1.1.0-beta.10", &release_zip("v1.1.0-beta.10"), None);
+        rig
+    }
+
+    fn plug(&self, port: &str, chip: ChipInfo) {
+        self.serial.plug(port, 0x1a86, 0x7522, chip);
+        self.serial.preload(port, NVS, b"wifi credentials".to_vec());
+        self.serial.preload(port, CFG, b"settings.json".to_vec());
+        self.serial
+            .preload(port, APP_OFFSET, app_image("ktouch_stock", "2.1.0"));
+    }
+
+    /// The board already runs HelixScreen `version`.
+    fn running(&self, version: &str) {
+        self.serial
+            .preload(PORT, APP_OFFSET, app_image("helixscreen_esp32", version));
+    }
+
+    /// Makes `tag` the newest beta, its K-Touch zip on GitHub with `digest` (else the zip's own).
+    fn publish(&self, tag: &str, zip: &[u8], digest: Option<&str>) {
+        let release = json!({ "version": tag.trim_start_matches('v'), "tag": tag, "assets": {} });
+        self.fetch.add(
+            &releases_manifest_url(Channel::Beta),
+            release.to_string().into_bytes(),
+        );
+        let name = format!("helixscreen-esp32-ktouch-{tag}.zip");
+        let url =
+            format!("https://github.com/prestonbrown/helixscreen/releases/download/{tag}/{name}");
+        let digest = digest.map_or_else(|| sha(zip), str::to_string);
+        let gh = json!({ "tag_name": tag, "assets": [
+            { "name": "install.sh", "browser_download_url": "https://example.invalid/install.sh",
+              "digest": format!("sha256:{}", sha(b"x")) },
+            { "name": name, "browser_download_url": url, "digest": format!("sha256:{digest}") },
+        ]});
+        self.fetch.add(
+            &format!("{GITHUB_RELEASE_API}/{tag}"),
+            gh.to_string().into_bytes(),
+        );
+        self.fetch.add(&url, zip.to_vec());
+    }
+
+    fn env(&self) -> Env {
+        Env {
+            moonraker: Arc::new(FakeMoonraker::new()),
+            ssh: Arc::new(FakeSsh::new()),
+            drives: Arc::new(FakeDrives::new()),
+            fetch: self.fetch.clone(),
+            clock: Arc::new(FakeClock::new()),
+            net: Arc::new(FakeNet::new()),
+            serial: Arc::new(self.serial.clone()),
+        }
+    }
+
+    fn runner(&self) -> Runner {
+        let m = staging();
+        let Identified::Recipe {
+            printer_id,
+            recipe_id,
+            ..
+        } = identify(&m, &usb_facts())
+        else {
+            panic!("the K-Touch did not identify");
+        };
+        let state = RunState::new("run", printer_id, recipe_id, Host::new(PORT), usb_facts());
+        Runner::new(self.env(), Arc::new(m), state).with_cache_dir(self.cache.path().to_path_buf())
+    }
+
+    fn written_offsets(&self) -> Vec<u32> {
+        let mut o: Vec<u32> = self.serial.writes().iter().map(|w| w.1).collect();
+        o.sort();
+        o
+    }
+}
+
+struct Trace {
+    prompts: Vec<Prompt>,
+    end: Event,
+}
+
+/// Advances until the run ends or fails, answering every screen with Next.
+async fn drive(r: &mut Runner) -> Trace {
+    let mut prompts = Vec::new();
+    let mut input = None;
+    for _ in 0..500 {
+        match r.advance(input.take()).await {
+            Event::Progress { .. } => {}
+            Event::NeedInput(p) => {
+                match &p {
+                    Prompt::Info { .. } | Prompt::UserAction { .. } => input = Some(Input::Next),
+                    other => panic!("unexpected prompt {other:?}"),
+                }
+                prompts.push(p);
+            }
+            end => return Trace { prompts, end },
+        }
+    }
+    panic!("the run never ended");
+}
+
+fn failure(e: &Event) -> (bool, String, String) {
+    match e {
+        Event::Failed {
+            committed,
+            reason,
+            help,
+            ..
+        } => (*committed, reason.clone(), help.clone().unwrap_or_default()),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_k_touch_on_usb_identifies_for_a_first_install() {
+    match identify(&staging(), &usb_facts()) {
+        Identified::Recipe {
+            printer_id,
+            state,
+            recipe_id,
+        } => {
+            assert_eq!(printer_id, "ktouch");
+            assert_eq!(state, StartState::Stock);
+            assert_eq!(recipe_id, "ktouch_install");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn another_usb_serial_device_is_not_a_k_touch() {
+    let f = Facts::from([("usb".to_string(), json!("1a86:7523"))]);
+    assert!(matches!(
+        identify(&staging(), &f),
+        Identified::Refuse { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_first_install_writes_only_the_flash_args_parts_then_points_at_the_setup_screen() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+    // WiFi and settings survive: their partitions were never written.
+    assert_eq!(rig.serial.read_back(PORT, NVS, 16), b"wifi credentials");
+    assert_eq!(rig.serial.read_back(PORT, CFG, 13), b"settings.json");
+    // The factory image is in the zip and never written: no write is its size.
+    assert!(rig.serial.writes().iter().all(|w| w.2 != FACTORY_LEN));
+    assert_eq!(
+        rig.serial.read_back(PORT, APP_OFFSET, 0x1000),
+        app_image("helixscreen_esp32", "v1.1.0-beta.10")
+    );
+    // One open to read the board, one to flash it: never a polling loop.
+    assert_eq!(rig.serial.connects(), vec![PORT, PORT]);
+    assert_eq!(rig.serial.resets(), 2);
+    match t.prompts.last() {
+        Some(Prompt::Info { text, .. }) => assert!(text.contains("Set Up WiFi"), "{text}"),
+        other => panic!("expected the setup screen, got {other:?}"),
+    }
+    assert_eq!(r.state().facts["helix_version"], json!("v1.1.0-beta.10"));
+}
+
+#[tokio::test]
+async fn an_older_helixscreen_switches_to_the_update_and_ends_on_the_new_version() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(r.state().recipe_id, "ktouch_update");
+    assert!(t.prompts.is_empty(), "{:?}", t.prompts);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+    assert_eq!(r.state().facts["helix_version"], json!("v1.1.0-beta.10"));
+    assert_eq!(r.state().done_note, None);
+}
+
+#[tokio::test]
+async fn an_up_to_date_panel_is_not_written() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.10");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert!(rig.serial.writes().is_empty());
+    assert_eq!(rig.serial.connects().len(), 1);
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("up to date"), "{note}");
+}
+
+#[tokio::test]
+async fn a_newer_helixscreen_is_never_downgraded() {
+    let rig = Rig::new();
+    rig.running("v1.1.0");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert!(rig.serial.writes().is_empty());
+    assert!(r
+        .state()
+        .done_note
+        .clone()
+        .unwrap_or_default()
+        .contains("up to date"));
+}
+
+#[tokio::test]
+async fn a_board_that_is_not_an_esp32_s3_is_refused_before_anything_is_written() {
+    let rig = Rig::new();
+    rig.plug(
+        PORT,
+        ChipInfo {
+            chip: "esp32".into(),
+            flash_bytes: 16 * 1024 * 1024,
+            mac: Some(MAC.into()),
+        },
+    );
+    let mut r = rig.runner();
+    match drive(&mut r).await.end {
+        Event::Refused { doc, reason, .. } => {
+            assert_eq!(doc, DOC);
+            assert!(reason.contains("ESP32-S3"), "{reason}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_board_with_less_flash_is_refused() {
+    let rig = Rig::new();
+    rig.plug(
+        PORT,
+        ChipInfo {
+            chip: "esp32s3".into(),
+            flash_bytes: 8 * 1024 * 1024,
+            mac: Some(MAC.into()),
+        },
+    );
+    let mut r = rig.runner();
+    assert!(matches!(drive(&mut r).await.end, Event::Refused { .. }));
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_device_that_never_answers_as_a_bootloader_fails_without_a_write() {
+    let rig = Rig::new();
+    rig.serial.unplug(PORT);
+    rig.serial.plug_other(PORT, 0x1a86, 0x7522);
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(!committed);
+    assert!(reason.contains("did not answer"), "{reason}");
+    assert!(help.contains("plug it back in"), "{help}");
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_port_this_user_may_not_open_says_how_to_get_access() {
+    let rig = Rig::new();
+    rig.serial.deny(PORT, "uucp");
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(!committed);
+    assert!(reason.contains(PORT), "{reason}");
+    assert!(help.contains("unplug"), "{help}");
+    if cfg!(target_os = "linux") {
+        assert!(help.contains("sudo usermod -aG uucp $USER"), "{help}");
+    }
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_panel_unplugged_mid_flash_says_what_state_it_is_in_and_is_not_retried_blindly() {
+    let rig = Rig::new();
+    rig.serial.vanish_on_write(3);
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(reason.contains("while it was being written"), "{reason}");
+    assert!(help.contains("may not start"), "{help}");
+    assert!(help.contains("Try this step again"), "{help}");
+    let opened = rig.serial.connects().len();
+    assert_eq!(opened, 2);
+
+    // Plugged back in, it comes back under another name; Try again finds it by its USB id and
+    // checks it is the same board before writing it again.
+    rig.plug("/dev/ttyUSB1", s3(MAC));
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(
+        rig.serial.connects().last().map(String::as_str),
+        Some("/dev/ttyUSB1")
+    );
+    assert_eq!(
+        rig.serial.read_back("/dev/ttyUSB1", APP_OFFSET, 0x1000),
+        app_image("helixscreen_esp32", "v1.1.0-beta.10")
+    );
+}
+
+#[tokio::test]
+async fn a_different_board_plugged_in_after_a_failure_is_not_written() {
+    let rig = Rig::new();
+    rig.serial.vanish_on_write(1);
+    let mut r = rig.runner();
+    failure(&drive(&mut r).await.end);
+    rig.plug("/dev/ttyUSB1", s3("dc:da:0c:99:99:99"));
+    let before = rig.serial.writes().len();
+    let (committed, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(
+        reason.contains("not the BTT K-Touch the install started on"),
+        "{reason}"
+    );
+    assert_eq!(rig.serial.writes().len(), before);
+}
+
+#[tokio::test]
+async fn a_part_that_does_not_read_back_as_written_fails_the_flash() {
+    let rig = Rig::new();
+    rig.serial.corrupt_writes();
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(reason.contains("did not read back"), "{reason}");
+    assert!(!help.is_empty());
+    assert_eq!(rig.serial.writes().len(), 1);
+}
+
+#[tokio::test]
+async fn an_update_whose_version_cannot_be_read_back_says_to_check_the_screen() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    rig.serial.silent_boot();
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("restarted"), "{note}");
+    assert!(note.contains("check its screen"), "{note}");
+}
+
+#[tokio::test]
+async fn a_panel_that_boots_another_version_fails() {
+    let rig = Rig::new();
+    rig.publish(
+        "v1.1.0-beta.10",
+        &zip_with(
+            "v1.1.0-beta.10",
+            "v1.1.0-beta.10",
+            FLASH_ARGS.replace("0x20000", "0x6a0000").as_str(),
+        ),
+        None,
+    );
+    let mut r = rig.runner();
+    let (committed, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(
+        reason.contains("ktouch_stock") || reason.contains("2.1.0"),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn the_flash_reports_its_progress_while_it_writes() {
+    let rig = Rig::new();
+    let gate = rig.serial.hold_writes();
+    let mut r = rig.runner();
+    let mut fractions = Vec::new();
+    let mut input = None;
+    let end = loop {
+        match r.advance(input.take()).await {
+            Event::Progress { fraction, .. } => {
+                if let Some(f) = fraction {
+                    fractions.push(f);
+                }
+                gate.notify_one();
+            }
+            Event::NeedInput(_) => input = Some(Input::Next),
+            end => break end,
+        }
+    };
+    assert!(matches!(end, Event::Done), "{end:?}");
+    assert!(
+        fractions.iter().any(|f| *f > 0.0 && *f < 1.0),
+        "{fractions:?}"
+    );
+    assert!(fractions.windows(2).all(|w| w[0] <= w[1]), "{fractions:?}");
+}
+
+#[tokio::test]
+async fn a_zip_whose_app_is_not_its_release_is_not_written() {
+    let rig = Rig::new();
+    rig.publish(
+        "v1.1.0-beta.10",
+        &zip_with("v1.1.0-beta.10", "v1.1.0-beta.8", FLASH_ARGS),
+        None,
+    );
+    let mut r = rig.runner();
+    let (_, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(reason.contains("v1.1.0-beta.8"), "{reason}");
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_zip_that_does_not_match_its_github_digest_is_not_written() {
+    let rig = Rig::new();
+    rig.publish(
+        "v1.1.0-beta.10",
+        &release_zip("v1.1.0-beta.10"),
+        Some(&"0".repeat(64)),
+    );
+    let mut r = rig.runner();
+    let (_, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(reason.contains("hash"), "{reason}");
+    assert!(rig.serial.writes().is_empty());
+}

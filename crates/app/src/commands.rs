@@ -138,10 +138,20 @@ pub enum CandidateStatus {
     NoAnswer,
 }
 
+/// How the installer reaches a candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Connection {
+    Network,
+    /// A panel plugged into this computer; `address` is its serial port.
+    Usb,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CandidateView {
     pub key: String,
     pub address: String,
+    pub connection: Connection,
     pub name: String,
     pub photo: Option<String>,
     pub printer_id: Option<String>,
@@ -385,6 +395,11 @@ impl AppCore {
         let mut view = CandidateView {
             key: c.key.clone(),
             address: c.host.addr.clone(),
+            connection: if c.facts.contains_key("usb") {
+                Connection::Usb
+            } else {
+                Connection::Network
+            },
             name: reported_name(&c.facts).unwrap_or_else(|| c.host.addr.clone()),
             photo: None,
             printer_id: None,

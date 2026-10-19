@@ -6,6 +6,7 @@ use helix_installer_core::manifest::Manifest;
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::transport::drives_sys::{is_plain_file_name, is_system, SysDrives};
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -70,6 +71,7 @@ impl Rig {
             fetch: self.fetch.clone(),
             clock: Arc::new(FakeClock::new()),
             net: Arc::new(FakeNet::new()),
+            serial: Arc::new(FakeSerial::new()),
         }
     }
 

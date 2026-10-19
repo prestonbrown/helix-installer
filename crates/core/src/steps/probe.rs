@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `probe`: read facts from Moonraker or an SSH command on the run's host.
+//! `probe`: read facts from Moonraker, an SSH command or a port on the run's host, or from the
+//! board on the run's USB port.
 
 use super::{StepCtx, StepOutcome};
 use crate::facts::Facts;
-use crate::manifest::{MoonrakerProbe, Probe};
+use crate::manifest::{MoonrakerProbe, Probe, SerialProbe};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ const TCP_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub async fn run(ctx: &mut StepCtx<'_>, probe: &Probe) -> StepOutcome {
     let found = match gather(ctx, probe).await {
         Ok(f) => f,
-        Err(reason) => return StepOutcome::failed(reason),
+        Err(stop) => return stop,
     };
     match ctx.record_probe(found) {
         Ok(()) => StepOutcome::Done,
@@ -22,7 +23,7 @@ pub async fn run(ctx: &mut StepCtx<'_>, probe: &Probe) -> StepOutcome {
     }
 }
 
-async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
+async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, StepOutcome> {
     match probe {
         Probe::Moonraker { moonraker } => {
             let (mr, host) = (&ctx.env.moonraker, ctx.host);
@@ -34,25 +35,29 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
             };
             answer
                 .map(|v| moonraker_facts(*moonraker, &v))
-                .map_err(|e| format!("Moonraker did not answer: {e}"))
+                .map_err(|e| StepOutcome::failed(format!("Moonraker did not answer: {e}")))
         }
         Probe::Ssh { ssh, fact } => {
             let session = match ctx.ssh().await {
                 Ok(s) => s,
-                Err(e) => return Err(format!("could not log in over SSH: {e}")),
+                Err(e) => {
+                    return Err(StepOutcome::failed(format!(
+                        "could not log in over SSH: {e}"
+                    )))
+                }
             };
             match session.exec(ssh, None, SSH_PROBE_TIMEOUT).await {
                 Ok(out) if out.exit == 0 => {
                     Ok(Facts::from([(fact.clone(), ssh_fact(out.stdout.trim()))]))
                 }
-                Ok(out) => Err(format!(
+                Ok(out) => Err(StepOutcome::failed(format!(
                     "{ssh} exited with {}: {}",
                     out.exit,
                     out.stderr.trim()
-                )),
+                ))),
                 Err(e) => {
                     ctx.drop_ssh();
-                    Err(format!("{ssh} did not run: {e}"))
+                    Err(StepOutcome::failed(format!("{ssh} did not run: {e}")))
                 }
             }
         }
@@ -65,6 +70,9 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, String> {
                 .is_ok();
             Ok(Facts::from([(fact.clone(), Value::Bool(open))]))
         }
+        Probe::Serial {
+            serial: SerialProbe::Esp32,
+        } => super::esp32::probe(ctx).await,
     }
 }
 

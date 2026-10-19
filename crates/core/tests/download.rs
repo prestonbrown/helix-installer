@@ -2,6 +2,7 @@
 
 use helix_installer_core::manifest::Artifact;
 use helix_installer_core::steps::download::{fetch_artifact, DownloadError};
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -26,6 +27,7 @@ fn env_with(fetch: Arc<FakeFetch>) -> Env {
         fetch,
         clock: Arc::new(FakeClock::new()),
         net: Arc::new(FakeNet::new()),
+        serial: Arc::new(FakeSerial::new()),
     }
 }
 

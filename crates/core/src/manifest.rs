@@ -346,12 +346,22 @@ pub enum MoonrakerProbe {
     ObjectsList,
 }
 
+/// What a `serial` probe reads from a board on the run's USB port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialProbe {
+    /// The ESP32's chip, flash size and MAC from its bootloader, and the app it runs from that
+    /// app's descriptor (`steps::esp32::probe_facts`).
+    Esp32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Probe {
     Moonraker { moonraker: MoonrakerProbe },
     Ssh { ssh: String, fact: String },
     TcpPort { tcp_port: u16, fact: String },
+    Serial { serial: SerialProbe },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -430,8 +440,8 @@ pub enum Step {
         #[serde(default)]
         commits: bool,
     },
-    /// Exactly one of `moonraker`, `ssh` (with `fact`) or `tcp_port` (with `fact`); `Step::probe`
-    /// returns it as a `Probe`, and `verify_and_parse` rejects any other combination.
+    /// Exactly one of `moonraker`, `ssh` (with `fact`), `tcp_port` (with `fact`) or `serial`;
+    /// `Step::probe` returns it as a `Probe`, and `verify_and_parse` rejects any other combination.
     Probe {
         #[serde(default)]
         moonraker: Option<MoonrakerProbe>,
@@ -439,6 +449,8 @@ pub enum Step {
         ssh: Option<String>,
         #[serde(default)]
         tcp_port: Option<u16>,
+        #[serde(default)]
+        serial: Option<SerialProbe>,
         #[serde(default)]
         fact: Option<String>,
         #[serde(default)]
@@ -524,6 +536,27 @@ pub enum Step {
         #[serde(default)]
         commits: bool,
     },
+    /// Writes the HelixScreen release's build for an ESP32 panel to the board on the run's USB
+    /// port: only the parts the build's `flash_args` lists, each checked by reading it back,
+    /// then resets the board and reads the version it boots.
+    SerialFlash {
+        /// The GitHub release asset holding the build, `{tag}` standing for the release tag.
+        asset: String,
+        /// The chip the board must report, as espflash names it (`esp32s3`).
+        chip: String,
+        /// The flash size the board must report, in MiB.
+        flash_mb: u32,
+        /// Labels of partitions no part may overlap: the board's own WiFi and settings.
+        #[serde(default)]
+        keep: Vec<String>,
+        #[serde(default)]
+        channel: Option<Channel>,
+        /// Installs only a release newer than the HelixScreen the board runs.
+        #[serde(default)]
+        update: bool,
+        #[serde(default)]
+        commits: bool,
+    },
 }
 
 impl Step {
@@ -543,6 +576,7 @@ impl Step {
             Step::MoonrakerGcode { .. } => "moonraker_gcode",
             Step::MoonrakerUpdate { .. } => "moonraker_update",
             Step::HelixInstall { .. } => "helix_install",
+            Step::SerialFlash { .. } => "serial_flash",
         }
     }
 
@@ -566,6 +600,7 @@ impl Step {
                 | Step::HelixInstall { .. }
                 | Step::MoonrakerGcode { .. }
                 | Step::MoonrakerUpdate { .. }
+                | Step::SerialFlash { .. }
         )
     }
 
@@ -584,7 +619,8 @@ impl Step {
             | Step::SshRun { commits, .. }
             | Step::MoonrakerGcode { commits, .. }
             | Step::MoonrakerUpdate { commits, .. }
-            | Step::HelixInstall { commits, .. } => *commits,
+            | Step::HelixInstall { commits, .. }
+            | Step::SerialFlash { commits, .. } => *commits,
         }
     }
 
@@ -599,6 +635,9 @@ impl Step {
                 uninstall: true,
                 ..
             } => Some("helix_install cannot be a dry run of an uninstall"),
+            Step::SerialFlash { chip, flash_mb, .. } if chip.is_empty() || *flash_mb == 0 => {
+                Some("serial_flash needs a chip and a flash_mb")
+            }
             _ => None,
         }
     }
@@ -610,6 +649,7 @@ impl Step {
                 moonraker: Some(m),
                 ssh: None,
                 tcp_port: None,
+                serial: None,
                 fact: None,
                 ..
             } => Some(Probe::Moonraker { moonraker: *m }),
@@ -617,6 +657,7 @@ impl Step {
                 moonraker: None,
                 ssh: Some(ssh),
                 tcp_port: None,
+                serial: None,
                 fact: Some(fact),
                 ..
             } => Some(Probe::Ssh {
@@ -627,12 +668,21 @@ impl Step {
                 moonraker: None,
                 ssh: None,
                 tcp_port: Some(port),
+                serial: None,
                 fact: Some(fact),
                 ..
             } => Some(Probe::TcpPort {
                 tcp_port: *port,
                 fact: fact.clone(),
             }),
+            Step::Probe {
+                moonraker: None,
+                ssh: None,
+                tcp_port: None,
+                serial: Some(serial),
+                fact: None,
+                ..
+            } => Some(Probe::Serial { serial: *serial }),
             _ => None,
         }
     }
@@ -672,7 +722,7 @@ pub fn verify_and_parse(
         for (i, step) in steps.iter().enumerate() {
             if matches!(step, Step::Probe { .. }) && step.probe().is_none() {
                 return Err(ManifestError::Malformed(format!(
-                    "recipe {name} step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"
+                    "recipe {name} step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact, serial"
                 )));
             }
             if let Some(problem) = step.shape_error() {

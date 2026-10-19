@@ -50,6 +50,7 @@ const found: CandidateView[] = [
   {
     key: "SN-K1",
     address: "192.168.1.50",
+    connection: "network",
     name: "Creality K1",
     photo: printers[0].photo,
     printer_id: "k1",
@@ -63,6 +64,7 @@ const found: CandidateView[] = [
   {
     key: "SN-Q2",
     address: "192.168.1.61",
+    connection: "network",
     name: "QIDI Q2",
     photo: printers[4].photo,
     printer_id: "q2",
@@ -76,6 +78,7 @@ const found: CandidateView[] = [
   {
     key: "192.168.1.77",
     address: "192.168.1.77",
+    connection: "network",
     name: "Ender-3 V3",
     photo: null,
     printer_id: null,
@@ -85,6 +88,20 @@ const found: CandidateView[] = [
     choices: [],
     doc: "https://helixscreen.org/docs/install",
     reason: "printer not recognised",
+  },
+  {
+    key: "/dev/ttyUSB0",
+    address: "/dev/ttyUSB0",
+    connection: "usb",
+    name: "BTT K-Touch",
+    photo: null,
+    printer_id: "ktouch",
+    status: "ready",
+    answered: true,
+    helix_version: null,
+    choices: [],
+    doc: null,
+    reason: null,
   },
 ];
 

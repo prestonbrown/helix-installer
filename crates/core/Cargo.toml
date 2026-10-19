@@ -19,6 +19,10 @@ if-addrs = "0.15.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["disk"] }
+espflash = { version = "=4.5.0", default-features = false, features = ["serialport"] }
+serialport = { version = "4.7", default-features = false }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
+md-5 = "0.11"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

@@ -582,3 +582,61 @@ fn a_manifest_login_carries_no_typed_secret() {
     ]);
     only(v, "sudo_password");
 }
+
+fn flash_step(extra: Value) -> Value {
+    let mut s = json!({
+        "type": "serial_flash", "asset": "panel-{tag}.zip", "chip": "esp32s3", "flash_mb": 16,
+        "keep": ["nvs"], "commits": true
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        s[k] = v.clone();
+    }
+    s
+}
+
+fn with_install(steps: Value) -> Value {
+    let mut v = base();
+    v["recipes"]["install"] = steps;
+    v
+}
+
+#[test]
+fn a_usb_flash_may_end_with_the_flash_or_an_info_after_it() {
+    let probe = json!({"type": "probe", "serial": "esp32"});
+    assert_eq!(
+        run(with_install(json!([probe, flash_step(json!({}))])), false),
+        vec![]
+    );
+    let info = json!({"type": "info", "text": "set it up on its screen"});
+    assert_eq!(
+        run(
+            with_install(json!([probe, flash_step(json!({})), info])),
+            false
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn an_info_with_no_flash_before_it_still_does_not_end_an_install() {
+    only(
+        with_install(json!([{"type": "info", "text": "done?"}])),
+        "wait_for helix_service",
+    );
+}
+
+#[test]
+fn a_usb_flash_changes_the_panel_so_it_needs_the_commit() {
+    only(
+        with_install(json!([flash_step(json!({"commits": false}))])),
+        "no step has commits",
+    );
+}
+
+#[test]
+fn a_usb_flash_needs_a_chip_and_its_flash_size() {
+    only(
+        with_install(json!([flash_step(json!({"flash_mb": 0}))])),
+        "chip and a flash_mb",
+    );
+}

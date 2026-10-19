@@ -10,6 +10,7 @@ pub mod fake;
 pub mod fetch_http;
 pub mod moonraker_http;
 pub mod net_tcp;
+pub mod serial_espflash;
 pub mod ssh_russh;
 
 use crate::manifest::Login;
@@ -34,6 +35,13 @@ pub enum TransportError {
     Protocol(String),
     #[error("I/O error: {0}")]
     Io(String),
+    /// The OS refused this user the device; the payload is the group that owns it, empty when
+    /// unknown.
+    #[error("permission denied")]
+    PermissionDenied(String),
+    /// The device went away: unplugged, or its USB connection dropped.
+    #[error("the device disconnected")]
+    Disconnected,
 }
 
 pub type Result<T> = std::result::Result<T, TransportError>;
@@ -157,6 +165,55 @@ pub trait Drives: Send + Sync {
     async fn eject(&self, drive: &Drive) -> Result<()>;
 }
 
+/// A USB serial port as the OS lists it, read without opening it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsbPort {
+    /// What the port is opened by: `/dev/ttyUSB0`, `/dev/cu.usbserial-110`, `COM3`.
+    pub name: String,
+    pub vid: u16,
+    pub pid: u16,
+}
+
+/// What an ESP32's ROM bootloader reports about its chip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipInfo {
+    /// The chip as espflash names it, lowercase: `esp32s3`.
+    pub chip: String,
+    pub flash_bytes: u64,
+    /// The factory MAC address, `aa:bb:cc:dd:ee:ff`, when the chip gives it.
+    pub mac: Option<String>,
+}
+
+#[async_trait]
+pub trait Serial: Send + Sync {
+    /// The USB serial ports present now. Lists them without opening any: opening an ESP32
+    /// board's port resets it.
+    fn usb_ports(&self) -> Result<Vec<UsbPort>>;
+    /// Opens `port`, which resets the board into its ROM bootloader, and connects to it.
+    async fn connect(&self, port: &str) -> Result<Box<dyn FlashSession>>;
+}
+
+/// One open connection to an ESP32's bootloader. Every open of the port resets the board, so a
+/// step opens one session and does all its work through it.
+#[async_trait]
+pub trait FlashSession: Send {
+    fn chip(&self) -> &ChipInfo;
+    async fn read(&mut self, offset: u32, len: u32) -> Result<Vec<u8>>;
+    /// Writes `data` at `offset` (erasing only the sectors it covers); `progress` gets the bytes
+    /// of `data` written so far.
+    async fn write(
+        &mut self,
+        offset: u32,
+        data: &[u8],
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<()>;
+    /// The MD5 of `len` bytes at `offset` as the chip reads them back from its flash.
+    async fn md5(&mut self, offset: u32, len: u32) -> Result<[u8; 16]>;
+    /// Hard-resets the board so it boots its app, then reads its console until a line holding
+    /// `until` arrives or `listen` passes, and closes the port. Returns what it read.
+    async fn reset(self: Box<Self>, until: &str, listen: Duration) -> Result<String>;
+}
+
 #[async_trait]
 pub trait Fetch: Send + Sync {
     /// `progress` receives (bytes so far, total when known).
@@ -205,4 +262,5 @@ pub struct Env {
     pub fetch: Arc<dyn Fetch>,
     pub clock: Arc<dyn Clock>,
     pub net: Arc<dyn Net>,
+    pub serial: Arc<dyn Serial>,
 }

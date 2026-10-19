@@ -6,6 +6,7 @@
 pub mod flashforge;
 pub mod mdns;
 pub mod sweep;
+pub mod usb;
 
 use crate::facts::Facts;
 use crate::manifest::MoonrakerProbe;
@@ -147,7 +148,7 @@ async fn candidate_for(env: &Env, host: Host) -> Option<Candidate> {
 }
 
 /// Looks for printers for `timeout`: mDNS, a sweep of the local /24s and FlashForge UDP run
-/// together, and what they find is merged by `Candidate::key`.
+/// together, and what they find is merged by `Candidate::key`; panels on USB follow.
 pub async fn discover(env: &Env, timeout: Duration) -> Vec<Candidate> {
     let own = sweep::local_private_ifaces();
     let (announced, swept, flashforge) = tokio::join!(
@@ -168,5 +169,7 @@ pub async fn discover(env: &Env, timeout: Duration) -> Vec<Candidate> {
     let udp = flashforge
         .into_iter()
         .map(|(host, facts)| Candidate::new(host, facts));
-    merge(probed.chain(udp).collect())
+    let mut found = merge(probed.chain(udp).collect());
+    found.extend(usb::scan(env.serial.as_ref()));
+    found
 }

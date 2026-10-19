@@ -6,7 +6,7 @@
   import { ApiError } from "../lib/api";
   import Copyable from "../lib/Copyable.svelte";
   import { openGuide } from "../lib/open";
-  import { isUrl, stepLabel, stoppedState } from "../lib/text";
+  import { isUrl, keepOnLabel, retryAdvice, stepLabel, stoppedState } from "../lib/text";
   import type { RunEvent, RunInfo } from "../lib/types";
 
   let {
@@ -47,7 +47,7 @@
 <section class="card body">
   <header class="head">
     <h1>Your {run.printer_name} is part-way through the install</h1>
-    <span class="keep-on" role="status">Do not turn off your printer</span>
+    <span class="keep-on" role="status">{keepOnLabel(run.step_kind)}</span>
   </header>
 
   <p>
@@ -56,10 +56,10 @@
     )}. {stoppedState(run.step_kind)}
   </p>
   <p>
-    Leave the printer switched on and connected to your network, then choose <strong>Try this step again</strong>.
+    {retryAdvice(run.step_kind)}, then choose <strong>Try this step again</strong>.
     If it stops again, follow the recovery guide for your printer.
   </p>
-  {#if event.help && !isUrl(event.help)}<p class="muted">{event.help}</p>{/if}
+  {#if event.help && !isUrl(event.help)}<p class="muted help-text">{event.help}</p>{/if}
 
   <div class="actions">
     <button class="primary" disabled={busy} onclick={onretry}>Try this step again</button>
@@ -134,5 +134,9 @@
   .small {
     font-size: 0.85rem;
     margin-top: 1rem;
+  }
+  /* Help can hold a command on its own line. */
+  .help-text {
+    white-space: pre-line;
   }
 </style>

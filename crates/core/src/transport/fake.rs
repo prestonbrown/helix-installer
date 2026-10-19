@@ -651,3 +651,256 @@ impl Net for FakeNet {
             .ok_or(TransportError::Unreachable)
     }
 }
+
+struct Board {
+    chip: ChipInfo,
+    /// Writes in order; a later one wins where they overlap. Unwritten flash reads 0xFF.
+    flash: Vec<(u32, Vec<u8>)>,
+}
+
+impl Board {
+    fn read(&self, offset: u32, len: u32) -> Vec<u8> {
+        let (start, end) = (offset as u64, offset as u64 + len as u64);
+        let mut out = vec![0xFF; len as usize];
+        for (at, bytes) in &self.flash {
+            let (a, b) = (*at as u64, *at as u64 + bytes.len() as u64);
+            let (lo, hi) = (start.max(a), end.min(b));
+            if lo < hi {
+                out[(lo - start) as usize..(hi - start) as usize]
+                    .copy_from_slice(&bytes[(lo - a) as usize..(hi - a) as usize]);
+            }
+        }
+        out
+    }
+}
+
+#[derive(Default)]
+struct SerialState {
+    ports: Vec<UsbPort>,
+    boards: HashMap<String, Board>,
+    denied: HashMap<String, String>,
+    connects: Vec<String>,
+    writes: Vec<(String, u32, usize)>,
+    resets: u32,
+    vanish_on_write: Option<u32>,
+    corrupt_writes: bool,
+    silent_boot: bool,
+    hold: Option<std::sync::Arc<tokio::sync::Notify>>,
+}
+
+/// USB serial ports with scriptable ESP32 boards behind them. Shared by every session it hands
+/// out, so what one session writes the next one reads.
+#[derive(Clone, Default)]
+pub struct FakeSerial {
+    state: std::sync::Arc<Mutex<SerialState>>,
+}
+
+/// The line an ESP-IDF app prints at boot naming its version.
+pub const FAKE_BOOT_VERSION_LINE: &str = "I (312) app_init: App version:      ";
+
+impl FakeSerial {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// A board with `chip` behind a port with this USB id.
+    pub fn plug(&self, port: &str, vid: u16, pid: u16, chip: ChipInfo) {
+        let mut st = lock(&self.state);
+        st.ports.retain(|p| p.name != port);
+        st.ports.push(UsbPort {
+            name: port.into(),
+            vid,
+            pid,
+        });
+        st.boards.insert(
+            port.into(),
+            Board {
+                chip,
+                flash: Vec::new(),
+            },
+        );
+    }
+    /// A port whose device never answers as an ESP32 bootloader.
+    pub fn plug_other(&self, port: &str, vid: u16, pid: u16) {
+        let mut st = lock(&self.state);
+        st.ports.push(UsbPort {
+            name: port.into(),
+            vid,
+            pid,
+        });
+    }
+    pub fn unplug(&self, port: &str) {
+        let mut st = lock(&self.state);
+        st.ports.retain(|p| p.name != port);
+        st.boards.remove(port);
+    }
+    /// Puts `bytes` in the board's flash at `offset`, as if flashed before the test.
+    pub fn preload(&self, port: &str, offset: u32, bytes: Vec<u8>) {
+        if let Some(b) = lock(&self.state).boards.get_mut(port) {
+            b.flash.push((offset, bytes));
+        }
+    }
+    pub fn read_back(&self, port: &str, offset: u32, len: u32) -> Vec<u8> {
+        lock(&self.state)
+            .boards
+            .get(port)
+            .map(|b| b.read(offset, len))
+            .unwrap_or_default()
+    }
+    /// Opening `port` is refused as the OS refuses a user outside the device's `group`.
+    pub fn deny(&self, port: &str, group: &str) {
+        lock(&self.state).denied.insert(port.into(), group.into());
+    }
+    /// The `n`-th write (1-based) from now writes half its bytes, then the board is unplugged.
+    pub fn vanish_on_write(&self, n: u32) {
+        lock(&self.state).vanish_on_write = Some(n);
+    }
+    /// Every write lands with its first byte flipped, so it never reads back as sent.
+    pub fn corrupt_writes(&self) {
+        lock(&self.state).corrupt_writes = true;
+    }
+    /// The board prints nothing after a reset.
+    pub fn silent_boot(&self) {
+        lock(&self.state).silent_boot = true;
+    }
+    /// From now on every write reports half its bytes, then waits until the returned `Notify`
+    /// is notified once for it.
+    pub fn hold_writes(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        let n = std::sync::Arc::new(tokio::sync::Notify::new());
+        lock(&self.state).hold = Some(n.clone());
+        n
+    }
+    /// Every port `connect` was asked to open, in order, opened or not.
+    pub fn connects(&self) -> Vec<String> {
+        lock(&self.state).connects.clone()
+    }
+    /// (port, offset, length) of every write that completed or was cut off.
+    pub fn writes(&self) -> Vec<(String, u32, usize)> {
+        lock(&self.state).writes.clone()
+    }
+    pub fn resets(&self) -> u32 {
+        lock(&self.state).resets
+    }
+}
+
+#[async_trait]
+impl Serial for FakeSerial {
+    fn usb_ports(&self) -> Result<Vec<UsbPort>> {
+        Ok(lock(&self.state).ports.clone())
+    }
+    async fn connect(&self, port: &str) -> Result<Box<dyn FlashSession>> {
+        let mut st = lock(&self.state);
+        st.connects.push(port.into());
+        if let Some(group) = st.denied.get(port) {
+            return Err(TransportError::PermissionDenied(group.clone()));
+        }
+        if !st.ports.iter().any(|p| p.name == port) {
+            return Err(TransportError::Disconnected);
+        }
+        let Some(board) = st.boards.get(port) else {
+            return Err(TransportError::Timeout);
+        };
+        Ok(Box::new(FakeFlashSession {
+            state: self.state.clone(),
+            port: port.into(),
+            chip: board.chip.clone(),
+        }))
+    }
+}
+
+struct FakeFlashSession {
+    state: std::sync::Arc<Mutex<SerialState>>,
+    port: String,
+    chip: ChipInfo,
+}
+
+impl FakeFlashSession {
+    fn board<T>(&self, f: impl FnOnce(&mut Board) -> T) -> Result<T> {
+        lock(&self.state)
+            .boards
+            .get_mut(&self.port)
+            .map(f)
+            .ok_or(TransportError::Disconnected)
+    }
+}
+
+#[async_trait]
+impl FlashSession for FakeFlashSession {
+    fn chip(&self) -> &ChipInfo {
+        &self.chip
+    }
+    async fn read(&mut self, offset: u32, len: u32) -> Result<Vec<u8>> {
+        self.board(|b| b.read(offset, len))
+    }
+    async fn write(
+        &mut self,
+        offset: u32,
+        data: &[u8],
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<()> {
+        self.board(|_| ())?;
+        let half = data.len() / 2;
+        let (vanish, hold, corrupt) = {
+            let mut st = lock(&self.state);
+            st.writes.push((self.port.clone(), offset, data.len()));
+            let vanish = match st.vanish_on_write.as_mut() {
+                Some(n) if *n <= 1 => {
+                    st.vanish_on_write = None;
+                    true
+                }
+                Some(n) => {
+                    *n -= 1;
+                    false
+                }
+                None => false,
+            };
+            (vanish, st.hold.clone(), st.corrupt_writes)
+        };
+        progress(half as u64);
+        if vanish {
+            self.board(|b| b.flash.push((offset, data[..half].to_vec())))?;
+            let port = self.port.clone();
+            let mut st = lock(&self.state);
+            st.ports.retain(|p| p.name != port);
+            st.boards.remove(&port);
+            return Err(TransportError::Disconnected);
+        }
+        if let Some(n) = hold {
+            n.notified().await;
+        }
+        let mut bytes = data.to_vec();
+        if corrupt {
+            if let Some(b) = bytes.first_mut() {
+                *b ^= 0xFF;
+            }
+        }
+        self.board(|b| b.flash.push((offset, bytes)))?;
+        progress(data.len() as u64);
+        Ok(())
+    }
+    async fn md5(&mut self, offset: u32, len: u32) -> Result<[u8; 16]> {
+        use md5::Digest;
+        let bytes = self.board(|b| b.read(offset, len))?;
+        Ok(md5::Md5::digest(&bytes).into())
+    }
+    async fn reset(self: Box<Self>, _until: &str, _listen: Duration) -> Result<String> {
+        let app = self.board(|b| b.read(0x20000, 0x120))?;
+        let mut st = lock(&self.state);
+        st.resets += 1;
+        if st.silent_boot {
+            return Ok(String::new());
+        }
+        // The app's own descriptor: magic 0xABCD5432 at 0x20, its version at 0x30.
+        let valid = app.get(0x20..0x24) == Some(&[0x32, 0x54, 0xcd, 0xab][..]);
+        if !valid {
+            return Ok("rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)\ninvalid header\n".into());
+        }
+        let version: String = app[0x30..0x50]
+            .iter()
+            .take_while(|b| **b != 0)
+            .map(|b| *b as char)
+            .collect();
+        Ok(format!(
+            "rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)\n{FAKE_BOOT_VERSION_LINE}{version}\n"
+        ))
+    }
+}

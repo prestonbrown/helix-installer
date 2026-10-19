@@ -16,9 +16,13 @@ export interface PrinterView {
 
 export type CandidateStatus = "ready" | "choose" | "unsupported" | "no_answer";
 
+/** How the installer reaches a candidate; a USB one's `address` is its serial port. */
+export type Connection = "network" | "usb";
+
 export interface CandidateView {
   key: string;
   address: string;
+  connection: Connection;
   name: string;
   photo: string | null;
   printer_id: string | null;

@@ -6,6 +6,7 @@ use helix_installer_core::manifest::{Login, Manifest, Step};
 use helix_installer_core::run_state::{recipe_sha256, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -45,6 +46,7 @@ impl Fakes {
             fetch: self.fetch.clone(),
             clock: self.clock.clone(),
             net: self.net.clone(),
+            serial: Arc::new(FakeSerial::new()),
         }
     }
 }

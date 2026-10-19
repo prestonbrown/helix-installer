@@ -8,29 +8,20 @@
 use super::download::fetch_artifact;
 use super::job::{self, Followed};
 use super::progress::{parse_progress_line, ProgressEvent, StepStatus};
+use super::release::{self, safe_name, ReleaseManifest};
 use super::sudo::{self, SudoPlan};
 use super::{StepCtx, StepOutcome};
 use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, Channel, PlatformSel, Step};
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
-use crate::transport::{Env, RemoteJob, SshSession, TransportError};
+use crate::transport::{RemoteJob, SshSession, TransportError};
 use crate::version::ReleaseVersion;
-use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const RELEASES_BASE: &str = "https://releases.helixscreen.org";
+pub use super::release::{releases_manifest_url, GITHUB_RELEASE_API};
 
-/// The release list of `channel`: `assets.<platform>` = `{url, sha256, size}` plus the `tag`.
-pub fn releases_manifest_url(channel: Channel) -> String {
-    format!("{RELEASES_BASE}/{}/manifest.json", channel.as_str())
-}
-
-/// `install.sh` is published only as a GitHub release asset; `/<tag>` follows.
-pub const GITHUB_RELEASE_API: &str =
-    "https://api.github.com/repos/prestonbrown/helixscreen/releases/tags";
 /// How long install.sh may print nothing before the install counts as hung. Extracting the
 /// release onto a MIPS printer's slow flash takes minutes without a line of output.
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
@@ -80,45 +71,6 @@ impl Run {
     }
 }
 
-#[derive(Deserialize)]
-struct ReleaseManifest {
-    #[serde(default)]
-    version: Option<String>,
-    tag: String,
-    assets: BTreeMap<String, ReleaseAsset>,
-}
-
-impl ReleaseManifest {
-    /// The release's version, from `version` or else its tag.
-    fn release_version(&self) -> Result<ReleaseVersion, StepOutcome> {
-        let text = self.version.as_deref().unwrap_or(&self.tag);
-        ReleaseVersion::parse(text).ok_or_else(|| {
-            StepOutcome::failed(format!(
-                "the release list names an unreadable version: {text}"
-            ))
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct ReleaseAsset {
-    url: String,
-    sha256: String,
-}
-
-#[derive(Deserialize)]
-struct GithubRelease {
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-    #[serde(default)]
-    digest: Option<String>,
-}
-
 /// `channel` is the recipe's pin, if any. An update with no pin, and no run-wide override,
 /// follows the installed version: a prerelease reads the beta channel, else stable.
 pub async fn run(
@@ -156,14 +108,7 @@ pub async fn run(
     // reaches the stable release once it is out; a stable install only ever reads stable.
     let (channels, installed) = match run.mode {
         Mode::Update => match installed_version(ctx).await {
-            Ok(v) => {
-                let channels = match pinned {
-                    Some(c) => vec![c],
-                    None if v.is_prerelease() => vec![Channel::Beta, Channel::Stable],
-                    None => vec![Channel::Stable],
-                };
-                (channels, Some(v))
-            }
+            Ok(v) => (release::update_channels(pinned, &v), Some(v)),
             Err(stop) => return stop,
         },
         Mode::Install | Mode::Uninstall => (vec![pinned.unwrap_or_default()], None),
@@ -214,15 +159,6 @@ fn resolve_platform(ctx: &StepCtx<'_>, sel: &PlatformSel) -> Result<String, Step
             }
         }
     }
-}
-
-/// A name from a network response that becomes a path on the printer: one plain file name.
-fn safe_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('.')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
 /// The installed HelixScreen's version, read on the printer over SSH (release_info.json, else the
@@ -287,26 +223,11 @@ async fn launch(
 ) -> Result<RemoteJob, StepOutcome> {
     let platform = target.platform;
     let mode = run.mode;
-    let mut newest: Option<(ReleaseManifest, ReleaseVersion)> = None;
-    for &channel in target.channels {
-        let list_url = releases_manifest_url(channel);
-        let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
-        let version = release.release_version()?;
-        if newest.as_ref().is_none_or(|(_, best)| version > *best) {
-            newest = Some((release, version));
-        }
-    }
-    let Some((release, offered)) = newest else {
-        return Err(StepOutcome::failed("no release channel to read"));
-    };
+    let (release, offered) = release::newest(ctx.env, target.channels).await?;
     if let Some(installed) = target.installed {
         if offered <= *installed {
-            let channels: Vec<&str> = target.channels.iter().map(|c| c.as_str()).collect();
             return Err(StepOutcome::Complete {
-                note: format!(
-                    "HelixScreen is up to date: {installed} is installed, and the newest {} release is {offered}",
-                    channels.join(" or ")
-                ),
+                note: release::up_to_date_note(installed, target.channels, &offered),
             });
         }
     }
@@ -320,7 +241,7 @@ async fn launch(
         Mode::Uninstall => None,
         Mode::Install | Mode::Update => Some(release_tarball(&release, platform)?),
     };
-    let script = install_sh_artifact(ctx.env, &release.tag).await?;
+    let script = release::github_asset(ctx.env, &release.tag, "install.sh").await?;
 
     let tarball_local = match &tarball {
         Some(t) => {
@@ -519,52 +440,6 @@ async fn sudo_password(ctx: &mut StepCtx<'_>) -> Result<Option<String>, StepOutc
         SudoPlan::AsLoginUser => Ok(None),
         SudoPlan::WithPassword(pw) => Ok(Some(pw)),
     }
-}
-
-/// Takes the `Env` rather than the `StepCtx`: a shared borrow of the context held across an
-/// await would make the runner's future not `Send`.
-async fn fetch_json<T: for<'de> Deserialize<'de>>(
-    env: &Env,
-    url: &str,
-    what: &str,
-) -> Result<T, StepOutcome> {
-    let text = env
-        .fetch
-        .get_text(url)
-        .await
-        .map_err(|e| StepOutcome::failed(format!("could not fetch {what}: {e}")))?;
-    serde_json::from_str(&text)
-        .map_err(|e| StepOutcome::failed(format!("{what} is unreadable: {e}")))
-}
-
-/// `install.sh` from the GitHub release `tag`, checked against the asset's `digest`.
-async fn install_sh_artifact(env: &Env, tag: &str) -> Result<Artifact, StepOutcome> {
-    if !safe_name(tag) {
-        return Err(StepOutcome::failed(format!(
-            "the release list names an unusable tag: {tag}"
-        )));
-    }
-    let url = format!("{GITHUB_RELEASE_API}/{tag}");
-    let release: GithubRelease = fetch_json(env, &url, "the GitHub release").await?;
-    let Some(asset) = release.assets.into_iter().find(|a| a.name == "install.sh") else {
-        return Err(StepOutcome::failed(format!(
-            "the GitHub release {tag} has no install.sh"
-        )));
-    };
-    let Some(sha256) = asset
-        .digest
-        .as_deref()
-        .and_then(|d| d.strip_prefix("sha256:"))
-    else {
-        return Err(StepOutcome::failed(format!(
-            "install.sh in the GitHub release {tag} has no sha256 digest"
-        )));
-    };
-    Ok(Artifact {
-        url: asset.browser_download_url,
-        sha256: sha256.to_string(),
-        filename: Some("install.sh".into()),
-    })
 }
 
 /// Kills the installer that named `found`, then removes the uploads; a job that could not be

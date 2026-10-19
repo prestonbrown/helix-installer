@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use helix_installer_core::manifest::Login;
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -250,6 +251,7 @@ fn env_bundles_fakes() {
         fetch: Arc::new(FakeFetch::new()),
         clock: Arc::new(FakeClock::new()),
         net: Arc::new(FakeNet::new()),
+        serial: Arc::new(FakeSerial::new()),
     };
 }
 

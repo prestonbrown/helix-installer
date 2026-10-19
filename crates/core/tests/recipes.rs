@@ -14,6 +14,7 @@ use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
     releases_manifest_url, GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE,
 };
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -152,6 +153,7 @@ impl Rig {
             fetch: self.fetch.clone(),
             clock: self.clock.clone(),
             net: self.net.clone(),
+            serial: Arc::new(FakeSerial::new()),
         }
     }
 
@@ -1538,14 +1540,22 @@ fn every_install_and_update_recipe_ends_by_seeing_helixscreen_run() {
         if restores.contains(&id.as_str()) {
             continue;
         }
+        // A panel flashed over USB is seen running by its serial_flash step, which reads the
+        // version it boots; an info step may follow it.
+        let flashed = steps
+            .iter()
+            .rev()
+            .find(|s| !matches!(s, Step::Info { .. }))
+            .is_some_and(|s| matches!(s, Step::SerialFlash { .. }));
         assert!(
-            matches!(
-                steps.last(),
-                Some(Step::WaitFor {
-                    target: WaitTarget::HelixService,
-                    ..
-                })
-            ),
+            flashed
+                || matches!(
+                    steps.last(),
+                    Some(Step::WaitFor {
+                        target: WaitTarget::HelixService,
+                        ..
+                    })
+                ),
             "{id} does not end by waiting for HelixScreen"
         );
     }

@@ -202,9 +202,25 @@ fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str,
 
 /// An install or update is done only once HelixScreen is seen running, so it ends waiting for
 /// it. A restore may end with the step that removes HelixScreen or puts the stock screen back.
+/// A panel flashed over USB is seen running by its `serial_flash` step, which reads the version
+/// it boots; an info step after it may tell the user what to do on the panel next.
+fn ends_done(steps: &[Step], is_restore: bool) -> bool {
+    match steps.last() {
+        Some(Step::Info { .. }) => steps
+            .iter()
+            .rev()
+            .skip(1)
+            .find(|s| !matches!(s, Step::Info { .. }))
+            .is_some_and(|s| matches!(s, Step::SerialFlash { .. })),
+        Some(last) => is_terminal(last, is_restore),
+        None => false,
+    }
+}
+
 fn is_terminal(s: &Step, is_restore: bool) -> bool {
     match s {
         Step::WaitFor { target, .. } => *target == WaitTarget::HelixService,
+        Step::SerialFlash { .. } => true,
         Step::HelixInstall { .. }
         | Step::MoonrakerUpdate { .. }
         | Step::Require { .. }
@@ -225,7 +241,8 @@ fn first_change(steps: &[Step]) -> Option<usize> {
         Step::SshRun { .. }
         | Step::MoonrakerGcode { .. }
         | Step::MoonrakerUpdate { .. }
-        | Step::HelixInstall { dry_run: false, .. } => true,
+        | Step::HelixInstall { dry_run: false, .. }
+        | Step::SerialFlash { .. } => true,
         Step::WriteStick { .. } => {
             stick_written = true;
             false
@@ -266,14 +283,14 @@ fn lint_recipe(
 ) {
     match steps.last() {
         None => err(id, "recipe has no steps".into()),
-        Some(last) if !is_terminal(last, is_restore) && is_restore => err(
+        Some(_) if !ends_done(steps, is_restore) && is_restore => err(
             id,
             "last step does not leave the run done or refused".into(),
         ),
-        Some(last) if !is_terminal(last, is_restore) => err(
+        Some(_) if !ends_done(steps, is_restore) => err(
             id,
-            "an install or update must end with a wait_for helix_service step, so it is done \
-             only once HelixScreen runs"
+            "an install or update must end with a wait_for helix_service step (or, for a panel \
+             flashed over USB, its serial_flash step), so it is done only once HelixScreen runs"
                 .into(),
         ),
         _ => {}
@@ -341,7 +358,7 @@ fn lint_recipe(
             }
             Step::Probe { .. } if s.probe().is_none() => err(
                 id,
-                format!("step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact"),
+                format!("step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact, serial"),
             ),
             _ => {}
         }

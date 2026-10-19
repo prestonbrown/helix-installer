@@ -9,7 +9,7 @@
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
   import { signInInput, sudoInput } from "../lib/login";
-  import { formatBytes, isUrl, keepPowerOn, stepLabel } from "../lib/text";
+  import { formatBytes, isUrl, keepPowerOn, keepPowerText, stepLabel } from "../lib/text";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
 
@@ -323,7 +323,7 @@
       </div>
       {#if keepPowerOn(run?.step_kind ?? null, run?.committed ?? false)}
         <div class="notice warn" role="status">
-          Do not turn off your printer. This can take several minutes.
+          {keepPowerText(run?.step_kind ?? null)}
         </div>
       {/if}
     </section>
@@ -370,7 +370,7 @@
       <h1>The install stopped</h1>
       <p class="lead">Nothing on your printer was changed.</p>
       <p class="muted">What happened: {sentence(ev.reason)}</p>
-      {#if ev.help && !isUrl(ev.help)}<p>{ev.help}</p>{/if}
+      {#if ev.help && !isUrl(ev.help)}<p class="help-text">{ev.help}</p>{/if}
       <div class="actions">
         <button class="primary" disabled={busy} onclick={() => send()}>Try again</button>
         <button onclick={() => openGuide(isUrl(ev.help) ? ev.help : (run?.guide ?? ""))}>
@@ -537,5 +537,9 @@
     stroke-width: 2.5;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+  /* Help can hold a command on its own line. */
+  .help-text {
+    white-space: pre-line;
   }
 </style>

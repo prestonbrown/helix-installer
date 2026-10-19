@@ -4,13 +4,16 @@
 
 pub mod ask;
 pub mod download;
+pub mod esp32;
 pub mod helix_install;
 pub mod info;
 mod job;
 pub mod moonraker;
 pub mod probe;
 pub mod progress;
+pub mod release;
 pub mod require;
+pub mod serial_flash;
 pub mod ssh_login;
 pub mod ssh_run;
 mod sudo;
@@ -81,6 +84,8 @@ pub struct Session {
     /// Every line of the jobs this runner followed to their end, for the support bundle.
     job_log: Vec<String>,
     stick: Option<write_stick::Stage>,
+    /// A flash running in the background, and the step it belongs to.
+    flash: Option<serial_flash::Task>,
     /// Logins the user typed that the printer refused since the last success.
     login_tries: u32,
     /// The recipe's default logins were already tried during this step run.
@@ -421,9 +426,9 @@ pub(crate) async fn run_builtin(
                 }
                 probe::run(ctx, &p).await
             }
-            None => {
-                StepOutcome::failed("probe needs exactly one of moonraker, ssh+fact, tcp_port+fact")
-            }
+            None => StepOutcome::failed(
+                "probe needs exactly one of moonraker, ssh+fact, tcp_port+fact, serial",
+            ),
         },
         Step::Require {
             fact,
@@ -481,5 +486,24 @@ pub(crate) async fn run_builtin(
             ask_if_failed,
             ..
         } => ssh_login::run(ctx, logins, *ask_if_failed, input).await,
+        Step::SerialFlash {
+            asset,
+            chip,
+            flash_mb,
+            keep,
+            channel,
+            update,
+            ..
+        } => {
+            let spec = serial_flash::Spec {
+                asset,
+                chip,
+                flash_mb: *flash_mb,
+                keep,
+                channel: *channel,
+                update: *update,
+            };
+            serial_flash::run(ctx, &spec).await
+        }
     }
 }

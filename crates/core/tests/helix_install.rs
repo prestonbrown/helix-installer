@@ -11,6 +11,7 @@ use helix_installer_core::steps::helix_install::{
 };
 use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
+use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
@@ -209,6 +210,7 @@ impl Fakes {
             fetch: self.fetch.clone(),
             clock: self.clock.clone(),
             net: Arc::new(FakeNet::new()),
+            serial: Arc::new(FakeSerial::new()),
         }
     }
 

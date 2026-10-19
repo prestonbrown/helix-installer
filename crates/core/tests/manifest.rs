@@ -393,3 +393,34 @@ fn a_dry_run_cannot_be_an_uninstall() {
         "{err:?}"
     );
 }
+
+#[test]
+fn a_serial_flash_step_and_a_serial_probe_parse() {
+    let step: Step = serde_json::from_value(serde_json::json!({
+        "type": "serial_flash", "asset": "helixscreen-esp32-ktouch-{tag}.zip", "chip": "esp32s3",
+        "flash_mb": 16, "keep": ["nvs", "cfg"], "channel": "beta", "update": true, "commits": true
+    }))
+    .unwrap();
+    assert_eq!(step.type_name(), "serial_flash");
+    assert!(step.commits());
+    assert!(step.acts_on_printer());
+    assert!(step.is_idempotent());
+    assert_eq!(step.shape_error(), None);
+    let probe: Step =
+        serde_json::from_value(serde_json::json!({"type": "probe", "serial": "esp32"})).unwrap();
+    assert!(matches!(probe.probe(), Some(Probe::Serial { .. })));
+    let both: Step = serde_json::from_value(
+        serde_json::json!({"type": "probe", "serial": "esp32", "tcp_port": 22, "fact": "x"}),
+    )
+    .unwrap();
+    assert!(both.probe().is_none());
+}
+
+#[test]
+fn a_serial_flash_step_with_unknown_fields_is_rejected() {
+    let r: Result<Step, _> = serde_json::from_value(serde_json::json!({
+        "type": "serial_flash", "asset": "a.zip", "chip": "esp32s3", "flash_mb": 16,
+        "erase": true
+    }));
+    assert!(r.is_err());
+}

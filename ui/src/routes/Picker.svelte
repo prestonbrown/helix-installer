@@ -4,6 +4,7 @@
   import { onMount } from "svelte";
   import * as api from "../lib/api";
   import { ApiError } from "../lib/api";
+  import { readyLine, startLabel, whereLine } from "../lib/candidates";
   import Copyable from "../lib/Copyable.svelte";
   import PrinterTile from "../lib/PrinterTile.svelte";
   import { openGuide } from "../lib/open";
@@ -97,7 +98,10 @@
 {#if mode === "list"}
   <header class="head">
     <h1>Choose your printer</h1>
-    <p class="muted">Make sure your printer is switched on and on the same network as this computer.</p>
+    <p class="muted">
+      Make sure your printer is switched on and on the same network as this computer. A K-Touch screen
+      can be plugged into this computer by USB instead.
+    </p>
   </header>
 
   {#if error}{@render failure(error)}{/if}
@@ -115,7 +119,8 @@
       <h2>No printers found</h2>
       <p class="muted">
         Check that the printer is switched on and connected to your Wi-Fi or network cable, then search
-        again. A printer that isn't connected to a network yet won't show up here.
+        again. A printer that isn't connected to a network yet won't show up here. A K-Touch plugged in by
+        USB shows up here too; on Windows it may need the CH340 USB driver from WCH first.
       </p>
     </div>
   {:else}
@@ -125,15 +130,9 @@
           <PrinterTile photo={c.photo} name={c.name} />
           <div class="about">
             <h2>{c.name}</h2>
-            <p class="muted address">At {c.address}</p>
+            <p class="muted address">{whereLine(c)}</p>
             {#if c.status === "ready"}
-              <p class="status ok">
-                {c.helix_version
-                  ? `HelixScreen ${c.helix_version} is installed`
-                  : c.helix_version === ""
-                    ? "HelixScreen is installed"
-                    : "Ready to install"}
-              </p>
+              <p class="status ok">{readyLine(c)}</p>
             {:else if c.status === "choose"}
               <p class="status">Which model is this?</p>
               <div class="choices">
@@ -153,7 +152,7 @@
           <div class="go">
             {#if c.status === "ready"}
               <button class="primary" disabled={busy !== null} onclick={() => start(c.key)}>
-                {c.helix_version !== null ? "Update HelixScreen" : "Install HelixScreen"}
+                {startLabel(c)}
               </button>
             {:else if c.status === "unsupported" && c.doc}
               <button onclick={() => openGuide(c.doc!)}>Read the install guide</button>

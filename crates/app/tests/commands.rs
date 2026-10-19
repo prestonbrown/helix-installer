@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 use helix_installer_app_lib::commands::{
-    AppConfig, AppCore, CandidateStatus, CommandError, Discovery, ErrorKind,
+    AppConfig, AppCore, CandidateStatus, CommandError, Connection, Discovery, ErrorKind,
 };
 use helix_installer_core::discovery::Candidate;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::Login;
 use helix_installer_core::runner::{Event, Input, Prompt};
 use helix_installer_core::transport::fake::{
-    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
+    FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSerial, FakeSsh,
 };
 use helix_installer_core::transport::{Env, ExecOutput, Host};
 use serde_json::{json, Value};
@@ -166,6 +166,7 @@ impl Fakes {
             fetch: Arc::new(FakeFetch::new()),
             clock: Arc::new(FakeClock::new()),
             net: Arc::new(FakeNet::new()),
+            serial: Arc::new(FakeSerial::new()),
         }
     }
 }
@@ -590,4 +591,51 @@ async fn a_run_that_changed_the_printer_cannot_be_dismissed() {
     let listed = reopened.unfinished_runs().await;
     assert_eq!(listed.len(), 1);
     assert!(listed[0].committed);
+}
+
+#[tokio::test]
+async fn a_k_touch_on_usb_is_listed_as_connected_by_usb() {
+    let mut m = manifest_json();
+    m["printers"].as_array_mut().unwrap().push(json!({
+        "id": "ktouch",
+        "name": "BTT K-Touch",
+        "identify": [{ "usb": "1a86:7522" }],
+        "recipes": [{ "when": { "state": "stock" }, "recipe": "stock" }],
+        "restore": "stock",
+        "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-esp32" }
+    }));
+    let src = tempfile::tempdir().unwrap();
+    let bytes = serde_json::to_vec(&m).unwrap();
+    let path = src.path().join("manifest.json");
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(src.path().join("manifest.json.minisig"), sign(&bytes)).unwrap();
+    let mut usb = found();
+    usb.push(Candidate::new(
+        Host::new("/dev/ttyUSB0"),
+        facts(json!({ "usb": "1a86:7522" })),
+    ));
+    let f = Fakes::new();
+    let data = tempfile::tempdir().unwrap();
+    let c = AppCore::new(AppConfig {
+        data_dir: data.path().to_path_buf(),
+        env: f.env(),
+        discovery: Arc::new(Fixed(usb)),
+        pubkey: pubkey(),
+        manifest_location: Some(path.to_string_lossy().into_owned()),
+        channel_override: None,
+        app_version: "0.1.0".into(),
+    });
+    let views = c.discover().await.unwrap();
+    let panel = views.iter().find(|v| v.address == "/dev/ttyUSB0").unwrap();
+    assert_eq!(panel.connection, Connection::Usb);
+    assert_eq!(panel.name, "BTT K-Touch");
+    assert_eq!(panel.status, CandidateStatus::Ready);
+    assert_eq!(
+        serde_json::to_value(panel).unwrap()["connection"],
+        json!("usb")
+    );
+    assert!(views
+        .iter()
+        .filter(|v| v.address != "/dev/ttyUSB0")
+        .all(|v| v.connection == Connection::Network));
 }
