@@ -99,6 +99,9 @@ impl Moonraker for HttpMoonraker {
     async fn objects_list(&self, host: &Host) -> Result<Value> {
         self.get(host, "/printer/objects/list").await
     }
+    async fn proc_stats(&self, host: &Host) -> Result<Value> {
+        self.get(host, "/machine/proc_stats").await
+    }
     async fn gcode(&self, host: &Host, script: &str) -> Result<()> {
         self.call(
             Method::POST,

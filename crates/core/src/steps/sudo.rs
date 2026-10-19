@@ -79,6 +79,15 @@ async fn check_typed(
         Err(e) => Err(e),
     };
     match ran {
+        Ok(out) if out.exit != 0 && not_a_sudoer(&format!("{}{}", out.stdout, out.stderr)) => {
+            forget_typed(ctx);
+            Err(StepOutcome::Failed {
+                reason: format!("{user} is not allowed to use sudo on this printer"),
+                help: Some(format!(
+                    "Sign in as root, or give {user} sudo rights, then retry: {SUDO_DOC}"
+                )),
+            })
+        }
         Ok(out) if out.exit != 0 && rejected(&format!("{}{}", out.stdout, out.stderr)) => {
             forget_typed(ctx);
             ctx.session.sudo_tries += 1;
@@ -102,6 +111,12 @@ async fn check_typed(
     }
 }
 
+/// sudo refuses the account itself, whatever password it is given.
+fn not_a_sudoer(said: &str) -> bool {
+    let t = said.to_ascii_lowercase();
+    t.contains("not in the sudoers") || t.contains("not allowed to run sudo")
+}
+
 fn rejected(said: &str) -> bool {
     let t = said.to_ascii_lowercase();
     t.contains("incorrect password") || t.contains("sorry, try again")
@@ -109,7 +124,9 @@ fn rejected(said: &str) -> bool {
 
 fn forget_typed(ctx: &mut StepCtx<'_>) {
     if let Some(l) = ctx.session.login.as_mut() {
-        l.sudo_password = None;
+        if let Some(pw) = l.sudo_password.take() {
+            ctx.session.refused_secrets.push(pw.expose().to_string());
+        }
     }
     ctx.session.sudo_checked = false;
 }

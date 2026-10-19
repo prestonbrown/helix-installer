@@ -109,6 +109,8 @@ pub trait Moonraker: Send + Sync {
     async fn update_status(&self, host: &Host) -> Result<Value>;
     /// Moonraker's `/printer/objects/list` answer: `{"objects": [..]}`.
     async fn objects_list(&self, host: &Host) -> Result<Value>;
+    /// Moonraker's `/machine/proc_stats` answer; `system_uptime` is the host's uptime in seconds.
+    async fn proc_stats(&self, host: &Host) -> Result<Value>;
     async fn gcode(&self, host: &Host, script: &str) -> Result<()>;
     async fn update_upgrade(&self, host: &Host, name: &str) -> Result<()>;
 }

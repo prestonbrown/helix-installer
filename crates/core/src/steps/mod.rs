@@ -97,9 +97,8 @@ pub struct Session {
     sudo_checked: bool,
     /// Typed sudo passwords sudo refused since the last one it took.
     sudo_tries: u32,
-    /// The step whose `klipper_restart` wait failed because the printer never went away: a
-    /// retry of it takes a ready printer as restarted, since the user may have restarted it.
-    restart_unseen: Option<usize>,
+    /// Typed sudo passwords sudo refused: no longer held, still stripped from a support bundle.
+    refused_secrets: Vec<String>,
 }
 
 impl Session {
@@ -121,10 +120,14 @@ impl Session {
         }
     }
 
-    /// The password, passphrase and sudo password of the login held now, for stripping from a
-    /// support bundle.
+    /// The password, passphrase and sudo password of the login held now, and the sudo passwords
+    /// sudo refused, for stripping from a support bundle.
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.login.iter().flat_map(Login::secrets).collect()
+        self.login
+            .iter()
+            .flat_map(Login::secrets)
+            .chain(self.refused_secrets.iter().cloned())
+            .collect()
     }
 }
 

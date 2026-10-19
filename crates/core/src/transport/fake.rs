@@ -17,6 +17,7 @@ struct MoonrakerState {
     system_info: HashMap<String, Value>,
     update_status: HashMap<String, Value>,
     objects_list: HashMap<String, Value>,
+    proc_stats: HashMap<String, Value>,
     gcodes: Vec<(String, String)>,
     upgrades: Vec<String>,
     /// Answers `printer_info` gives in turn, the last one repeated; `None` is unreachable.
@@ -69,6 +70,9 @@ impl FakeMoonraker {
     pub fn set_update_status(&self, addr: &str, v: Value) {
         lock(&self.state).update_status.insert(addr.into(), v);
     }
+    pub fn set_proc_stats(&self, addr: &str, v: Value) {
+        lock(&self.state).proc_stats.insert(addr.into(), v);
+    }
     pub fn set_objects_list(&self, addr: &str, v: Value) {
         lock(&self.state).objects_list.insert(addr.into(), v);
     }
@@ -120,6 +124,13 @@ impl Moonraker for FakeMoonraker {
     async fn objects_list(&self, host: &Host) -> Result<Value> {
         lock(&self.state)
             .objects_list
+            .get(&host.addr)
+            .cloned()
+            .ok_or(TransportError::Unreachable)
+    }
+    async fn proc_stats(&self, host: &Host) -> Result<Value> {
+        lock(&self.state)
+            .proc_stats
             .get(&host.addr)
             .cloned()
             .ok_or(TransportError::Unreachable)
@@ -331,6 +342,9 @@ impl SshSession for FakeSshSession {
         self.tick()?;
         let mut st = lock(&self.state);
         st.calls.push((cmd.into(), stdin.map(|b| b.to_vec())));
+        if let Some(o) = st.table.get(cmd) {
+            return Ok(o.clone());
+        }
         // `sudo -S` reads the password from stdin: one `sudo_accepts` does not take is refused.
         if let Some(inner) = cmd.strip_prefix("sudo -S -p '' ") {
             let typed = stdin
@@ -360,9 +374,6 @@ impl SshSession for FakeSshSession {
                     exit: 0,
                 });
             }
-        }
-        if let Some(o) = st.table.get(cmd) {
-            return Ok(o.clone());
         }
         if let Some(f) = &st.fallback {
             return Ok(f(cmd));

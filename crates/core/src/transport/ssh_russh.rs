@@ -91,9 +91,11 @@ const MAC_ORDER: &[mac::Name] = &[
     mac::HMAC_SHA1,
 ];
 
-/// Put ahead of the inherited PATH for every remote command: a non-login exec on a BusyBox
+/// Appended to the inherited PATH for every remote command: a non-login exec on a BusyBox
 /// printer (FlashForge AD5M) gets a PATH without /sbin, where `reboot` and friends live.
-pub const SBIN_PATH: &str = "PATH=/usr/sbin:/sbin:/usr/bin:/bin:$PATH; export PATH; ";
+/// Appending finds those without shadowing the account's own tools (/usr/local/bin, Entware's
+/// /opt/bin on a K1).
+pub const SBIN_PATH: &str = "PATH=\"$PATH:/usr/sbin:/sbin:/usr/bin:/bin\"; export PATH; ";
 
 /// `cmd` run with `SBIN_PATH` set. Exported, so a detached job's shell inherits it.
 pub fn with_sbin_path(cmd: &str) -> String {

@@ -129,14 +129,12 @@ fn the_sbin_path_finds_system_tools_from_a_bare_path() {
         .output()
         .unwrap();
     let path = String::from_utf8(out.stdout).unwrap();
+    // Appended, so the account's own tools (/usr/local/bin, Entware's /opt/bin) still win.
     assert!(
-        path.starts_with("/usr/sbin:/sbin:/usr/bin:/bin:"),
-        "{path:?}"
+        path.starts_with("/nonexistent:"),
+        "the inherited PATH comes first: {path:?}"
     );
-    assert!(
-        path.ends_with(":/nonexistent"),
-        "the inherited PATH stays: {path:?}"
-    );
+    assert!(path.ends_with(":/usr/sbin:/sbin:/usr/bin:/bin"), "{path:?}");
 }
 
 #[tokio::test]

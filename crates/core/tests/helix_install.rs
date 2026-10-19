@@ -1742,3 +1742,136 @@ async fn moonrakers_version_serves_when_the_printer_cannot_say() {
     assert!(matches!(ev, Event::Done), "{ev:?}");
     assert_eq!(spawned(&f).len(), 1);
 }
+
+fn probe_says(f: &Fakes, stdout: &str) {
+    f.ssh.on_command(
+        INSTALLED_VERSION_PROBE,
+        ExecOutput {
+            stdout: stdout.into(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+}
+
+fn update_step() -> Value {
+    json!([{ "type": "helix_install", "platform": "pi", "update": true }])
+}
+
+#[tokio::test]
+async fn with_nothing_running_the_newest_install_found_counts_not_the_first() {
+    // An old standalone /opt/helixscreen sits next to the Forge-X payload, which is current.
+    let f = Fakes::standard(&["pi"]);
+    probe_says(&f, "found v1.0.0\nfound v1.0.5\n");
+    let mut r = f.runner("root", update_step(), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("1.0.5 is installed"), "{note:?}");
+}
+
+#[tokio::test]
+async fn with_nothing_running_moonrakers_version_counts_when_it_is_the_highest() {
+    let f = Fakes::standard(&["pi"]);
+    probe_says(&f, "found v1.0.4\n");
+    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.0.5" }));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
+}
+
+#[tokio::test]
+async fn the_running_helixscreen_decides_over_every_other_copy_and_moonraker() {
+    let f = Fakes::standard(&["pi"]);
+    probe_says(&f, "running helix-screen 1.0.4 (9ed38c74d5)\n");
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.0.5" }));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(spawned(&f).len(), 1, "1.0.4 runs, so 1.0.5 installs");
+}
+
+#[test]
+fn the_version_probe_reads_the_running_binarys_tree_first_and_knows_the_payload_root() {
+    let p = INSTALLED_VERSION_PROBE;
+    assert!(p.contains("/opt/config/mod_data/helixscreen "), "{p}");
+    assert!(
+        p.contains("/opt/config/mod_data/helixscreen_payload_root"),
+        "{p}"
+    );
+    assert!(
+        p.contains("/usr/data/config/mod_data/helixscreen_payload_root"),
+        "{p}"
+    );
+    let running = p.find("echo \"running").expect("a running line");
+    let scan = p.find("for d in").expect("a scan");
+    assert!(running < scan, "{p}");
+    // Every copy is reported, not only the first.
+    assert!(!p[scan..].contains("exit 0"), "{p}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_version_probe_is_valid_sh() {
+    let out = std::process::Command::new("sh")
+        .args(["-n", "-c", INSTALLED_VERSION_PROBE])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[tokio::test]
+async fn a_refused_sudo_password_stays_in_the_bundles_redaction_list() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    f.ssh.sudo_accepts(SUDO_PW);
+    let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
+    let _ = settle(&mut r).await;
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new("typo-pw-77"))))
+        .await;
+    assert!(
+        matches!(
+            ev,
+            Event::NeedInput(Prompt::SudoPassword { refused: true, .. })
+        ),
+        "{ev:?}"
+    );
+    assert!(r.secrets().contains(&"typo-pw-77".to_string()));
+}
+
+#[tokio::test]
+async fn a_login_sudo_will_not_serve_fails_plainly_instead_of_asking_again() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.accept(ADDR, "mks", "");
+    sudo_needs_a_password(&f);
+    f.ssh.on_command(
+        "sudo -S -p '' true",
+        ExecOutput {
+            stdout: String::new(),
+            stderr: "mks is not in the sudoers file.  This incident will be reported.\n".into(),
+            exit: 1,
+        },
+    );
+    let mut r = f.runner_with_password("mks", "", install_step(json!("pi")), json!({}));
+    let _ = settle(&mut r).await;
+    let ev = r
+        .advance(Some(Input::SudoPassword(Secret::new(SUDO_PW))))
+        .await;
+    match &ev {
+        Event::Failed { reason, .. } => {
+            assert!(reason.contains("not allowed to use sudo"), "{reason}")
+        }
+        e => panic!("expected a plain failure, got {e:?}"),
+    }
+    assert!(f.ssh.uploads().is_empty());
+}

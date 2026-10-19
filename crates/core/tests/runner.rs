@@ -379,17 +379,82 @@ async fn wait_for_klipper_restart_that_never_sees_moonraker_go_fails_the_step() 
     );
 }
 
+fn restart_step() -> Arc<Manifest> {
+    manifest(json!([
+        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 600, "message": "Waiting" }
+    ]))
+}
+
 #[tokio::test]
-async fn a_retried_klipper_restart_takes_a_ready_printer_as_restarted() {
-    // The user restarted the printer by hand after the step failed, then chose to retry.
+async fn a_restart_that_was_not_seen_asks_the_user_to_restart_the_printer() {
     let f = Fakes::new();
     f.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready" }));
-    let m = manifest(json!([
-        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 600, "message": "Waiting" }
-    ]));
-    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), restart_step(), state("run1", json!({})));
+    match settle(&mut r, None).await {
+        Event::Failed { reason, help, .. } => {
+            assert!(reason.contains("did not restart"), "{reason}");
+            assert_eq!(
+                help.as_deref(),
+                Some("Restart the printer, then press Try this step again.")
+            );
+        }
+        e => panic!("expected the step to fail, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_retry_without_a_restart_still_fails() {
+    // The user pressed Try again without restarting anything: the printer has been up for days.
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), restart_step(), state("run1", json!({})));
     assert!(matches!(settle(&mut r, None).await, Event::Failed { .. }));
+    match settle(&mut r, None).await {
+        Event::Failed { reason, .. } => assert!(reason.contains("did not restart"), "{reason}"),
+        e => panic!("expected the retry to fail too, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_retry_after_the_user_restarted_the_printer_passes_on_its_boot_time() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), restart_step(), state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Failed { .. }));
+    // Restarted by hand: up for 20 seconds, so it booted after the wait began.
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 20.0 }));
+    let start = f.clock.now();
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    let waited = f.clock.now().duration_since(start).unwrap();
+    assert!(
+        waited < Duration::from_secs(10),
+        "no second window: {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_too_quick_to_see_counts_by_the_boot_time() {
+    // Moonraker was back between two polls; its uptime shows the boot.
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), restart_step(), state("run1", json!({})));
+    assert!(matches!(r.advance(None).await, Event::Progress { .. }));
+    // Up for 10 seconds by the time the window ends, so it booted after the wait began.
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 10.0 }));
     assert!(matches!(settle(&mut r, None).await, Event::Done));
 }
 

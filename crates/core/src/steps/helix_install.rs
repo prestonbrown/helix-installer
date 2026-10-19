@@ -26,11 +26,13 @@ pub use super::release::{releases_manifest_url, GITHUB_RELEASE_API};
 /// release onto a MIPS printer's slow flash takes minutes without a line of output.
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
-/// Prints the installed HelixScreen's version from its `release_info.json`, which every install
-/// by install.sh writes: in the running binary's tree first, then in each place install.sh
-/// installs to. A tree without one (a payload a mod installed itself) answers with its binary's
-/// `--version` line instead (`helix-screen 1.1.0-beta.9 (9ed38c74d5)`).
-pub const INSTALLED_VERSION_PROBE: &str = r#"p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); b=; for d in ${e:+"${e%/bin/*}"} /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do if [ -f "$d/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/release_info.json" | head -n 1; exit 0; fi; [ -z "$b" ] && [ -x "$d/bin/helix-screen" ] && b="$d/bin/helix-screen"; done; [ -n "$b" ] && "$b" --version 2>/dev/null | head -n 1"#;
+/// Prints the installed HelixScreen's version, one tagged line per install. A running
+/// `helix-screen` is read in its own tree only (`release_info.json`, which every install by
+/// install.sh writes, else the binary's `--version` line, `helix-screen 1.1.0-beta.9 (9ed38c74d5)`)
+/// as `running <version>`, and nothing else is read. With nothing running, every place install.sh
+/// installs to is read, the Forge-X payload root and the root its record names included, each
+/// as `found <version>`: an old standalone tree can sit beside the current payload.
+pub const INSTALLED_VERSION_PROBE: &str = r#"v() { if [ -f "$1/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/release_info.json" | head -n 1; elif [ -x "$1/bin/helix-screen" ]; then "$1/bin/helix-screen" --version 2>/dev/null | head -n 1; fi; }; p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); if [ -n "$e" ]; then r=$(v "${e%/bin/*}"); [ -z "$r" ] && r=$("$e" --version 2>/dev/null | head -n 1); [ -n "$r" ] && { echo "running $r"; exit 0; }; fi; for f in /opt/config/mod_data/helixscreen_payload_root /usr/data/config/mod_data/helixscreen_payload_root; do [ -f "$f" ] && set -- "$@" "$(head -n 1 "$f")"; done; for d in "$@" /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /opt/config/mod_data/helixscreen /usr/data/config/mod_data/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do r=$(v "$d"); [ -n "$r" ] && echo "found $r"; done; true"#;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The fact holding the installed HelixScreen's version (`v1.1.0-beta.9`).
 const VERSION_FACT: &str = "helix_version";
@@ -161,9 +163,10 @@ fn resolve_platform(ctx: &StepCtx<'_>, sel: &PlatformSel) -> Result<String, Step
     }
 }
 
-/// The installed HelixScreen's version, read on the printer over SSH (release_info.json, else the
-/// binary's `--version`), which wins: Moonraker's `helix_version` can lag what is installed.
-/// Moonraker's answer serves only when the printer cannot say. An update that cannot tell is
+/// The installed HelixScreen's version. The running `helix-screen`'s own version decides when one
+/// runs: Moonraker's `helix_version` can lag it. With nothing running, the highest of every
+/// install found on the printer and Moonraker's answer counts, never the first found, so a stale
+/// copy beside the current install cannot cause a downgrade. An update that cannot tell is
 /// refused, since it could otherwise install an older release over a newer one.
 async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, StepOutcome> {
     let read = match ctx.ssh().await {
@@ -174,7 +177,7 @@ async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, Step
         Err(e) => Err(e),
     };
     let text = match read {
-        Ok(out) if out.exit == 0 => out.stdout.trim().to_string(),
+        Ok(out) if out.exit == 0 => out.stdout,
         Ok(_) => String::new(),
         Err(e) => {
             ctx.drop_ssh();
@@ -183,27 +186,56 @@ async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, Step
             )));
         }
     };
-    // A bare version, or the binary's `helix-screen <version> (<hash>)` line.
-    let found = text
-        .split_whitespace()
-        .find_map(|t| ReleaseVersion::parse(t).map(|v| (t.to_string(), v)));
-    if let Some((token, v)) = found {
-        ctx.facts
-            .insert(VERSION_FACT.into(), serde_json::json!(token));
-        return Ok(v);
-    }
     let reported = ctx
         .facts
         .get(VERSION_FACT)
         .and_then(|v| v.as_str())
-        .and_then(ReleaseVersion::parse);
-    reported.ok_or_else(|| StepOutcome::Refused {
-        doc: ctx.printer_doc(),
-        reason: "the installer cannot tell which HelixScreen version is on this printer, \
-                 so it will not update it: an update never installs an older version. \
-                 Reinstall HelixScreen following this printer's install guide"
-            .into(),
-    })
+        .and_then(|t| ReleaseVersion::parse(t).map(|v| (t.to_string(), v)));
+    let chosen = match read_versions(&text) {
+        (Some(running), _) => Some(running),
+        (None, found) => found
+            .into_iter()
+            .chain(reported)
+            .max_by(|a, b| a.1.cmp(&b.1)),
+    };
+    match chosen {
+        Some((token, v)) => {
+            ctx.facts
+                .insert(VERSION_FACT.into(), serde_json::json!(token));
+            Ok(v)
+        }
+        None => Err(StepOutcome::Refused {
+            doc: ctx.printer_doc(),
+            reason: "the installer cannot tell which HelixScreen version is on this printer, \
+                     so it will not update it: an update never installs an older version. \
+                     Reinstall HelixScreen following this printer's install guide"
+                .into(),
+        }),
+    }
+}
+
+/// A version as the printer printed it, and parsed.
+type Tagged = (String, ReleaseVersion);
+
+/// The probe's `running` version, and every `found` one (an untagged line counts as found).
+/// Each line holds a bare version or a `helix-screen <version> (<hash>)` line.
+fn read_versions(text: &str) -> (Option<Tagged>, Vec<Tagged>) {
+    let version_in = |line: &str| {
+        line.split_whitespace()
+            .find_map(|t| ReleaseVersion::parse(t).map(|v| (t.to_string(), v)))
+    };
+    let mut found = Vec::new();
+    for line in text.lines() {
+        match line.trim().strip_prefix("running ") {
+            Some(rest) => {
+                if let Some(v) = version_in(rest) {
+                    return (Some(v), Vec::new());
+                }
+            }
+            None => found.extend(version_in(line.trim().trim_start_matches("found "))),
+        }
+    }
+    (None, found)
 }
 
 /// What a launch installs: the platform's build from the newest release of `channels` (the

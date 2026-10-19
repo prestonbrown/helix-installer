@@ -46,6 +46,9 @@ pub async fn run(
         };
     }
     if ctx.calls == 0 {
+        if target == WaitTarget::KlipperRestart {
+            note_restart_wait(ctx);
+        }
         return StepOutcome::Progress {
             title: message.to_string(),
             detail: None,
@@ -55,23 +58,29 @@ pub async fn run(
     let timeout = Duration::from_secs(timeout_s);
     let start = ctx.env.clock.now();
     if target == WaitTarget::KlipperRestart {
+        let since = restart_wait_since(ctx);
         let window = RESTART_START_WINDOW.min(timeout);
-        let gone = wait_until_gone(ctx.env, ctx.host, window).await;
-        let retried = ctx.session.restart_unseen.take() == Some(ctx.step);
-        if !gone && !retried {
-            ctx.session.restart_unseen = Some(ctx.step);
+        // A printer the user restarted by hand before a retry is already back: its boot time
+        // says so without another window.
+        let restarted = booted_since(ctx.env, ctx.host, since).await
+            || wait_until_gone(ctx.env, ctx.host, window).await
+            || booted_since(ctx.env, ctx.host, since).await;
+        if !restarted {
             return StepOutcome::Failed {
                 reason: format!(
                     "the printer did not restart: Moonraker kept answering for {} seconds",
                     window.as_secs()
                 ),
-                help,
+                help: Some(RESTART_BY_HAND.into()),
             };
         }
     }
     loop {
         let silent = match poll(ctx, target).await {
-            Poll::Up => return StepOutcome::Done,
+            Poll::Up => {
+                ctx.facts.remove(RESTART_SINCE_FACT);
+                return StepOutcome::Done;
+            }
             Poll::NotYet => false,
             Poll::Silent => true,
             Poll::CannotTell => return ask_if_showing(),
@@ -94,6 +103,62 @@ pub async fn run(
         }
         ctx.env.clock.sleep(POLL.min(timeout - waited)).await;
     }
+}
+
+/// Fact holding the step whose restart is awaited and when the wait began (unix seconds), kept
+/// across retries and a reopened app: a boot after it is a restart.
+const RESTART_SINCE_FACT: &str = "restart_wait_since";
+const RESTART_BY_HAND: &str = "Restart the printer, then press Try this step again.";
+
+/// Records when the wait for this step's restart began, unless an earlier attempt already did.
+fn note_restart_wait(ctx: &mut StepCtx<'_>) {
+    let step = ctx.step;
+    let recorded = ctx
+        .facts
+        .get(RESTART_SINCE_FACT)
+        .and_then(|v| v.get("step"))
+        .and_then(|v| v.as_u64());
+    if recorded == Some(step as u64) {
+        return;
+    }
+    let now = unix_secs(ctx.env.clock.now());
+    ctx.facts.insert(
+        RESTART_SINCE_FACT.into(),
+        serde_json::json!({ "step": step, "since": now }),
+    );
+}
+
+fn restart_wait_since(ctx: &mut StepCtx<'_>) -> f64 {
+    let step = ctx.step as u64;
+    let entry = ctx.facts.get(RESTART_SINCE_FACT);
+    match entry {
+        Some(v) if v.get("step").and_then(|s| s.as_u64()) == Some(step) => {
+            v.get("since").and_then(|s| s.as_f64()).unwrap_or(f64::MAX)
+        }
+        // A run reopened mid-wait from before the fact existed: from now.
+        _ => {
+            note_restart_wait(ctx);
+            unix_secs(ctx.env.clock.now())
+        }
+    }
+}
+
+fn unix_secs(t: std::time::SystemTime) -> f64 {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or_default()
+}
+
+/// True when Moonraker answers and its host's uptime puts the last boot after `since`. False
+/// when it cannot tell.
+async fn booted_since(env: &Env, host: &Host, since: f64) -> bool {
+    let Ok(stats) = env.moonraker.proc_stats(host).await else {
+        return false;
+    };
+    let Some(uptime) = stats.get("system_uptime").and_then(|u| u.as_f64()) else {
+        return false;
+    };
+    unix_secs(env.clock.now()) - uptime > since
 }
 
 /// Polls until Moonraker stops answering, so the Moonraker still running from before a restart
