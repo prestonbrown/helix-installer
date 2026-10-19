@@ -3,7 +3,7 @@
 mod ssh_server;
 
 use helix_installer_core::manifest::Login;
-use helix_installer_core::transport::ssh_russh::{sh_quote, with_sbin_path, SshRussh, SBIN_PATH};
+use helix_installer_core::transport::ssh_russh::{sh_quote, SshRussh, SBIN_PATH};
 use helix_installer_core::transport::*;
 use ssh_server::{Job, JobStep, ServerCfg, TestServer};
 use std::sync::Arc;
@@ -114,14 +114,18 @@ fn the_sbin_path_finds_system_tools_from_a_bare_path() {
     // A non-login SSH exec on BusyBox printers gets a PATH without /sbin, where reboot lives.
     let out = std::process::Command::new("env")
         .args(["-i", "PATH=/nonexistent", "/bin/sh", "-c"])
-        .arg(with_sbin_path("command -v ls"))
+        .arg(helix_installer_core::transport::ssh_russh::with_sbin_path(
+            "command -v ls",
+        ))
         .output()
         .unwrap();
     let found = String::from_utf8(out.stdout).unwrap();
     assert!(found.trim_end().ends_with("/ls"), "{found:?}");
     let out = std::process::Command::new("env")
         .args(["-i", "PATH=/nonexistent", "/bin/sh", "-c"])
-        .arg(with_sbin_path("printf %s \"$PATH\""))
+        .arg(helix_installer_core::transport::ssh_russh::with_sbin_path(
+            "printf %s \"$PATH\"",
+        ))
         .output()
         .unwrap();
     let path = String::from_utf8(out.stdout).unwrap();
