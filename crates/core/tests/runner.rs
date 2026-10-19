@@ -357,7 +357,7 @@ async fn wait_for_klipper_restart_ignores_the_moonraker_from_before_the_restart(
 }
 
 #[tokio::test]
-async fn wait_for_klipper_restart_that_never_sees_moonraker_go_takes_it_as_already_restarted() {
+async fn wait_for_klipper_restart_that_never_sees_moonraker_go_fails_the_step() {
     let f = Fakes::new();
     f.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready" }));
@@ -366,12 +366,29 @@ async fn wait_for_klipper_restart_that_never_sees_moonraker_go_takes_it_as_alrea
     ]));
     let mut r = Runner::new(f.env(), m, state("run1", json!({})));
     let start = f.clock.now();
-    assert!(matches!(settle(&mut r, None).await, Event::Done));
+    match settle(&mut r, None).await {
+        Event::Failed { reason, .. } => assert!(reason.contains("did not restart"), "{reason}"),
+        e => panic!("expected the step to fail, got {e:?}"),
+    }
     let waited = f.clock.now().duration_since(start).unwrap();
     assert!(
         waited >= Duration::from_secs(120) && waited < Duration::from_secs(130),
         "{waited:?}"
     );
+}
+
+#[tokio::test]
+async fn a_retried_klipper_restart_takes_a_ready_printer_as_restarted() {
+    // The user restarted the printer by hand after the step failed, then chose to retry.
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    let m = manifest(json!([
+        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 600, "message": "Waiting" }
+    ]));
+    let mut r = Runner::new(f.env(), m, state("run1", json!({})));
+    assert!(matches!(settle(&mut r, None).await, Event::Failed { .. }));
+    assert!(matches!(settle(&mut r, None).await, Event::Done));
 }
 
 #[tokio::test]

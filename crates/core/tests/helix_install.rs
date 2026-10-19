@@ -7,7 +7,7 @@ use helix_installer_core::manifest::{Channel, Login, Manifest, Secret, Step};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
-    releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE,
+    releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE, INSTALLED_VERSION_PROBE,
 };
 use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
@@ -1693,4 +1693,50 @@ async fn an_install_that_stops_before_uploading_removes_what_the_dry_run_left() 
         "{ev:?}"
     );
     assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+// ---------------------------------------------------------------- the installed version
+
+#[tokio::test]
+async fn the_version_read_on_the_printer_wins_over_moonrakers() {
+    // Moonraker still reports v1.0.0, but the printer already runs the newest release.
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.on_command(
+        INSTALLED_VERSION_PROBE,
+        ExecOutput {
+            stdout: "v1.0.5\n".into(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "update": true }]);
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.0" }));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
+    assert!(f.ssh.uploads().is_empty());
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("1.0.5 is installed"), "{note:?}");
+}
+
+#[tokio::test]
+async fn moonrakers_version_serves_when_the_printer_cannot_say() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.on_command(
+        INSTALLED_VERSION_PROBE,
+        ExecOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit: 1,
+        },
+    );
+    f.ssh.script_job(vec![
+        (&pl(&["platform", "pi"]), None),
+        (&pl(&["result", "ok"]), Some(0)),
+    ]);
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "update": true }]);
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(spawned(&f).len(), 1);
 }

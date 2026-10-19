@@ -8,6 +8,7 @@
 
 #![allow(dead_code)]
 
+use helix_installer_core::transport::ssh_russh::SBIN_PATH;
 use russh::keys::ssh_key::private::Ed25519Keypair;
 use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth, Msg, Response, Session};
@@ -109,6 +110,10 @@ pub struct Records {
     pub auth_methods: Vec<String>,
     /// Every method a client tried, accepted or not, in order.
     pub auth_attempts: Vec<String>,
+    /// Every exec command line exactly as sent, PATH setting included.
+    pub raw_commands: Vec<String>,
+    /// The line each `sudo sh -c` ran, exactly as sent.
+    pub sudo_inner_raw: Vec<String>,
 }
 
 pub struct ServerState {
@@ -378,7 +383,9 @@ async fn run_channel(mut channel: Channel<Msg>, state: Arc<ServerState>) {
         match channel.wait().await {
             Some(ChannelMsg::RequestPty { .. }) => pty = true,
             Some(ChannelMsg::Exec { command, .. }) => {
-                let c = String::from_utf8_lossy(&command).into_owned();
+                let raw = String::from_utf8_lossy(&command).into_owned();
+                lock(&state.records).raw_commands.push(raw.clone());
+                let c = strip_path(&raw).to_string();
                 // A real `cat > dir/file` into a missing dir fails at once, without reading
                 // stdin, and the shell exits while the client may still be sending.
                 if let Some(dir) = upload_target_dir(&c) {
@@ -487,6 +494,11 @@ fn upload_target_dir(cmd: &str) -> Option<String> {
     )
 }
 
+/// The command without the PATH setting the transport puts in front of it.
+fn strip_path(cmd: &str) -> &str {
+    cmd.strip_prefix(SBIN_PATH).unwrap_or(cmd)
+}
+
 fn run_command(
     state: &Arc<ServerState>,
     cmd: &str,
@@ -494,6 +506,7 @@ fn run_command(
     pty: bool,
     as_root: bool,
 ) -> (Vec<u8>, String, u32) {
+    let cmd = strip_path(cmd);
     if let Some((o, e, c)) = lock(&state.canned).get(cmd).cloned() {
         return (o.into_bytes(), e, c);
     }
@@ -575,7 +588,11 @@ fn run_command(
                     1,
                 );
             }
-            lock(&state.records).commands.push(inner.to_string());
+            {
+                let mut r = lock(&state.records);
+                r.sudo_inner_raw.push(inner.to_string());
+                r.commands.push(strip_path(inner).to_string());
+            }
             run_command(state, inner, b"", pty, true)
         }
         [tool, "sh", "-c", script, ">", log, "2>&1", "<", "/dev/null", "&"]

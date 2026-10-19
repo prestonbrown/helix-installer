@@ -105,6 +105,8 @@ impl Rig {
         for channel in [Channel::Stable, Channel::Beta] {
             rig.publish(channel, "1.0.5");
         }
+        // ZMOD restarts the printer to load its plugin list.
+        rig.moonraker.restart_on_gcode("ENABLE_EXTRA_PLUGINS", 3);
         rig
     }
 
@@ -1414,7 +1416,52 @@ fn forgex_rig() -> Rig {
     rig.installer_succeeds("ad5m");
     rig.ssh.script_job(vec![("", Some(0))]);
     moonraker_answers_on(&rig, forgex_objects(), "armv7l");
+    // The reboot job takes Moonraker down for a while, as a real restart does.
+    let moonraker = rig.moonraker.clone();
+    rig.ssh.on_spawn(move |cmd| {
+        if cmd.contains("/sbin/reboot") {
+            moonraker.restart(ADDR, 3);
+        }
+    });
     rig
+}
+
+#[tokio::test]
+async fn a_forgex_printer_that_does_not_restart_fails_at_the_restart() {
+    let rig = forgex_rig();
+    rig.ssh.on_spawn(|_| {});
+    let m = staging();
+    let picked = identify_as(&m, "ad5m", &fleet("ad5m_forgex"));
+    let mut r = rig.runner(&m, &picked, fleet("ad5m_forgex"));
+    let trace = drive(&mut r, next_only).await;
+    match &trace.end {
+        Event::Failed { reason, .. } => assert!(reason.contains("did not restart"), "{reason}"),
+        e => panic!("expected the restart to fail, got {e:?}"),
+    }
+}
+
+#[test]
+fn the_forgex_reboot_names_its_binary_and_fails_when_it_is_missing() {
+    let m = staging();
+    for id in [
+        "ad5m_forgex",
+        "ad5m_pro_forgex",
+        "ad5m_forgex_install",
+        "ad5m_forgex_update",
+    ] {
+        let cmd = m.recipes[id]
+            .iter()
+            .find_map(|s| match s {
+                Step::SshRun { command, .. } if command.contains("reboot") => Some(command.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{id} has no reboot"));
+        assert!(cmd.contains("[ -x /sbin/reboot ]"), "{id}: {cmd}");
+        assert!(
+            !cmd.replace("/sbin/reboot", "").contains("reboot"),
+            "{id}: a bare reboot depends on PATH: {cmd}"
+        );
+    }
 }
 
 /// The detached commands that were not `install.sh`.

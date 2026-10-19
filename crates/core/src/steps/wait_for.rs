@@ -11,8 +11,8 @@ use std::time::Duration;
 const POLL: Duration = Duration::from_secs(2);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const PIDOF_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a `klipper_restart` wait gives Moonraker to stop answering before it takes the
-/// restart as already over.
+/// How long a `klipper_restart` wait gives Moonraker to stop answering before it decides the
+/// printer did not restart.
 pub const RESTART_START_WINDOW: Duration = Duration::from_secs(120);
 
 enum Poll {
@@ -55,7 +55,19 @@ pub async fn run(
     let timeout = Duration::from_secs(timeout_s);
     let start = ctx.env.clock.now();
     if target == WaitTarget::KlipperRestart {
-        wait_until_gone(ctx.env, ctx.host, RESTART_START_WINDOW.min(timeout)).await;
+        let window = RESTART_START_WINDOW.min(timeout);
+        let gone = wait_until_gone(ctx.env, ctx.host, window).await;
+        let retried = ctx.session.restart_unseen.take() == Some(ctx.step);
+        if !gone && !retried {
+            ctx.session.restart_unseen = Some(ctx.step);
+            return StepOutcome::Failed {
+                reason: format!(
+                    "the printer did not restart: Moonraker kept answering for {} seconds",
+                    window.as_secs()
+                ),
+                help,
+            };
+        }
     }
     loop {
         let silent = match poll(ctx, target).await {
@@ -84,19 +96,20 @@ pub async fn run(
     }
 }
 
-/// Polls until Moonraker stops answering or `window` passes, so the Moonraker still running
-/// from before a restart is never taken for the one after it. Takes the `Env`, not the
-/// `StepCtx`: a shared borrow of the context held across an await makes the runner's future
-/// not `Send`.
-async fn wait_until_gone(env: &Env, host: &Host, window: Duration) {
+/// Polls until Moonraker stops answering, so the Moonraker still running from before a restart
+/// is never taken for the one after it. False when it kept answering for all of `window`.
+/// Takes the `Env`, not the `StepCtx`: a shared borrow of the context held across an await
+/// makes the runner's future not `Send`.
+async fn wait_until_gone(env: &Env, host: &Host, window: Duration) -> bool {
     let start = env.clock.now();
     while env.moonraker.printer_info(host).await.is_ok() {
         let waited = env.clock.now().duration_since(start).unwrap_or_default();
         if waited >= window {
-            return;
+            return false;
         }
         env.clock.sleep(POLL.min(window - waited)).await;
     }
+    true
 }
 
 fn ask_if_showing() -> StepOutcome {

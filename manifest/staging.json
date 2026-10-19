@@ -1468,7 +1468,7 @@
       },
       {
         "type": "ssh_run",
-        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "command": "[ -x /sbin/reboot ] || { echo 'FATAL: /sbin/reboot is missing on this printer' ; exit 1 ; } ; ( sleep 5 ; /sbin/reboot ) > /dev/null 2>&1 &",
         "timeout_s": 60
       },
       {
@@ -1587,7 +1587,7 @@
       },
       {
         "type": "ssh_run",
-        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "command": "[ -x /sbin/reboot ] || { echo 'FATAL: /sbin/reboot is missing on this printer' ; exit 1 ; } ; ( sleep 5 ; /sbin/reboot ) > /dev/null 2>&1 &",
         "timeout_s": 60
       },
       {
@@ -1643,7 +1643,7 @@
       },
       {
         "type": "ssh_run",
-        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "command": "[ -x /sbin/reboot ] || { echo 'FATAL: /sbin/reboot is missing on this printer' ; exit 1 ; } ; ( sleep 5 ; /sbin/reboot ) > /dev/null 2>&1 &",
         "timeout_s": 60
       },
       {
@@ -1701,7 +1701,7 @@
       },
       {
         "type": "ssh_run",
-        "command": "( sleep 5 ; reboot ) > /dev/null 2>&1 &",
+        "command": "[ -x /sbin/reboot ] || { echo 'FATAL: /sbin/reboot is missing on this printer' ; exit 1 ; } ; ( sleep 5 ; /sbin/reboot ) > /dev/null 2>&1 &",
         "timeout_s": 60
       },
       {

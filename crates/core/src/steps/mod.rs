@@ -89,6 +89,9 @@ pub struct Session {
     sudo_checked: bool,
     /// Typed sudo passwords sudo refused since the last one it took.
     sudo_tries: u32,
+    /// The step whose `klipper_restart` wait failed because the printer never went away: a
+    /// retry of it takes a ready printer as restarted, since the user may have restarted it.
+    restart_unseen: Option<usize>,
 }
 
 impl Session {

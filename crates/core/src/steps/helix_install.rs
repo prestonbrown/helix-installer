@@ -225,18 +225,11 @@ fn safe_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
-/// The installed HelixScreen's version: the `helix_version` fact Moonraker gave, else read over
-/// SSH (init.d printers report none to Moonraker). An update that cannot tell is refused, since
-/// it could otherwise install an older release over a newer one.
+/// The installed HelixScreen's version, read on the printer over SSH (release_info.json, else the
+/// binary's `--version`), which wins: Moonraker's `helix_version` can lag what is installed.
+/// Moonraker's answer serves only when the printer cannot say. An update that cannot tell is
+/// refused, since it could otherwise install an older release over a newer one.
 async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, StepOutcome> {
-    let known = ctx
-        .facts
-        .get(VERSION_FACT)
-        .and_then(|v| v.as_str())
-        .and_then(ReleaseVersion::parse);
-    if let Some(v) = known {
-        return Ok(v);
-    }
     let read = match ctx.ssh().await {
         Ok(s) => {
             s.exec(INSTALLED_VERSION_PROBE, None, VERSION_PROBE_TIMEOUT)
@@ -258,20 +251,23 @@ async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, Step
     let found = text
         .split_whitespace()
         .find_map(|t| ReleaseVersion::parse(t).map(|v| (t.to_string(), v)));
-    match found {
-        Some((token, v)) => {
-            ctx.facts
-                .insert(VERSION_FACT.into(), serde_json::json!(token));
-            Ok(v)
-        }
-        None => Err(StepOutcome::Refused {
-            doc: ctx.printer_doc(),
-            reason: "the installer cannot tell which HelixScreen version is on this printer, \
-                     so it will not update it: an update never installs an older version. \
-                     Reinstall HelixScreen following this printer's install guide"
-                .into(),
-        }),
+    if let Some((token, v)) = found {
+        ctx.facts
+            .insert(VERSION_FACT.into(), serde_json::json!(token));
+        return Ok(v);
     }
+    let reported = ctx
+        .facts
+        .get(VERSION_FACT)
+        .and_then(|v| v.as_str())
+        .and_then(ReleaseVersion::parse);
+    reported.ok_or_else(|| StepOutcome::Refused {
+        doc: ctx.printer_doc(),
+        reason: "the installer cannot tell which HelixScreen version is on this printer, \
+                 so it will not update it: an update never installs an older version. \
+                 Reinstall HelixScreen following this printer's install guide"
+            .into(),
+    })
 }
 
 /// What a launch installs: the platform's build from the newest release of `channels` (the

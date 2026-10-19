@@ -22,6 +22,10 @@ struct MoonrakerState {
     /// Answers `printer_info` gives in turn, the last one repeated; `None` is unreachable.
     printer_info_script: HashMap<String, std::collections::VecDeque<Option<Value>>>,
     printer_info_calls: HashMap<String, u32>,
+    /// `printer_info` calls left that find the host restarting (unreachable), per address.
+    down_for: HashMap<String, u32>,
+    /// A G-code script that restarts the printer, and for how many `printer_info` calls.
+    restart_gcode: Option<(String, u32)>,
 }
 
 /// Canned JSON per host address; a host with nothing registered is unreachable.
@@ -43,6 +47,14 @@ impl FakeMoonraker {
         lock(&self.state)
             .printer_info_script
             .insert(addr.into(), answers.into());
+    }
+    /// The printer restarts: its next `calls` `printer_info` calls find it unreachable.
+    pub fn restart(&self, addr: &str, calls: u32) {
+        lock(&self.state).down_for.insert(addr.into(), calls);
+    }
+    /// Sending `script` restarts the printer it went to, as `restart` does.
+    pub fn restart_on_gcode(&self, script: &str, calls: u32) {
+        lock(&self.state).restart_gcode = Some((script.into(), calls));
     }
     pub fn printer_info_calls(&self, addr: &str) -> u32 {
         lock(&self.state)
@@ -74,6 +86,10 @@ impl Moonraker for FakeMoonraker {
     async fn printer_info(&self, host: &Host) -> Result<Value> {
         let mut st = lock(&self.state);
         *st.printer_info_calls.entry(host.addr.clone()).or_default() += 1;
+        if let Some(n) = st.down_for.get_mut(&host.addr).filter(|n| **n > 0) {
+            *n -= 1;
+            return Err(TransportError::Unreachable);
+        }
         if let Some(q) = st.printer_info_script.get_mut(&host.addr) {
             let answer = if q.len() > 1 {
                 q.pop_front().flatten()
@@ -109,9 +125,11 @@ impl Moonraker for FakeMoonraker {
             .ok_or(TransportError::Unreachable)
     }
     async fn gcode(&self, host: &Host, script: &str) -> Result<()> {
-        lock(&self.state)
-            .gcodes
-            .push((host.addr.clone(), script.into()));
+        let mut st = lock(&self.state);
+        st.gcodes.push((host.addr.clone(), script.into()));
+        if let Some((_, calls)) = st.restart_gcode.clone().filter(|(s, _)| s == script) {
+            st.down_for.insert(host.addr.clone(), calls);
+        }
         Ok(())
     }
     async fn update_upgrade(&self, _host: &Host, name: &str) -> Result<()> {
@@ -128,6 +146,7 @@ struct JobScript {
 }
 
 type Fallback = Box<dyn Fn(&str) -> ExecOutput + Send + Sync>;
+type SpawnHook = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 /// A job's (text, exit) chunks and whether it dies once they are shown.
 type QueuedJob = (Vec<(String, Option<i32>)>, bool);
 
@@ -139,6 +158,7 @@ struct SshState {
     key_status: KeyStatus,
     table: HashMap<String, ExecOutput>,
     fallback: Option<Fallback>,
+    on_spawn: Option<SpawnHook>,
     calls: Vec<(String, Option<Vec<u8>>)>,
     uploads: Vec<(String, Vec<u8>)>,
     queued_jobs: Vec<QueuedJob>,
@@ -181,6 +201,11 @@ impl FakeSsh {
     /// Answers any command missing from the table; without one it exits 127.
     pub fn set_fallback(&self, f: impl Fn(&str) -> ExecOutput + Send + Sync + 'static) {
         lock(&self.state).fallback = Some(Box::new(f));
+    }
+    /// Called with the command of every `spawn_detached`, after it is recorded: how a test
+    /// makes a job act on other fakes (a reboot taking Moonraker down).
+    pub fn on_spawn(&self, f: impl Fn(&str) + Send + Sync + 'static) {
+        lock(&self.state).on_spawn = Some(std::sync::Arc::new(f));
     }
     /// Queues the log for the next `spawn_detached`: (text, exit) chunks,
     /// one revealed per `read_job` call; `Some` exit marks the job finished.
@@ -374,6 +399,11 @@ impl SshSession for FakeSshSession {
             return Err(TransportError::Protocol(format!("unscripted job: {cmd}")));
         }
         let (chunks, dies) = st.queued_jobs.remove(0);
+        if let Some(hook) = st.on_spawn.clone() {
+            drop(st);
+            hook(cmd);
+            st = lock(&self.state);
+        }
         st.next_job += 1;
         let log_path = format!("/tmp/fake-job-{}.log", st.next_job);
         st.jobs.insert(

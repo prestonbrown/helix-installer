@@ -3,7 +3,7 @@
 mod ssh_server;
 
 use helix_installer_core::manifest::Login;
-use helix_installer_core::transport::ssh_russh::{sh_quote, SshRussh};
+use helix_installer_core::transport::ssh_russh::{sh_quote, with_sbin_path, SshRussh, SBIN_PATH};
 use helix_installer_core::transport::*;
 use ssh_server::{Job, JobStep, ServerCfg, TestServer};
 use std::sync::Arc;
@@ -106,6 +106,69 @@ fn sh_quote_survives_a_real_shell_unchanged() {
             .unwrap();
         assert_eq!(String::from_utf8(out.stdout).unwrap(), s);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_sbin_path_finds_system_tools_from_a_bare_path() {
+    // A non-login SSH exec on BusyBox printers gets a PATH without /sbin, where reboot lives.
+    let out = std::process::Command::new("env")
+        .args(["-i", "PATH=/nonexistent", "/bin/sh", "-c"])
+        .arg(with_sbin_path("command -v ls"))
+        .output()
+        .unwrap();
+    let found = String::from_utf8(out.stdout).unwrap();
+    assert!(found.trim_end().ends_with("/ls"), "{found:?}");
+    let out = std::process::Command::new("env")
+        .args(["-i", "PATH=/nonexistent", "/bin/sh", "-c"])
+        .arg(with_sbin_path("printf %s \"$PATH\""))
+        .output()
+        .unwrap();
+    let path = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        path.starts_with("/usr/sbin:/sbin:/usr/bin:/bin:"),
+        "{path:?}"
+    );
+    assert!(
+        path.ends_with(":/nonexistent"),
+        "the inherited PATH stays: {path:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_command_and_job_runs_with_the_sbin_directories_on_its_path() {
+    let srv = TestServer::start(ServerCfg::default()).await;
+    srv.canned("echo hi", "hi\n", "", 0);
+    srv.job(
+        "do-it",
+        Job {
+            steps: vec![JobStep::Write("done\n".into())],
+            exit: 0,
+        },
+    );
+    let c = client();
+    let mut s = connect(&c, &srv).await;
+    assert_eq!(s.exec("echo hi", None, T).await.unwrap().stdout, "hi\n");
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("f");
+    std::fs::write(&local, b"x").unwrap();
+    s.upload(&local, "/tmp/f").await.unwrap();
+    let job = s.spawn_detached("do-it", None).await.unwrap();
+    read_to_exit(&mut s, &job, 0).await;
+    let sudo = s.spawn_detached("do-it", Some("makerbase")).await.unwrap();
+    read_to_exit(&mut s, &sudo, 0).await;
+
+    let r = srv.records();
+    assert!(!r.raw_commands.is_empty());
+    for raw in &r.raw_commands {
+        assert!(raw.starts_with(SBIN_PATH), "{raw:?}");
+    }
+    // sudo resets PATH (secure_path), so the line it runs sets it again.
+    assert!(
+        r.sudo_inner_raw.iter().all(|c| c.starts_with(SBIN_PATH)) && !r.sudo_inner_raw.is_empty(),
+        "{:?}",
+        r.sudo_inner_raw
+    );
 }
 
 #[tokio::test]

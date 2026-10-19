@@ -91,6 +91,15 @@ const MAC_ORDER: &[mac::Name] = &[
     mac::HMAC_SHA1,
 ];
 
+/// Put ahead of the inherited PATH for every remote command: a non-login exec on a BusyBox
+/// printer (FlashForge AD5M) gets a PATH without /sbin, where `reboot` and friends live.
+pub const SBIN_PATH: &str = "PATH=/usr/sbin:/sbin:/usr/bin:/bin:$PATH; export PATH; ";
+
+/// `cmd` run with `SBIN_PATH` set. Exported, so a detached job's shell inherits it.
+pub fn with_sbin_path(cmd: &str) -> String {
+    format!("{SBIN_PATH}{cmd}")
+}
+
 /// Quotes `s` as one POSIX shell word: single quotes, with each embedded `'` written as
 /// `'\''`. Every path or argument placed into a remote command goes through here.
 pub fn sh_quote(s: &str) -> String {
@@ -844,7 +853,10 @@ impl RusshSession {
                 .await
                 .map_err(russh_err)?;
         }
-        channel.exec(true, cmd).await.map_err(russh_err)?;
+        channel
+            .exec(true, with_sbin_path(cmd))
+            .await
+            .map_err(russh_err)?;
         let (out, sent) = exchange(channel, stdin).await;
         let out = out?;
         if let Some(Err(e)) = sent {
@@ -873,7 +885,11 @@ impl RusshSession {
     }
 
     async fn launch_with_sudo(&mut self, launcher: &str, password: &str) -> Result<RawOutput> {
-        let line = format!("sudo -S -p '' sh -c {}", sh_quote(launcher));
+        // sudo resets PATH to its secure_path, so the line it runs sets it again.
+        let line = format!(
+            "sudo -S -p '' sh -c {}",
+            sh_quote(&with_sbin_path(launcher))
+        );
         let stdin = format!("{password}\n");
         let first = self
             .run(&line, Some(stdin.as_bytes()), SHORT_TIMEOUT, false)
@@ -983,7 +999,10 @@ impl SshSession for RusshSession {
             .channel_open_session()
             .await
             .map_err(russh_err)?;
-        channel.exec(true, cmd).await.map_err(russh_err)?;
+        channel
+            .exec(true, with_sbin_path(&cmd))
+            .await
+            .map_err(russh_err)?;
         let (out, sent) = exchange(channel, Some(file)).await;
         let failure = match out {
             Ok(out) if out.exit != 0 => Some(TransportError::Protocol(format!(
