@@ -289,6 +289,7 @@ impl Runner {
             // A write stopped part way leaves the panel unbootable and its port held open, so a
             // running one is followed to its end instead.
             if !self.session.flash_running() {
+                self.session.release_flash().await;
                 return self.cancel();
             }
             self.log(
@@ -395,6 +396,8 @@ impl Runner {
                 self.state.fresh.clear();
                 self.log(index, "passed the point of no return".into());
                 if let Err(e) = self.autosave() {
+                    // Nothing was changed yet: the prepared flash lets the panel go unwritten.
+                    self.session.release_flash().await;
                     return self.fail(format!("could not save install progress: {e}"), None);
                 }
             }

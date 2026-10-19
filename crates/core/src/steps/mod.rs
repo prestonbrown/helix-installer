@@ -122,6 +122,16 @@ impl Session {
         }
     }
 
+    /// Lets go of a flash that has not started writing (see `serial_flash::Task::release`); a
+    /// running one is kept.
+    pub(crate) async fn release_flash(&mut self) {
+        match self.flash.take() {
+            Some(t) if t.running() => self.flash = Some(t),
+            Some(t) => t.release().await,
+            None => {}
+        }
+    }
+
     /// A flash is erasing or writing the panel in the background.
     pub(crate) fn flash_running(&self) -> bool {
         self.flash.as_ref().is_some_and(serial_flash::Task::running)

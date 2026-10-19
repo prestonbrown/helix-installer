@@ -449,6 +449,9 @@ async fn a_part_that_does_not_read_back_as_written_fails_the_flash() {
     assert!(reason.contains("did not read back"), "{reason}");
     assert!(!help.is_empty());
     assert_eq!(rig.serial.writes().len(), 1);
+    // The port is closed with a reset, not left holding the chip in its bootloader.
+    assert_eq!(rig.serial.open_sessions(), 0);
+    assert_eq!(rig.serial.abandoned(), 0);
 }
 
 #[tokio::test]
@@ -783,4 +786,66 @@ async fn a_cancel_while_the_panel_is_being_written_lets_the_write_finish() {
     assert!(cancelled);
     assert!(matches!(end, Event::Done), "{end:?}");
     assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+}
+
+/// Advances to where the flash step holds the checked panel open in its flasher stub, the run
+/// past its point of no return, before the first erase or write.
+async fn to_ready(r: &mut Runner, rig: &Rig) {
+    let mut input = None;
+    loop {
+        match r.advance(input.take()).await {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } if rig.serial.open_sessions() == 1 => return,
+            Event::Progress { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_cancel_before_the_first_write_restarts_the_panel() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    to_ready(&mut r, &rig).await;
+    assert!(rig.serial.writes().is_empty());
+    assert_eq!(rig.serial.erases(), 0);
+    r.advance(Some(Input::Cancel)).await;
+    assert_eq!(rig.serial.open_sessions(), 0, "the port was left open");
+    assert_eq!(
+        rig.serial.abandoned(),
+        0,
+        "the panel was left in its bootloader"
+    );
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_save_of_the_point_of_no_return_restarts_the_panel_unwritten() {
+    let rig = Rig::new();
+    let runs = tempfile::tempdir().unwrap();
+    let dir = runs.path().join("runs");
+    let mut r = rig.runner().with_autosave(dir.clone());
+    // Up to the flash step's first call, with saves working.
+    let mut input = None;
+    loop {
+        match r.advance(input.take()).await {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } if r.state().step_index == 4 => break,
+            Event::Progress { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    // The disk refuses the next save: where the run directory was is now a file.
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::write(&dir, b"not a directory").unwrap();
+    let (_, reason, _) = failure(&r.advance(None).await);
+    assert!(reason.contains("could not save"), "{reason}");
+    assert!(rig.serial.writes().is_empty());
+    assert_eq!(rig.serial.erases(), 0);
+    assert_eq!(rig.serial.open_sessions(), 0, "the port was left open");
+    assert_eq!(
+        rig.serial.abandoned(),
+        0,
+        "the panel was left in its bootloader"
+    );
 }

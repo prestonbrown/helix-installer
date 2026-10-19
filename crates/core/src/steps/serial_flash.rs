@@ -63,6 +63,13 @@ impl Task {
     pub(crate) fn running(&self) -> bool {
         matches!(self.job, Job::Running(_))
     }
+
+    /// Lets go of a flash that has not started writing, restarting the panel out of its stub.
+    pub(crate) async fn release(self) {
+        if let Job::Ready(Some((session, _))) = self.job {
+            restart_unwritten(session).await;
+        }
+    }
 }
 
 enum Job {
@@ -101,14 +108,20 @@ pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>, input: Option<Input>) -
             };
             // The runner records the commit on disk between the checks and the first change;
             // without it (the save failed) the prepared flash is dropped unwritten.
-            if let (Some((session, parts)), true) = (ready, ctx.committed) {
-                let handle =
-                    tokio::spawn(write_all(session, task.erase, parts, task.written.clone()));
-                task.job = Job::Running(handle);
-                let title = writing_title(ctx, &task.version);
-                ctx.session.flash = Some(task);
-                return progress(title, None, Some(0.0));
+            match (ready, ctx.committed) {
+                (Some((session, parts)), true) => {
+                    let handle =
+                        tokio::spawn(write_all(session, task.erase, parts, task.written.clone()));
+                    task.job = Job::Running(handle);
+                    let title = writing_title(ctx, &task.version);
+                    ctx.session.flash = Some(task);
+                    return progress(title, None, Some(0.0));
+                }
+                (Some((session, _)), false) => restart_unwritten(session).await,
+                (None, _) => {}
             }
+        } else {
+            task.release().await;
         }
     }
     if ctx.calls == 0 {
@@ -317,11 +330,30 @@ async fn write_all(
     parts: Vec<FlashPart>,
     written: Arc<AtomicU64>,
 ) -> Result<String, Stop> {
+    match write_parts(s.as_mut(), erase, &parts, &written).await {
+        Ok(()) => s
+            .reset(BOOT_VERSION_MARKER, BOOT_LISTEN)
+            .await
+            .map_err(Stop::Reset),
+        Err(stop) => {
+            // Out of the stub whatever it now holds: the bootloader shows nothing on the screen.
+            let _ = s.reset("", Duration::ZERO).await;
+            Err(stop)
+        }
+    }
+}
+
+async fn write_parts(
+    s: &mut dyn FlashSession,
+    erase: bool,
+    parts: &[FlashPart],
+    written: &AtomicU64,
+) -> Result<(), Stop> {
     if erase {
         s.erase_all().await.map_err(Stop::Erase)?;
     }
     let mut done = 0u64;
-    for p in &parts {
+    for p in parts {
         let base = done;
         let report = |n: u64| written.store(base + n, Ordering::Relaxed);
         let stopped = |error| Stop::Write {
@@ -339,9 +371,12 @@ async fn write_all(
             });
         }
     }
-    s.reset(BOOT_VERSION_MARKER, BOOT_LISTEN)
-        .await
-        .map_err(Stop::Reset)
+    Ok(())
+}
+
+/// Closes a session that wrote nothing, restarting the panel into the app it already has.
+async fn restart_unwritten(session: Box<dyn FlashSession>) {
+    let _ = session.reset("", Duration::ZERO).await;
 }
 
 fn megabytes(n: u64) -> String {

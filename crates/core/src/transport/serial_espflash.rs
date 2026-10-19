@@ -172,6 +172,16 @@ struct EspflashSession {
     fast: bool,
 }
 
+/// A session closed without `reset` (a dropped flash, a closing app) restarts the panel rather than
+/// leave it in its bootloader, dark until it is replugged.
+impl Drop for EspflashSession {
+    fn drop(&mut self) {
+        if let Some(mut flasher) = self.flasher.take() {
+            let _ = flasher.connection().reset();
+        }
+    }
+}
+
 impl EspflashSession {
     /// Runs `f` on the flasher on the blocking pool.
     async fn with<T: Send + 'static>(

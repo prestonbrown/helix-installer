@@ -694,6 +694,8 @@ struct SerialState {
     writes: Vec<(String, u32, usize)>,
     resets: u32,
     erases: u32,
+    open_sessions: u32,
+    abandoned: u32,
     vanish_on_erase: bool,
     reboot_after_write: bool,
     vanish_on_write: Option<u32>,
@@ -794,6 +796,15 @@ impl FakeSerial {
     pub fn resets(&self) -> u32 {
         lock(&self.state).resets
     }
+    /// Sessions connected and not yet closed.
+    pub fn open_sessions(&self) -> u32 {
+        lock(&self.state).open_sessions
+    }
+    /// Sessions closed without a reset while their board was still plugged in: a board left in
+    /// its bootloader, dark until it is replugged.
+    pub fn abandoned(&self) -> u32 {
+        lock(&self.state).abandoned
+    }
     /// How many times a whole chip was erased.
     pub fn erases(&self) -> u32 {
         lock(&self.state).erases
@@ -826,11 +837,14 @@ impl Serial for FakeSerial {
         let Some(board) = st.boards.get(port) else {
             return Err(TransportError::Timeout);
         };
+        let chip = board.chip.clone();
+        st.open_sessions += 1;
         Ok(Box::new(FakeFlashSession {
             state: self.state.clone(),
             port: port.into(),
-            chip: board.chip.clone(),
+            chip,
             booted: false,
+            closed: false,
         }))
     }
 }
@@ -841,6 +855,18 @@ struct FakeFlashSession {
     chip: ChipInfo,
     /// Left the bootloader: the session no longer answers.
     booted: bool,
+    /// `reset` ran.
+    closed: bool,
+}
+
+impl Drop for FakeFlashSession {
+    fn drop(&mut self) {
+        let mut st = lock(&self.state);
+        st.open_sessions = st.open_sessions.saturating_sub(1);
+        if !self.closed && !self.booted && st.boards.contains_key(&self.port) {
+            st.abandoned += 1;
+        }
+    }
 }
 
 impl FakeFlashSession {
@@ -932,7 +958,8 @@ impl FlashSession for FakeFlashSession {
         let bytes = self.board(|b| b.read(offset, len))?;
         Ok(md5::Md5::digest(&bytes).into())
     }
-    async fn reset(self: Box<Self>, _until: &str, _listen: Duration) -> Result<String> {
+    async fn reset(mut self: Box<Self>, _until: &str, _listen: Duration) -> Result<String> {
+        self.closed = true;
         let app = self.board(|b| b.read(0x20000, 0x120))?;
         let mut st = lock(&self.state);
         st.resets += 1;
