@@ -382,6 +382,14 @@ impl Runner {
 
             let outcome = self.run_step(&manifest, step, input.take()).await;
             self.calls += 1;
+            if std::mem::take(&mut self.session.commit_requested) && !self.state.committed {
+                self.state.committed = true;
+                self.state.fresh.clear();
+                self.log(index, "passed the point of no return".into());
+                if let Err(e) = self.autosave() {
+                    return self.fail(format!("could not save install progress: {e}"), None);
+                }
+            }
             match outcome {
                 StepOutcome::Done => {
                     if step.commits() && self.state.identity.is_none() {
@@ -748,9 +756,12 @@ fn rerun_prompt() -> Prompt {
 }
 
 /// When a committing step passes the point of no return: a step that only asks the user
-/// commits on the answer that tells the installer to act; every other step as it starts.
+/// commits on the answer that tells the installer to act; `serial_flash` commits itself just
+/// before its first erase or write (`StepCtx::commit_before_acting`); every other step as it
+/// starts.
 fn commits_on(step: &Step, input: Option<&Input>) -> bool {
     match step {
+        Step::SerialFlash { .. } => false,
         Step::Info { .. } | Step::UserAction { .. } => matches!(input, Some(Input::Next)),
         Step::Ask { choices, .. } => {
             matches!(input, Some(Input::Choice(c)) if choices.iter().any(|x| x.value == *c))

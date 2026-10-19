@@ -138,3 +138,31 @@ fn missing_trailing_components_count_as_zero_in_both_version_kinds() {
     assert!(rel("1.1-beta.1") < rel("1.1.0"));
     assert!(rel("v1.1") > rel("1.0.9"));
 }
+
+#[test]
+fn a_build_after_a_tag_sorts_above_that_release_and_below_the_next() {
+    // ESP-IDF stamps the app with `git describe`: what a K-Touch built after beta.10 reports.
+    let dev = rel("v1.1.0-beta.10-64-ga2416a6b7a");
+    assert!(dev > rel("v1.1.0-beta.10"));
+    assert!(dev < rel("v1.1.0-beta.11"));
+    assert!(dev < rel("1.1.0"));
+    assert!(dev.is_prerelease());
+    assert!(rel("v1.1.0-beta.10-65-g0123abc") > dev);
+    assert_eq!(dev.to_string(), "1.1.0-beta.10-64-ga2416a6b7a");
+}
+
+#[test]
+fn a_dirty_build_sorts_above_its_base() {
+    assert!(rel("v1.1.0-beta.10-dirty") > rel("v1.1.0-beta.10"));
+    assert!(rel("v1.1.0-beta.10-64-ga2416a6b7a-dirty") > rel("v1.1.0-beta.10"));
+    assert!(rel("v1.1.0-beta.10-64-ga2416a6b7a-dirty") < rel("v1.1.0-beta.11"));
+}
+
+#[test]
+fn a_build_after_a_stable_tag_is_not_a_prerelease() {
+    let dev = rel("1.1.0-3-gdeadbee");
+    assert!(dev > rel("1.1.0"));
+    assert!(dev < rel("1.1.1"));
+    assert!(!dev.is_prerelease());
+    assert_eq!(rel("v1.1.0"), rel("1.1.0"));
+}

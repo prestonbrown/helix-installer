@@ -84,8 +84,11 @@ pub struct Session {
     /// Every line of the jobs this runner followed to their end, for the support bundle.
     job_log: Vec<String>,
     stick: Option<write_stick::Stage>,
-    /// A flash running in the background, and the step it belongs to.
+    /// A flash ready or running in the background, and the step it belongs to.
     flash: Option<serial_flash::Task>,
+    /// The current step asked to pass the point of no return before it changes anything; the
+    /// runner records it on disk when the step returns.
+    pub(crate) commit_requested: bool,
     /// Logins the user typed that the printer refused since the last success.
     login_tries: u32,
     /// The recipe's default logins were already tried during this step run.
@@ -156,6 +159,12 @@ pub struct StepCtx<'a> {
 }
 
 impl StepCtx<'_> {
+    /// Marks the point of no return for a step that decides itself when it starts changing the
+    /// printer: the runner records it when the step returns, before the step is run again.
+    pub(crate) fn commit_before_acting(&mut self) {
+        self.session.commit_requested = true;
+    }
+
     pub fn login(&self) -> Option<&Login> {
         self.session.login.as_ref()
     }

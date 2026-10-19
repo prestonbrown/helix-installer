@@ -227,3 +227,13 @@ fn a_mac_bridge_listed_as_tty_and_cu_is_offered_once_by_its_cu_name() {
     let names: Vec<&str> = found.iter().map(|c| c.host.addr.as_str()).collect();
     assert_eq!(names, vec!["/dev/cu.usbserial-110"]);
 }
+
+#[test]
+fn any_helixscreen_project_name_is_helixscreen() {
+    let f = probe_facts(
+        &s3(),
+        &app_image("helixscreen_esp32_ktouch", "v1.1.0-beta.10-64-ga2416a6b7a"),
+    );
+    assert_eq!(f["helix_installed"], json!(true));
+    assert_eq!(f["helix_version"], json!("v1.1.0-beta.10-64-ga2416a6b7a"));
+}

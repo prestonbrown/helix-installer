@@ -44,8 +44,8 @@ pub struct Spec<'a> {
     pub update: bool,
 }
 
-/// A flash running in the background. Held in memory only: a closed app closes the port, and
-/// the step then writes the panel again from the start.
+/// A flash checked and ready, or running in the background. Held in memory only: a closed app
+/// closes the port, and the step then writes the panel again from the start.
 pub(crate) struct Task {
     step: usize,
     update: bool,
@@ -56,7 +56,14 @@ pub(crate) struct Task {
     offered: ReleaseVersion,
     total: u64,
     written: Arc<AtomicU64>,
-    handle: JoinHandle<Result<String, Stop>>,
+    job: Job,
+}
+
+enum Job {
+    /// Every check passed on the open port; nothing is written until the run has recorded its
+    /// point of no return.
+    Ready(Option<(Box<dyn FlashSession>, Vec<FlashPart>)>),
+    Running(JoinHandle<Result<String, Stop>>),
 }
 
 /// Why a flash stopped before the panel booted the new build.
@@ -80,9 +87,22 @@ fn progress(title: String, detail: Option<String>, fraction: Option<f32>) -> Ste
 }
 
 pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>, input: Option<Input>) -> StepOutcome {
-    if let Some(task) = ctx.session.flash.take() {
+    if let Some(mut task) = ctx.session.flash.take() {
         if task.step == ctx.step {
-            return follow(ctx, task).await;
+            let ready = match &mut task.job {
+                Job::Running(_) => return follow(ctx, task).await,
+                Job::Ready(ready) => ready.take(),
+            };
+            // The runner records the commit on disk between the checks and the first change;
+            // without it (the save failed) the prepared flash is dropped unwritten.
+            if let (Some((session, parts)), true) = (ready, ctx.committed) {
+                let handle =
+                    tokio::spawn(write_all(session, task.erase, parts, task.written.clone()));
+                task.job = Job::Running(handle);
+                let title = writing_title(ctx, &task.version);
+                ctx.session.flash = Some(task);
+                return progress(title, None, Some(0.0));
+            }
         }
     }
     if ctx.calls == 0 {
@@ -216,9 +236,10 @@ async fn start(
         },
         ctx.printer_name()
     ));
-    let written = Arc::new(AtomicU64::new(0));
     let total = image.total_bytes();
-    let handle = tokio::spawn(write_all(session, erase, image.parts, written.clone()));
+    // The point of no return is the first erase or write, not this step's start: everything
+    // above refused or failed with the panel untouched.
+    ctx.commit_before_acting();
     Ok(Task {
         step: ctx.step,
         update: spec.update,
@@ -226,8 +247,8 @@ async fn start(
         version,
         offered,
         total,
-        written,
-        handle,
+        written: Arc::new(AtomicU64::new(0)),
+        job: Job::Ready(Some((session, image.parts))),
     })
 }
 
@@ -319,7 +340,10 @@ fn megabytes(n: u64) -> String {
 
 /// Reports the running flash, or what it ended with.
 async fn follow(ctx: &mut StepCtx<'_>, mut task: Task) -> StepOutcome {
-    let ended = match tokio::time::timeout(POLL, &mut task.handle).await {
+    let Job::Running(handle) = &mut task.job else {
+        return StepOutcome::failed("the flash was never started");
+    };
+    let ended = match tokio::time::timeout(POLL, handle).await {
         Ok(ended) => ended,
         Err(_) => {
             let written = task.written.load(Ordering::Relaxed).min(task.total);

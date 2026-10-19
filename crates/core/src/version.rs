@@ -69,10 +69,61 @@ impl fmt::Display for FwVersion {
 /// (`1.1.0-beta.9`). Ordered as semver orders them, so a prerelease sorts below its release
 /// (`1.1.0-beta.9 < 1.1.0`) and numeric prerelease parts compare as numbers
 /// (`beta.9 < beta.10`).
+///
+/// A build made after a release's tag carries what `git describe` adds to it
+/// (`1.1.0-beta.10-64-ga2416a6b7a`, `-dirty`): it has commits the release lacks, so it sorts
+/// above that release and below the next one.
 #[derive(Debug, Clone)]
 pub struct ReleaseVersion {
     core: FwVersion,
     pre: Vec<PreId>,
+    build: Option<Build>,
+}
+
+/// What `git describe` appends after a tag: the commits since it and their head, and whether
+/// the tree had uncommitted changes.
+#[derive(Debug, Clone)]
+struct Build {
+    commits: u64,
+    sha: Option<String>,
+    dirty: bool,
+}
+
+impl Build {
+    /// Splits `-<n>-g<sha>` and/or `-dirty` off the end of `s`.
+    fn split(s: &str) -> (&str, Option<Build>) {
+        let (s, dirty) = match s.strip_suffix("-dirty") {
+            Some(rest) => (rest, true),
+            None => (s, false),
+        };
+        let described = s.rsplit_once('-').and_then(|(rest, g)| {
+            let sha = g
+                .strip_prefix('g')
+                .filter(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()))?;
+            let (base, n) = rest.rsplit_once('-')?;
+            let commits = n.parse::<u64>().ok().filter(|_| !n.is_empty())?;
+            Some((base, commits, sha.to_string()))
+        });
+        match described {
+            Some((base, commits, sha)) => (
+                base,
+                Some(Build {
+                    commits,
+                    sha: Some(sha),
+                    dirty,
+                }),
+            ),
+            None if dirty => (
+                s,
+                Some(Build {
+                    commits: 0,
+                    sha: None,
+                    dirty,
+                }),
+            ),
+            None => (s, None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,6 +138,7 @@ impl ReleaseVersion {
     pub fn parse(s: &str) -> Option<ReleaseVersion> {
         let s = s.trim();
         let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
+        let (s, build) = Build::split(s);
         let (core, pre) = match s.split_once('-') {
             Some((core, pre)) => (core, Some(pre)),
             None => (s, None),
@@ -107,7 +159,7 @@ impl ReleaseVersion {
                 })
                 .collect::<Option<Vec<_>>>()?,
         };
-        Some(ReleaseVersion { core, pre })
+        Some(ReleaseVersion { core, pre, build })
     }
 
     pub fn is_prerelease(&self) -> bool {
@@ -117,15 +169,21 @@ impl ReleaseVersion {
 
 impl Ord for ReleaseVersion {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.core.cmp(&other.core).then_with(|| {
-            match (self.pre.is_empty(), other.pre.is_empty()) {
-                (true, true) => Ordering::Equal,
-                (true, false) => Ordering::Greater,
-                (false, true) => Ordering::Less,
-                // Vec ordering: a shorter list that is a prefix of the other sorts first.
-                (false, false) => self.pre.cmp(&other.pre),
-            }
-        })
+        self.core
+            .cmp(&other.core)
+            .then_with(|| {
+                match (self.pre.is_empty(), other.pre.is_empty()) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    // Vec ordering: a shorter list that is a prefix of the other sorts first.
+                    (false, false) => self.pre.cmp(&other.pre),
+                }
+            })
+            .then_with(|| {
+                let key = |b: &Option<Build>| b.as_ref().map(|b| (b.commits, b.dirty));
+                key(&self.build).cmp(&key(&other.build))
+            })
     }
 }
 
@@ -151,6 +209,14 @@ impl fmt::Display for ReleaseVersion {
             match id {
                 PreId::Num(n) => write!(f, "{n}")?,
                 PreId::Text(t) => f.write_str(t)?,
+            }
+        }
+        if let Some(b) = &self.build {
+            if let Some(sha) = &b.sha {
+                write!(f, "-{}-g{sha}", b.commits)?;
+            }
+            if b.dirty {
+                f.write_str("-dirty")?;
             }
         }
         Ok(())

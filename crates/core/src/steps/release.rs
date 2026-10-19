@@ -80,16 +80,26 @@ pub(crate) fn update_channels(pinned: Option<Channel>, installed: &ReleaseVersio
     }
 }
 
-/// What a run that found nothing newer to install says on its finish screen.
+/// What a run that found nothing newer to install says on its finish screen. A development build
+/// can be newer than every release.
 pub(crate) fn up_to_date_note(
     installed: &ReleaseVersion,
     channels: &[Channel],
     offered: &ReleaseVersion,
 ) -> String {
-    let channels: Vec<&str> = channels.iter().map(|c| c.as_str()).collect();
+    let channels = channels
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(" or ");
+    if installed > offered {
+        return format!(
+            "HelixScreen is up to date: a newer build of HelixScreen is installed ({installed}) \
+             than the newest {channels} release ({offered}), so nothing was changed"
+        );
+    }
     format!(
-        "HelixScreen is up to date: {installed} is installed, and the newest {} release is {offered}",
-        channels.join(" or ")
+        "HelixScreen is up to date: {installed} is installed, and the newest {channels} release is {offered}"
     )
 }
 

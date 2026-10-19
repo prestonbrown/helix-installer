@@ -16,8 +16,9 @@ use std::time::Duration;
 pub const APP_OFFSET: u32 = 0x20000;
 /// The image header, the first segment header and the `esp_app_desc_t` after them.
 pub const APP_DESC_LEN: u32 = 0x120;
-/// The project name HelixScreen's firmware builds under.
-pub const HELIX_PROJECT: &str = "helixscreen_esp32";
+/// What the project name of every HelixScreen firmware build starts with
+/// (`helixscreen_esp32`).
+pub const HELIX_PROJECT_PREFIX: &str = "helixscreen";
 /// What an ESP-IDF app's boot log puts before its version.
 pub const BOOT_VERSION_MARKER: &str = "App version:";
 const APP_DESC_MAGIC: u32 = 0xABCD_5432;
@@ -322,7 +323,7 @@ pub fn probe_facts(chip: &ChipInfo, app: &[u8]) -> Facts {
         f.insert("serial".into(), json!(mac));
     }
     if let Some(desc) = app_desc(app) {
-        if desc.project == HELIX_PROJECT {
+        if desc.project.starts_with(HELIX_PROJECT_PREFIX) {
             f.insert("helix_installed".into(), Value::Bool(true));
             f.insert("helix_version".into(), json!(desc.version));
         }

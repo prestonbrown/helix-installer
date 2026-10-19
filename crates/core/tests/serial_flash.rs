@@ -280,6 +280,7 @@ async fn an_up_to_date_panel_is_not_written() {
     assert!(matches!(t.end, Event::Done), "{:?}", t.end);
     assert!(rig.serial.writes().is_empty());
     assert_eq!(rig.serial.connects().len(), 1);
+    assert!(!r.state().committed, "nothing was written");
     let note = r.state().done_note.clone().unwrap_or_default();
     assert!(note.contains("up to date"), "{note}");
 }
@@ -292,12 +293,12 @@ async fn a_newer_helixscreen_is_never_downgraded() {
     let t = drive(&mut r).await;
     assert!(matches!(t.end, Event::Done), "{:?}", t.end);
     assert!(rig.serial.writes().is_empty());
-    assert!(r
-        .state()
-        .done_note
-        .clone()
-        .unwrap_or_default()
-        .contains("up to date"));
+    assert!(!r.state().committed, "nothing was written");
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(
+        note.contains("a newer build of HelixScreen is installed"),
+        "{note}"
+    );
 }
 
 #[tokio::test]
@@ -519,7 +520,8 @@ async fn a_zip_that_does_not_match_its_github_digest_is_not_written() {
         Some(&"0".repeat(64)),
     );
     let mut r = rig.runner();
-    let (_, reason, _) = failure(&drive(&mut r).await.end);
+    let (committed, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(!committed, "nothing was written");
     assert!(reason.contains("hash"), "{reason}");
     assert!(rig.serial.writes().is_empty());
 }
@@ -581,4 +583,94 @@ async fn a_panel_unplugged_while_it_is_erased_says_so() {
     assert!(reason.contains("erased"), "{reason}");
     assert!(help.contains("may not start"), "{help}");
     assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_development_build_newer_than_the_release_is_left_alone() {
+    // What a real K-Touch built from main after the beta.10 tag reports.
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.10-64-ga2416a6b7a");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(r.state().recipe_id, "ktouch_update");
+    assert!(rig.serial.writes().is_empty());
+    assert_eq!(rig.serial.erases(), 0);
+    assert_eq!(rig.serial.connects().len(), 1);
+    assert!(!r.state().committed, "nothing was written");
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(
+        note.contains("a newer build of HelixScreen is installed"),
+        "{note}"
+    );
+    assert!(note.contains("1.1.0-beta.10-64-ga2416a6b7a"), "{note}");
+}
+
+#[tokio::test]
+async fn a_development_build_older_than_the_release_is_updated() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9-12-g0123abcd");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+}
+
+#[tokio::test]
+async fn a_board_swapped_before_the_flash_is_refused_before_the_point_of_no_return() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    // Through the probe and the checks, up to the flash step's first call.
+    let mut input = None;
+    loop {
+        match r.advance(input.take()).await {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } if r.state().step_index == 4 => break,
+            Event::Progress { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    rig.serial.unplug(PORT);
+    rig.plug(
+        PORT,
+        ChipInfo {
+            chip: "esp32".into(),
+            flash_bytes: 16 * 1024 * 1024,
+            mac: Some(MAC.into()),
+        },
+    );
+    match drive(&mut r).await.end {
+        Event::Refused { reason, .. } => {
+            assert!(reason.contains("nothing was written"), "{reason}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!r.state().committed);
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn the_point_of_no_return_is_recorded_before_the_first_erase() {
+    let rig = Rig::new();
+    let gate = rig.serial.hold_writes();
+    let mut r = rig.runner();
+    let mut input = None;
+    loop {
+        let ev = r.advance(input.take()).await;
+        let touched = rig.serial.erases() > 0 || !rig.serial.writes().is_empty();
+        if touched {
+            assert!(
+                r.state().committed,
+                "the panel was changed before the commit"
+            );
+        }
+        match ev {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } => gate.notify_one(),
+            Event::Done => break,
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(r.state().committed);
+    assert_eq!(rig.serial.erases(), 1);
 }
