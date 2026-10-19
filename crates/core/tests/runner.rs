@@ -1927,3 +1927,96 @@ async fn a_probe_that_leaves_the_printer_no_recipe_refuses_before_the_commit() {
     }
     assert!(!r.state().committed);
 }
+
+/// A K1C run past its commit whose `moonraker_gcode` (a `Flaky` handler) failed once after the
+/// fresh probes identified the printer.
+async fn k1c_gcode_failed(f: &Fakes, flaky: Arc<Flaky>) -> Runner {
+    answer_as(f, "k1c");
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    let system = r#"{ "type": "probe", "moonraker": "system_info" }"#;
+    let objects = r#"{ "type": "probe", "moonraker": "objects_list" }"#;
+    let m = k1c_and_ad5m(steps(&[COMMIT, WAIT, system, objects, GCODE]));
+    let state = RunState::new("run1", "k1c", "r", Host::new(ADDR), k1c_facts());
+    let mut r = Runner::new(f.env(), m, state).with_handler("moonraker_gcode", flaky.clone());
+    assert!(matches!(
+        r.advance(None).await,
+        Event::NeedInput(Prompt::Info { .. })
+    ));
+    let ev = settle(&mut r, Some(Input::Next)).await;
+    assert!(
+        matches!(
+            ev,
+            Event::Failed {
+                committed: true,
+                step: 4,
+                ..
+            }
+        ),
+        "{ev:?}"
+    );
+    assert_eq!(flaky.runs(), 1);
+    r
+}
+
+/// Retries the failed step, answering the "run it again?" question with yes.
+async fn retry(r: &mut Runner) -> Event {
+    let ev = settle(r, None).await;
+    assert!(is_rerun_question(&ev), "{ev:?}");
+    settle(r, Some(Input::Choice("retry".into()))).await
+}
+
+#[tokio::test]
+async fn retrying_an_acting_step_probes_the_printer_again_and_stops_on_another_one() {
+    let f = Fakes::new();
+    let flaky = Flaky::new(1);
+    let mut r = k1c_gcode_failed(&f, flaky.clone()).await;
+    answer_as(&f, "ad5m");
+    match retry(&mut r).await {
+        Event::Failed {
+            committed: true,
+            reason,
+            ..
+        } => assert!(reason.contains("not the printer"), "{reason}"),
+        e => panic!("expected a committed failure, got {e:?}"),
+    }
+    assert_eq!(flaky.runs(), 1, "nothing more was sent");
+}
+
+#[tokio::test]
+async fn retrying_an_acting_step_on_the_same_printer_reprobes_then_runs_it() {
+    let f = Fakes::new();
+    let flaky = Flaky::new(1);
+    let mut r = k1c_gcode_failed(&f, flaky.clone()).await;
+    assert!(matches!(retry(&mut r).await, Event::Done));
+    assert_eq!(flaky.runs(), 2);
+    assert_eq!(r.state().step_index, 5);
+}
+
+#[tokio::test]
+async fn a_reopened_run_probes_the_printer_again_before_it_acts() {
+    let f = Fakes::new();
+    let flaky = Flaky::new(1);
+    let r = k1c_gcode_failed(&f, flaky.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    r.save(dir.path()).unwrap();
+    let m = r.manifest().clone();
+    drop(r);
+
+    answer_as(&f, "ad5m");
+    let mut r = Runner::new(
+        f.env(),
+        Arc::new(m),
+        Runner::load(dir.path(), "run1").unwrap(),
+    )
+    .with_handler("moonraker_gcode", flaky.clone());
+    match retry(&mut r).await {
+        Event::Failed {
+            committed: true,
+            reason,
+            ..
+        } => assert!(reason.contains("not the printer"), "{reason}"),
+        e => panic!("expected a committed failure, got {e:?}"),
+    }
+    assert_eq!(flaky.runs(), 1, "nothing more was sent");
+}

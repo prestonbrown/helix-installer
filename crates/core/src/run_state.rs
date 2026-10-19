@@ -70,6 +70,10 @@ pub struct RunState {
     /// re-identification reads only these.
     #[serde(default)]
     pub fresh: Facts,
+    /// While the probes since the last commit or wait are re-run to identify the printer again:
+    /// the step that needs them, which every non-probe step before it is skipped to reach.
+    #[serde(default)]
+    pub replay_until: Option<usize>,
     /// sha256 of the manifest and of the recipe's canonical JSON the run started with. A run
     /// only continues against the same recipe it was planned with.
     #[serde(default)]
@@ -109,6 +113,7 @@ impl RunState {
             committed: false,
             identity: None,
             fresh: Facts::new(),
+            replay_until: None,
             manifest_sha256: None,
             recipe_sha256: None,
             started_step: None,

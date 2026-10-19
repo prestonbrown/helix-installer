@@ -355,8 +355,10 @@ async fn generic_install_asks_for_the_login_and_installs_for_the_cpu() {
 }
 
 #[tokio::test]
-async fn generic_update_on_the_voron_passes_update() {
+async fn generic_update_on_the_voron_passes_update_and_stays_on_stable() {
     let rig = Rig::new();
+    // The Voron runs a stable release: a newer beta is not for it.
+    rig.publish(Channel::Beta, "1.1.0-beta.10");
     rig.ssh.accept(ADDR, "biqu", "biqu");
     rig.ssh.set_fallback(|cmd| match cmd {
         "id -u" => out("1000\n", 0),
@@ -388,6 +390,10 @@ async fn generic_update_on_the_voron_passes_update() {
     assert_eq!(installs.len(), 1);
     assert!(
         installs[0].0.ends_with("--progress --update"),
+        "{installs:?}"
+    );
+    assert!(
+        installs[0].0.contains("helixscreen-pi-v1.0.5.tar.gz"),
         "{installs:?}"
     );
     assert_eq!(
@@ -667,8 +673,10 @@ async fn a_k2_whose_installed_version_cannot_be_read_is_not_updated() {
 
     let trace = drive(&mut r, next_only).await;
     match &trace.end {
-        Event::Refused { reason, .. } => {
-            assert!(reason.contains("which HelixScreen version"), "{reason}")
+        Event::Refused { reason, doc, .. } => {
+            assert!(reason.contains("which HelixScreen version"), "{reason}");
+            assert!(reason.contains("Reinstall"), "{reason}");
+            assert_eq!(doc, "https://helixscreen.org/docs/install-k2");
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -800,6 +808,38 @@ async fn the_k1c_on_the_newest_beta_is_up_to_date_and_never_gets_the_older_stabl
     let note = r.state().done_note.clone().unwrap_or_default();
     assert!(note.contains("HelixScreen is up to date"), "{note:?}");
     assert!(note.contains("1.1.0-beta.9"), "{note:?}");
+}
+
+#[tokio::test]
+async fn the_k1c_on_a_beta_takes_the_stable_release_once_it_is_newer_than_every_beta() {
+    let rig = k1c_update_rig("1.1.0-beta.9");
+    rig.publish(Channel::Stable, "1.1.0");
+    let m = staging();
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert_eq!(
+        rig.installs()[0].0,
+        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.1.0.tar.gz' --progress --update"
+    );
+}
+
+#[tokio::test]
+async fn an_install_without_release_info_is_read_from_its_binarys_version_line() {
+    let rig = k2_rig("creality_2024", true);
+    rig.ssh.on_command(
+        INSTALLED_VERSION_PROBE,
+        out("helix-screen 1.0.4 (9ed38c74d5)\n", 0),
+    );
+    let m = staging();
+    let picked = identify(&m, &fleet("k2_plus"));
+    let mut r = rig.runner(&m, &picked, fleet("k2_plus"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(rig.installs()[0].0.ends_with("--progress --update"));
 }
 
 #[tokio::test]

@@ -36,8 +36,10 @@ pub const GITHUB_RELEASE_API: &str =
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
 /// Prints the installed HelixScreen's version from its `release_info.json`, which every install
-/// writes: in the running binary's tree first, then in each place install.sh installs to.
-pub const INSTALLED_VERSION_PROBE: &str = r#"p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); for d in ${e:+"${e%/bin/*}"} /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do if [ -f "$d/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/release_info.json" | head -n 1; exit 0; fi; done"#;
+/// by install.sh writes: in the running binary's tree first, then in each place install.sh
+/// installs to. A tree without one (a payload a mod installed itself) answers with its binary's
+/// `--version` line instead (`helix-screen 1.1.0-beta.9 (9ed38c74d5)`).
+pub const INSTALLED_VERSION_PROBE: &str = r#"p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); b=; for d in ${e:+"${e%/bin/*}"} /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do if [ -f "$d/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/release_info.json" | head -n 1; exit 0; fi; [ -z "$b" ] && [ -x "$d/bin/helix-screen" ] && b="$d/bin/helix-screen"; done; [ -n "$b" ] && "$b" --version 2>/dev/null | head -n 1"#;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The fact holding the installed HelixScreen's version (`v1.1.0-beta.9`).
 const VERSION_FACT: &str = "helix_version";
@@ -146,23 +148,25 @@ pub async fn run(
     }
     // The run-wide override (testing, beta testers) wins over the recipe.
     let pinned = ctx.channel_override.or(channel);
-    let (channel, installed) = match run.mode {
+    // An unpinned update of a prerelease takes the newest of beta and stable, so a beta tester
+    // reaches the stable release once it is out; a stable install only ever reads stable.
+    let (channels, installed) = match run.mode {
         Mode::Update => match installed_version(ctx).await {
             Ok(v) => {
-                let follow = if v.is_prerelease() {
-                    Channel::Beta
-                } else {
-                    Channel::Stable
+                let channels = match pinned {
+                    Some(c) => vec![c],
+                    None if v.is_prerelease() => vec![Channel::Beta, Channel::Stable],
+                    None => vec![Channel::Stable],
                 };
-                (pinned.unwrap_or(follow), Some(v))
+                (channels, Some(v))
             }
             Err(stop) => return stop,
         },
-        Mode::Install | Mode::Uninstall => (pinned.unwrap_or_default(), None),
+        Mode::Install | Mode::Uninstall => (vec![pinned.unwrap_or_default()], None),
     };
     let target = Target {
         platform: &platform,
-        channel,
+        channels: &channels,
         installed: installed.as_ref(),
     };
     match launch(ctx, target, run, dir.unwrap_or(DEFAULT_DIR)).await {
@@ -240,27 +244,32 @@ async fn installed_version(ctx: &mut StepCtx<'_>) -> Result<ReleaseVersion, Step
             )));
         }
     };
-    match ReleaseVersion::parse(&text) {
-        Some(v) => {
+    // A bare version, or the binary's `helix-screen <version> (<hash>)` line.
+    let found = text
+        .split_whitespace()
+        .find_map(|t| ReleaseVersion::parse(t).map(|v| (t.to_string(), v)));
+    match found {
+        Some((token, v)) => {
             ctx.facts
-                .insert(VERSION_FACT.into(), serde_json::json!(text));
+                .insert(VERSION_FACT.into(), serde_json::json!(token));
             Ok(v)
         }
         None => Err(StepOutcome::Refused {
             doc: ctx.printer_doc(),
             reason: "the installer cannot tell which HelixScreen version is on this printer, \
-                     so it will not update it: an update never installs an older version"
+                     so it will not update it: an update never installs an older version. \
+                     Reinstall HelixScreen following this printer's install guide"
                 .into(),
         }),
     }
 }
 
-/// What a launch installs: the platform's build from `channel`'s newest release, and for an
-/// update only when that release is newer than `installed`.
+/// What a launch installs: the platform's build from the newest release of `channels` (the
+/// first wins a tie), and for an update only when that release is newer than `installed`.
 #[derive(Clone, Copy)]
 struct Target<'a> {
     platform: &'a str,
-    channel: Channel,
+    channels: &'a [Channel],
     installed: Option<&'a ReleaseVersion>,
 }
 
@@ -270,17 +279,27 @@ async fn launch(
     run: Run,
     dir: &str,
 ) -> Result<RemoteJob, StepOutcome> {
-    let (platform, channel) = (target.platform, target.channel);
+    let platform = target.platform;
     let mode = run.mode;
-    let list_url = releases_manifest_url(channel);
-    let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
+    let mut newest: Option<(ReleaseManifest, ReleaseVersion)> = None;
+    for &channel in target.channels {
+        let list_url = releases_manifest_url(channel);
+        let release: ReleaseManifest = fetch_json(ctx.env, &list_url, "the release list").await?;
+        let version = release.release_version()?;
+        if newest.as_ref().is_none_or(|(_, best)| version > *best) {
+            newest = Some((release, version));
+        }
+    }
+    let Some((release, offered)) = newest else {
+        return Err(StepOutcome::failed("no release channel to read"));
+    };
     if let Some(installed) = target.installed {
-        let offered = release.release_version()?;
         if offered <= *installed {
+            let channels: Vec<&str> = target.channels.iter().map(|c| c.as_str()).collect();
             return Err(StepOutcome::Complete {
                 note: format!(
                     "HelixScreen is up to date: {installed} is installed, and the newest {} release is {offered}",
-                    channel.as_str()
+                    channels.join(" or ")
                 ),
             });
         }

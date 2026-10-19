@@ -129,3 +129,12 @@ fn a_release_version_needs_numbers() {
         assert!(ReleaseVersion::parse(bad).is_none(), "{bad:?}");
     }
 }
+
+#[test]
+fn missing_trailing_components_count_as_zero_in_both_version_kinds() {
+    assert_eq!(v("1.1"), v("1.1.0"));
+    assert!(v("1.1") < v("1.1.1"));
+    assert_eq!(rel("1.1"), rel("1.1.0"));
+    assert!(rel("1.1-beta.1") < rel("1.1.0"));
+    assert!(rel("v1.1") > rel("1.0.9"));
+}

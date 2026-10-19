@@ -101,10 +101,16 @@ pub struct Runner {
     calls: u32,
     /// Why the run's own manifest copy could not be verified on resume; the run cannot go on.
     manifest_error: Option<String>,
+    /// The step the probes before it were last re-run for, so a printer they do not identify
+    /// stops the run instead of being probed again and again.
+    replayed_for: Option<usize>,
 }
 
 impl Runner {
-    pub fn new(env: Env, manifest: Arc<Manifest>, state: RunState) -> Runner {
+    /// A run loaded from disk trusts none of its `fresh` facts: the address may answer for
+    /// another printer by now.
+    pub fn new(env: Env, manifest: Arc<Manifest>, mut state: RunState) -> Runner {
+        state.fresh.clear();
         Runner {
             env,
             manifest,
@@ -116,6 +122,7 @@ impl Runner {
             autosave: None,
             calls: 0,
             manifest_error: None,
+            replayed_for: None,
         }
     }
 
@@ -259,6 +266,11 @@ impl Runner {
         if matches!(input, Some(Input::Cancel)) {
             return self.cancel();
         }
+        // A retry may come much later, after the address has moved to another printer.
+        if matches!(self.state.status, RunStatus::Failed { .. }) {
+            self.state.fresh.clear();
+            self.replayed_for = None;
+        }
         self.state.status = RunStatus::Running;
 
         let mut input = input;
@@ -273,6 +285,16 @@ impl Runner {
                 self.log(index, "recipe complete".into());
                 return self.persist(Event::Done);
             };
+
+            // Re-identifying: only the probes run on the way back to the step that needs them.
+            if let Some(until) = self.state.replay_until {
+                if index >= until {
+                    self.state.replay_until = None;
+                } else if !matches!(step, Step::Probe { .. }) {
+                    self.state.step_index += 1;
+                    continue;
+                }
+            }
 
             // A recorded job is followed rather than run again, so there is nothing to ask.
             if self.calls == 0
@@ -292,12 +314,28 @@ impl Runner {
 
             // The committing step acts on the identification made before it; every later step
             // that acts needs the printer identified again (`RunState::fresh`).
+            // When it has not been, the probes since the last commit or wait (idempotent) run
+            // again once, then this step is reconsidered.
             if self.state.committed
                 && step.acts_on_printer()
                 && !step.commits()
                 && !identify::answers_as(&manifest, &self.state.printer_id, &self.state.fresh)
             {
-                return self.not_reidentified(&manifest);
+                match probes_since_boundary(steps, index) {
+                    Some(start) if self.replayed_for != Some(index) => {
+                        self.replayed_for = Some(index);
+                        self.state.replay_until = Some(index);
+                        self.state.fresh.clear();
+                        self.state.step_index = start;
+                        self.calls = 0;
+                        self.log(
+                            index,
+                            "probing the printer again before acting on it".into(),
+                        );
+                        continue;
+                    }
+                    _ => return self.not_reidentified(&manifest),
+                }
             }
 
             // Recorded on disk before the step acts, so a crash inside it resumes as committed.
@@ -625,6 +663,19 @@ impl Runner {
             text,
         });
     }
+}
+
+/// Where re-identifying for the step at `index` starts: just after the last commit or
+/// `wait_for` before it, when a probe lies between. `None` when none does.
+fn probes_since_boundary(steps: &[Step], index: usize) -> Option<usize> {
+    let start = steps[..index]
+        .iter()
+        .rposition(|s| s.commits() || matches!(s, Step::WaitFor { .. }))
+        .map_or(0, |b| b + 1);
+    steps[start..index]
+        .iter()
+        .any(|s| matches!(s, Step::Probe { .. }))
+        .then_some(start)
 }
 
 const RERUN: &str = "retry";
