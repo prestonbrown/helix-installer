@@ -104,3 +104,28 @@ pub fn zip_with(tag: &str, app_version: &str, flash_args: &str) -> Vec<u8> {
 pub fn release_zip(tag: &str) -> Vec<u8> {
     zip_with(tag, tag, FLASH_ARGS)
 }
+
+/// One otadata entry: `seq` and the CRC ESP-IDF stores with it (zlib CRC-32 of the four `seq`
+/// bytes, seeded with 0xFFFFFFFF; computed outside this code base).
+pub fn ota_entry(seq: u32, crc: u32) -> Vec<u8> {
+    let mut e = seq.to_le_bytes().to_vec();
+    e.extend([0xff; 20]);
+    e.extend(0xffff_ffffu32.to_le_bytes());
+    e.extend(crc.to_le_bytes());
+    e
+}
+
+pub const CRC_SEQ_1: u32 = 0x4743_989a;
+pub const CRC_SEQ_2: u32 = 0x55f6_3774;
+
+/// The 8 KiB otadata partition: one entry per 4 KiB sector, an absent one erased.
+pub fn otadata(first: Option<Vec<u8>>, second: Option<Vec<u8>>) -> Vec<u8> {
+    let mut d = vec![0xff; 0x2000];
+    if let Some(e) = first {
+        d[..32].copy_from_slice(&e);
+    }
+    if let Some(e) = second {
+        d[0x1000..0x1020].copy_from_slice(&e);
+    }
+    d
+}

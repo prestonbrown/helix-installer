@@ -86,6 +86,8 @@ pub struct Session {
     stick: Option<write_stick::Stage>,
     /// A flash ready or running in the background, and the step it belongs to.
     flash: Option<serial_flash::Task>,
+    /// The USB port the user last let the installer open, in this app session only.
+    confirmed_port: Option<String>,
     /// The current step asked to pass the point of no return before it changes anything; the
     /// runner records it on disk when the step returns.
     pub(crate) commit_requested: bool,
@@ -118,6 +120,11 @@ impl Session {
         if let Some(c) = self.job_cursor.take() {
             self.job_log.extend(c.into_lines());
         }
+    }
+
+    /// A flash is erasing or writing the panel in the background.
+    pub(crate) fn flash_running(&self) -> bool {
+        self.flash.as_ref().is_some_and(serial_flash::Task::running)
     }
 
     /// The password, passphrase and sudo password of the login held now, and the sudo passwords

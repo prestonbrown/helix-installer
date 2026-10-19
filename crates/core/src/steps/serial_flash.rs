@@ -59,6 +59,12 @@ pub(crate) struct Task {
     job: Job,
 }
 
+impl Task {
+    pub(crate) fn running(&self) -> bool {
+        matches!(self.job, Job::Running(_))
+    }
+}
+
 enum Job {
     /// Every check passed on the open port; nothing is written until the run has recorded its
     /// point of no return.
@@ -201,9 +207,13 @@ async fn start(
     };
 
     let port = esp32::run_port(ctx)?;
-    // A panel that came back under another name is named to the user before its port is opened.
-    if port != ctx.host.addr && !matches!(input, Some(Input::Next)) {
-        return Err(esp32::confirm_open(ctx, &port));
+    // Every open is of a port the user confirmed in this app session: one a replugged panel came
+    // back under, or any port after the app was reopened, may now hold another device.
+    if ctx.session.confirmed_port.as_deref() != Some(port.as_str()) {
+        if !matches!(input, Some(Input::Next)) {
+            return Err(esp32::confirm_open(ctx, &port));
+        }
+        ctx.session.confirmed_port = Some(port.clone());
     }
     let session = ctx
         .env

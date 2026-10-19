@@ -73,6 +73,21 @@ impl Rig {
         rig
     }
 
+    /// The board runs HelixScreen `version` from its second app slot, otadata selecting it, with
+    /// `older` left in the first.
+    fn running_second_slot(&self, version: &str, older: &str) {
+        self.serial.preload(PORT, 0x8000, partition_table());
+        self.serial.preload(
+            PORT,
+            0xf000,
+            otadata(Some(ota_entry(1, CRC_SEQ_1)), Some(ota_entry(2, CRC_SEQ_2))),
+        );
+        self.serial
+            .preload(PORT, APP_OFFSET, app_image("helixscreen_esp32", older));
+        self.serial
+            .preload(PORT, 0x6a0000, app_image("helixscreen_esp32", version));
+    }
+
     fn plug(&self, port: &str, chip: ChipInfo) {
         self.serial.plug(port, 0x1a86, 0x7522, chip);
         self.serial.preload(port, NVS, b"wifi credentials".to_vec());
@@ -697,4 +712,75 @@ async fn a_first_install_stopped_after_the_erase_says_the_panel_is_blank_and_try
         rig.serial.read_back(PORT, APP_OFFSET, 0x1000),
         app_image("helixscreen_esp32", "v1.1.0-beta.10")
     );
+}
+
+#[tokio::test]
+async fn the_version_is_read_from_the_app_slot_the_panel_boots() {
+    let rig = Rig::new();
+    rig.running_second_slot("v1.1.0", "v1.1.0-beta.9");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert!(
+        rig.serial.writes().is_empty(),
+        "an older release was written over 1.1.0"
+    );
+    assert_eq!(r.state().facts["helix_version"], json!("v1.1.0"));
+}
+
+#[tokio::test]
+async fn a_reopened_run_names_the_port_again_before_opening_it() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    let mut input = None;
+    loop {
+        match r.advance(input.take()).await {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } if r.state().step_index == 4 => break,
+            Event::Progress { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    let opened = rig.serial.connects().len();
+    // The app is closed and opened again: a new runner from the saved state.
+    let mut reopened = Runner::new(rig.env(), Arc::new(staging()), r.state().clone())
+        .with_cache_dir(rig.cache.path().to_path_buf());
+    let mut ev = reopened.advance(None).await;
+    while matches!(ev, Event::Progress { .. }) {
+        ev = reopened.advance(None).await;
+    }
+    match &ev {
+        Event::NeedInput(Prompt::Confirm { text, .. }) => assert!(text.contains(PORT), "{text}"),
+        other => panic!("expected the port to be confirmed again, got {other:?}"),
+    }
+    assert_eq!(rig.serial.connects().len(), opened);
+    reopened.advance(Some(Input::Next)).await;
+    assert!(matches!(drive(&mut reopened).await.end, Event::Done));
+}
+
+#[tokio::test]
+async fn a_cancel_while_the_panel_is_being_written_lets_the_write_finish() {
+    let rig = Rig::new();
+    let gate = rig.serial.hold_writes();
+    let mut r = rig.runner();
+    let mut input = None;
+    let mut cancelled = false;
+    let end = loop {
+        let ev = r.advance(input.take()).await;
+        match ev {
+            Event::NeedInput(_) => input = Some(Input::Next),
+            Event::Progress { .. } => {
+                if !cancelled && !rig.serial.writes().is_empty() {
+                    cancelled = true;
+                    input = Some(Input::Cancel);
+                } else {
+                    gate.notify_one();
+                }
+            }
+            end => break end,
+        }
+    };
+    assert!(cancelled);
+    assert!(matches!(end, Event::Done), "{end:?}");
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
 }

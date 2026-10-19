@@ -30,6 +30,9 @@ const NAME_LEN: usize = 32;
 /// Where `flash_args` puts the partition table.
 const PARTITION_TABLE_OFFSET: u32 = 0x8000;
 const MIB: u64 = 1024 * 1024;
+const SECTOR: u64 = 0x1000;
+/// The partition table's size: up to 95 entries and an MD5 one.
+const TABLE_LEN: u32 = 0xc00;
 
 /// The project and version an app image says it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,8 +194,61 @@ pub fn read_release_zip(bytes: &[u8]) -> Result<FlashImage, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Partition {
     pub label: String,
+    /// 0 for an app, 1 for data.
+    pub kind: u8,
+    pub subtype: u8,
     pub offset: u32,
     pub size: u32,
+}
+
+/// CRC-32 as ESP-IDF's ROM `crc32_le` computes it.
+fn crc32_le(init: u32, data: &[u8]) -> u32 {
+    let mut crc = !init;
+    for b in data {
+        crc ^= *b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// The otadata partition in `table`.
+pub(crate) fn otadata_partition(table: &[u8]) -> Option<Partition> {
+    partitions(table)
+        .into_iter()
+        .find(|p| p.kind == 1 && p.subtype == 0)
+}
+
+/// Where the app the bootloader starts lives, as ESP-IDF's bootloader picks it: the otadata entry
+/// (one per 4 KiB sector of `otadata`) with the highest sequence number whose CRC holds selects OTA
+/// slot `(seq - 1) % slots`. With no valid entry, or no readable table, the first app slot.
+pub fn running_app_offset(table: &[u8], otadata: &[u8]) -> u32 {
+    let mut slots: Vec<Partition> = partitions(table)
+        .into_iter()
+        .filter(|p| p.kind == 0 && (0x10..0x20).contains(&p.subtype))
+        .collect();
+    slots.sort_by_key(|p| p.subtype);
+    let first = slots.first().map_or(APP_OFFSET, |p| p.offset);
+    let seq = [0usize, 0x1000]
+        .iter()
+        .filter_map(|at| otadata.get(*at..*at + 32))
+        .filter_map(|e| {
+            let seq = u32::from_le_bytes([e[0], e[1], e[2], e[3]]);
+            let crc = u32::from_le_bytes([e[28], e[29], e[30], e[31]]);
+            (seq != u32::MAX && crc == crc32_le(u32::MAX, &e[..4])).then_some(seq)
+        })
+        .max();
+    match seq {
+        Some(seq) if seq > 0 && !slots.is_empty() => {
+            slots[((seq - 1) as usize) % slots.len()].offset
+        }
+        _ => first,
+    }
 }
 
 /// The entries of an ESP-IDF partition table, up to its end marker.
@@ -202,6 +258,8 @@ pub fn partitions(table: &[u8]) -> Vec<Partition> {
         .iter()
         .take_while(|e| e[..2] == [0xaa, 0x50])
         .map(|e| Partition {
+            kind: e[2],
+            subtype: e[3],
             offset: u32::from_le_bytes([e[4], e[5], e[6], e[7]]),
             size: u32::from_le_bytes([e[8], e[9], e[10], e[11]]),
             label: c_str(&e[12..28]),
@@ -261,7 +319,13 @@ pub fn check_image(img: &FlashImage, flash_bytes: u64, keep: &[String]) -> Resul
             flash_bytes / MIB
         ));
     }
-    let span = |p: &FlashPart| (p.offset as u64, p.offset as u64 + p.data.len() as u64);
+    // The flasher erases whole 4 KiB sectors before writing, so a part claims every sector it
+    // touches.
+    let span = |p: &FlashPart| {
+        let start = p.offset as u64 & !(SECTOR - 1);
+        let end = (p.offset as u64 + p.data.len() as u64).div_ceil(SECTOR) * SECTOR;
+        (start, end)
+    };
     for p in &img.parts {
         if span(p).1 > flash_bytes {
             return Err(format!("{} does not fit in the board's flash", p.name));
@@ -348,6 +412,19 @@ pub fn permission_help(os: &str, port: &str, group: &str) -> String {
         "{port} is in use by another program, such as a slicer or a serial monitor. Close it, \
          unplug the K-Touch, plug it back in, and try again."
     )
+}
+
+/// The first bytes of the app the panel boots: the partition table and otadata say which slot.
+async fn read_running_app(
+    session: &mut dyn crate::transport::FlashSession,
+) -> Result<Vec<u8>, TransportError> {
+    let table = session.read(PARTITION_TABLE_OFFSET, TABLE_LEN).await?;
+    let otadata = match otadata_partition(&table) {
+        Some(p) => session.read(p.offset, p.size.min(0x2000)).await?,
+        None => Vec::new(),
+    };
+    let at = running_app_offset(&table, &otadata);
+    session.read(at, APP_DESC_LEN).await
 }
 
 /// The port the run's panel is on now: the run's own port while it is still listed, else the
@@ -439,7 +516,7 @@ pub(crate) async fn probe(ctx: &mut StepCtx<'_>, port: &str) -> Result<Facts, St
         .await
         .map_err(|e| open_failure(e, &port))?;
     let chip = session.chip().clone();
-    let app = session.read(APP_OFFSET, APP_DESC_LEN).await;
+    let app = read_running_app(session.as_mut()).await;
     // The panel stays in its bootloader until reset, whatever the read gave.
     let reset = session.reset("", Duration::ZERO).await;
     let app = app.map_err(|e| open_failure(e, &port))?;

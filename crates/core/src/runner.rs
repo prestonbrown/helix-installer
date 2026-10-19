@@ -254,7 +254,7 @@ impl Runner {
     /// Runs steps from the current one until one needs the user, reports progress, or the run
     /// ends. `input` answers the prompt the previous call returned. After `Failed`, the next
     /// call retries the failed step.
-    pub async fn advance(&mut self, input: Option<Input>) -> Event {
+    pub async fn advance(&mut self, mut input: Option<Input>) -> Event {
         match &self.state.status {
             RunStatus::Done => return Event::Done,
             RunStatus::Refused {
@@ -286,7 +286,16 @@ impl Runner {
             return self.manifest_changed();
         }
         if matches!(input, Some(Input::Cancel)) {
-            return self.cancel();
+            // A write stopped part way leaves the panel unbootable and its port held open, so a
+            // running one is followed to its end instead.
+            if !self.session.flash_running() {
+                return self.cancel();
+            }
+            self.log(
+                self.state.step_index,
+                "cancel ignored: the panel is being written and must finish".into(),
+            );
+            input = None;
         }
         // A retry may come much later, after the address has moved to another printer.
         if matches!(self.state.status, RunStatus::Failed { .. }) {
@@ -296,7 +305,6 @@ impl Runner {
         }
         self.state.status = RunStatus::Running;
 
-        let mut input = input;
         loop {
             let index = self.state.step_index;
             let Some(step) = steps.get(index) else {

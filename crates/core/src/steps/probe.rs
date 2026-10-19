@@ -39,6 +39,7 @@ pub async fn serial(
     if !matches!(input, Some(Input::Next)) {
         return esp32::confirm_open(ctx, &port);
     }
+    ctx.session.confirmed_port = Some(port.clone());
     let found = match esp32::probe(ctx, &port).await {
         Ok(f) => f,
         Err(stop) => return stop,

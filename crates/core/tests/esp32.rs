@@ -237,3 +237,29 @@ fn any_helixscreen_project_name_is_helixscreen() {
     assert_eq!(f["helix_installed"], json!(true));
     assert_eq!(f["helix_version"], json!("v1.1.0-beta.10-64-ga2416a6b7a"));
 }
+
+#[test]
+fn a_part_sharing_a_flash_sector_with_another_is_refused() {
+    // The partition table ends at 0x8c00; a part at 0x8e00 shares its 4 KiB sector, which the
+    // flasher erases whole before writing either.
+    let args = format!("{FLASH_ARGS}0x8e00 README.txt\n");
+    let img = read_release_zip(&zip_with("v1.1.0", "v1.1.0", &args)).unwrap();
+    let err = check_image(&img, MIB16, &keep()).unwrap_err();
+    assert!(err.contains("overlap"), "{err}");
+}
+
+#[test]
+fn the_running_app_is_the_one_otadata_selects() {
+    use helix_installer_core::steps::esp32::running_app_offset;
+    let table = partition_table();
+    let both = otadata(Some(ota_entry(1, CRC_SEQ_1)), Some(ota_entry(2, CRC_SEQ_2)));
+    assert_eq!(running_app_offset(&table, &both), 0x6a0000);
+    let first = otadata(Some(ota_entry(1, CRC_SEQ_1)), None);
+    assert_eq!(running_app_offset(&table, &first), 0x20000);
+    // A newer entry whose CRC does not match is not trusted.
+    let corrupt = otadata(Some(ota_entry(1, CRC_SEQ_1)), Some(ota_entry(2, 0x1234)));
+    assert_eq!(running_app_offset(&table, &corrupt), 0x20000);
+    assert_eq!(running_app_offset(&table, &otadata(None, None)), 0x20000);
+    // No readable table: the first app slot.
+    assert_eq!(running_app_offset(&[0xff; 3072], &both), 0x20000);
+}
