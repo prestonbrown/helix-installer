@@ -28,6 +28,12 @@ pub enum Prompt {
         text: String,
         image: Option<String>,
     },
+    /// The installer is about to do what `text` says; `button` (answered with `Input::Next`) lets
+    /// it go ahead.
+    Confirm {
+        text: String,
+        button: String,
+    },
     Ask {
         question: String,
         choices: Vec<Choice>,

@@ -43,6 +43,7 @@ const shots = [
       await p.getByPlaceholder("192.168.1.50").fill("192.168.1.50");
     },
   ],
+  ["confirm", "confirm", async (p) => (await install(p), p.getByRole("button", { name: "Continue" }).waitFor())],
   ["info", "info", async (p) => (await install(p), p.getByRole("button", { name: "Next" }).waitFor())],
   ["user-action", "user_action", async (p) => (await install(p), p.getByRole("button", { name: "I've done this" }).waitFor())],
   ["ask", "ask", async (p) => (await install(p), p.waitForSelector(".answer"))],

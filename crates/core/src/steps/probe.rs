@@ -3,9 +3,10 @@
 //! `probe`: read facts from Moonraker, an SSH command or a port on the run's host, or from the
 //! board on the run's USB port.
 
-use super::{StepCtx, StepOutcome};
+use super::{esp32, StepCtx, StepOutcome};
 use crate::facts::Facts;
 use crate::manifest::{MoonrakerProbe, Probe, SerialProbe};
+use crate::runner::Input;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -14,6 +15,31 @@ const TCP_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub async fn run(ctx: &mut StepCtx<'_>, probe: &Probe) -> StepOutcome {
     let found = match gather(ctx, probe).await {
+        Ok(f) => f,
+        Err(stop) => return stop,
+    };
+    match ctx.record_probe(found) {
+        Ok(()) => StepOutcome::Done,
+        Err(stop) => stop,
+    }
+}
+
+/// A `serial` probe step: it names the port and opens it only once the user goes ahead, since
+/// opening it restarts whatever is plugged in there.
+pub async fn serial(
+    ctx: &mut StepCtx<'_>,
+    probe: SerialProbe,
+    input: Option<Input>,
+) -> StepOutcome {
+    let SerialProbe::Esp32 = probe;
+    let port = match esp32::run_port(ctx) {
+        Ok(p) => p,
+        Err(stop) => return stop,
+    };
+    if !matches!(input, Some(Input::Next)) {
+        return esp32::confirm_open(ctx, &port);
+    }
+    let found = match esp32::probe(ctx, &port).await {
         Ok(f) => f,
         Err(stop) => return stop,
     };
@@ -70,9 +96,9 @@ async fn gather(ctx: &mut StepCtx<'_>, probe: &Probe) -> Result<Facts, StepOutco
                 .is_ok();
             Ok(Facts::from([(fact.clone(), Value::Bool(open))]))
         }
-        Probe::Serial {
-            serial: SerialProbe::Esp32,
-        } => super::esp32::probe(ctx).await,
+        Probe::Serial { .. } => Err(StepOutcome::failed(
+            "a serial probe runs only as its own step, once the user has confirmed the port",
+        )),
     }
 }
 

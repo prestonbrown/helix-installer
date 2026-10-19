@@ -207,6 +207,8 @@ pub trait FlashSession: Send {
         data: &[u8],
         progress: &(dyn Fn(u64) + Sync),
     ) -> Result<()>;
+    /// Erases the whole flash chip.
+    async fn erase_all(&mut self) -> Result<()>;
     /// The MD5 of `len` bytes at `offset` as the chip reads them back from its flash.
     async fn md5(&mut self, offset: u32, len: u32) -> Result<[u8; 16]>;
     /// Hard-resets the board so it boots its app, then reads its console until a line holding

@@ -682,6 +682,8 @@ struct SerialState {
     connects: Vec<String>,
     writes: Vec<(String, u32, usize)>,
     resets: u32,
+    erases: u32,
+    vanish_on_erase: bool,
     vanish_on_write: Option<u32>,
     corrupt_writes: bool,
     silent_boot: bool,
@@ -780,6 +782,14 @@ impl FakeSerial {
     pub fn resets(&self) -> u32 {
         lock(&self.state).resets
     }
+    /// How many times a whole chip was erased.
+    pub fn erases(&self) -> u32 {
+        lock(&self.state).erases
+    }
+    /// The next whole-chip erase unplugs the board part way through.
+    pub fn vanish_on_erase(&self) {
+        lock(&self.state).vanish_on_erase = true;
+    }
 }
 
 #[async_trait]
@@ -814,6 +824,12 @@ struct FakeFlashSession {
 }
 
 impl FakeFlashSession {
+    fn unplug_here(&self) {
+        let mut st = lock(&self.state);
+        st.ports.retain(|p| p.name != self.port);
+        st.boards.remove(&self.port);
+    }
+
     fn board<T>(&self, f: impl FnOnce(&mut Board) -> T) -> Result<T> {
         lock(&self.state)
             .boards
@@ -858,10 +874,7 @@ impl FlashSession for FakeFlashSession {
         progress(half as u64);
         if vanish {
             self.board(|b| b.flash.push((offset, data[..half].to_vec())))?;
-            let port = self.port.clone();
-            let mut st = lock(&self.state);
-            st.ports.retain(|p| p.name != port);
-            st.boards.remove(&port);
+            self.unplug_here();
             return Err(TransportError::Disconnected);
         }
         if let Some(n) = hold {
@@ -875,6 +888,19 @@ impl FlashSession for FakeFlashSession {
         }
         self.board(|b| b.flash.push((offset, bytes)))?;
         progress(data.len() as u64);
+        Ok(())
+    }
+    async fn erase_all(&mut self) -> Result<()> {
+        let vanish = {
+            let mut st = lock(&self.state);
+            st.erases += 1;
+            std::mem::take(&mut st.vanish_on_erase)
+        };
+        self.board(|b| b.flash.clear())?;
+        if vanish {
+            self.unplug_here();
+            return Err(TransportError::Disconnected);
+        }
         Ok(())
     }
     async fn md5(&mut self, offset: u32, len: u32) -> Result<[u8; 16]> {

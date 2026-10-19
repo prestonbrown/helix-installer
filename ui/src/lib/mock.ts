@@ -121,6 +121,15 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
 const MB = 1000 * 1000;
 
 const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
+  confirm: {
+    event: {
+      event: "need_input",
+      prompt: "confirm",
+      text: "The BTT K-Touch is plugged in at /dev/ttyUSB0. The installer will now connect to it, which restarts it. If /dev/ttyUSB0 is some other device, unplug it or stop here.",
+      button: "Continue",
+    },
+    run: run({ printer_name: "BTT K-Touch", address: "/dev/ttyUSB0", step: 0, total_steps: 7, step_kind: "probe" }),
+  },
   info: {
     event: {
       event: "need_input",

@@ -212,7 +212,9 @@ impl Trace {
         self.prompts
             .iter()
             .map(|p| match p {
-                Prompt::Info { text, .. } | Prompt::UserAction { text, .. } => text.clone(),
+                Prompt::Info { text, .. }
+                | Prompt::UserAction { text, .. }
+                | Prompt::Confirm { text, .. } => text.clone(),
                 Prompt::Ask { question, .. } => question.clone(),
                 Prompt::Login { user_hint, .. } => format!("login {user_hint:?}"),
                 Prompt::ChooseDrive { .. } => "choose drive".into(),

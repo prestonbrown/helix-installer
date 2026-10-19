@@ -418,6 +418,9 @@ pub(crate) async fn run_builtin(
             ..
         } => ask::run(ctx, fact, question, choices, input),
         Step::Probe { .. } => match step.probe() {
+            Some(crate::manifest::Probe::Serial { serial }) => {
+                probe::serial(ctx, serial, input).await
+            }
             Some(p) => {
                 if matches!(p, crate::manifest::Probe::Ssh { .. }) {
                     if let Some(ask) = ctx.need_login(input).await {
@@ -503,7 +506,7 @@ pub(crate) async fn run_builtin(
                 channel: *channel,
                 update: *update,
             };
-            serial_flash::run(ctx, &spec).await
+            serial_flash::run(ctx, &spec, input).await
         }
     }
 }

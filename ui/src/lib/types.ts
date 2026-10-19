@@ -59,6 +59,8 @@ export interface Drive {
 export type Prompt =
   | { prompt: "info"; text: string; image: string | null }
   | { prompt: "user_action"; text: string; image: string | null }
+  /** The installer is about to act (open a USB port); `button` lets it go ahead. */
+  | { prompt: "confirm"; text: string; button: string }
   | { prompt: "ask"; question: string; choices: Choice[] }
   | {
       prompt: "login";

@@ -273,6 +273,11 @@ impl FlashSession for EspflashSession {
         out
     }
 
+    async fn erase_all(&mut self) -> Result<()> {
+        self.with(|f, port| f.erase_flash().map_err(|e| flash_error(port, e)))
+            .await
+    }
+
     async fn md5(&mut self, offset: u32, len: u32) -> Result<[u8; 16]> {
         self.with(move |f, port| {
             f.checksum_md5(offset, len)

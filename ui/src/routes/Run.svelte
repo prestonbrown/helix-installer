@@ -140,6 +140,14 @@
         {@render stopLink()}
       </div>
     </section>
+  {:else if ev.event === "need_input" && ev.prompt === "confirm"}
+    <section class="card body">
+      {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
+      <div class="actions">
+        <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>{ev.button}</button>
+        {@render stopLink()}
+      </div>
+    </section>
   {:else if ev.event === "need_input" && ev.prompt === "user_action"}
     <section class="card body">
       <p class="eyebrow">On your printer</p>

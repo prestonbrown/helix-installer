@@ -13,6 +13,7 @@ use super::esp32::{self, FlashPart, BOOT_VERSION_MARKER};
 use super::release;
 use super::{StepCtx, StepOutcome};
 use crate::manifest::Channel;
+use crate::runner::Input;
 use crate::transport::{ChipInfo, FlashSession, TransportError};
 use crate::version::ReleaseVersion;
 use md5::Digest;
@@ -48,6 +49,8 @@ pub struct Spec<'a> {
 pub(crate) struct Task {
     step: usize,
     update: bool,
+    /// The chip is erased before the writes.
+    erase: bool,
     /// The version being written, as its app names it (`v1.1.0-beta.10`), and parsed.
     version: String,
     offered: ReleaseVersion,
@@ -62,6 +65,8 @@ enum Stop {
     Write { part: String, error: TransportError },
     /// `part` was written and the chip read back other bytes.
     Verify { part: String },
+    /// Erasing the chip before the writes failed.
+    Erase(TransportError),
     /// Everything was written and checked; the reset after it failed.
     Reset(TransportError),
 }
@@ -74,7 +79,7 @@ fn progress(title: String, detail: Option<String>, fraction: Option<f32>) -> Ste
     }
 }
 
-pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>) -> StepOutcome {
+pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>, input: Option<Input>) -> StepOutcome {
     if let Some(task) = ctx.session.flash.take() {
         if task.step == ctx.step {
             return follow(ctx, task).await;
@@ -87,7 +92,7 @@ pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>) -> StepOutcome {
         );
         return progress(title, None, None);
     }
-    match start(ctx, spec).await {
+    match start(ctx, spec, input).await {
         Ok(task) => {
             let title = writing_title(ctx, &task.version);
             ctx.session.flash = Some(task);
@@ -123,7 +128,11 @@ fn installed_version(ctx: &StepCtx<'_>) -> Result<ReleaseVersion, StepOutcome> {
 
 /// Everything up to the first write: the release, its verified build, and the panel checked
 /// over the one open of its port the write then goes through.
-async fn start(ctx: &mut StepCtx<'_>, spec: &Spec<'_>) -> Result<Task, StepOutcome> {
+async fn start(
+    ctx: &mut StepCtx<'_>,
+    spec: &Spec<'_>,
+    input: Option<Input>,
+) -> Result<Task, StepOutcome> {
     let pinned = ctx.channel_override.or(spec.channel);
     let (channels, installed) = if spec.update {
         let v = installed_version(ctx)?;
@@ -171,12 +180,11 @@ async fn start(ctx: &mut StepCtx<'_>, spec: &Spec<'_>) -> Result<Task, StepOutco
         None => return Err(StepOutcome::failed(format!("{name} holds no app to write"))),
     };
 
-    let usb = ctx
-        .facts
-        .get("usb")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let port = esp32::find_port(ctx.env.serial.as_ref(), &ctx.host.addr, usb.as_deref())?;
+    let port = esp32::run_port(ctx)?;
+    // A panel that came back under another name is named to the user before its port is opened.
+    if port != ctx.host.addr && !matches!(input, Some(Input::Next)) {
+        return Err(esp32::confirm_open(ctx, &port));
+    }
     let session = ctx
         .env
         .serial
@@ -194,16 +202,27 @@ async fn start(ctx: &mut StepCtx<'_>, spec: &Spec<'_>) -> Result<Task, StepOutco
         let _ = session.reset("", Duration::ZERO).await;
         return Err(stop);
     }
+    // A panel that did not run HelixScreen when the run probed it is erased first, so nothing of
+    // its old firmware or settings is left for HelixScreen to trip over. The run's probe decides,
+    // not the chip as it is now: a retry after a half-written flash must not erase a panel whose
+    // WiFi and settings are HelixScreen's own. An update never erases.
+    let erase = !spec.update && ctx.facts.get("helix_installed") != Some(&json!(true));
     ctx.log(format!(
-        "writing HelixScreen {version} to the {} on {port}",
+        "{} HelixScreen {version} to the {} on {port}",
+        if erase {
+            "erasing, then writing"
+        } else {
+            "writing"
+        },
         ctx.printer_name()
     ));
     let written = Arc::new(AtomicU64::new(0));
     let total = image.total_bytes();
-    let handle = tokio::spawn(write_all(session, image.parts, written.clone()));
+    let handle = tokio::spawn(write_all(session, erase, image.parts, written.clone()));
     Ok(Task {
         step: ctx.step,
         update: spec.update,
+        erase,
         version,
         offered,
         total,
@@ -259,13 +278,17 @@ fn board_problem(
     None
 }
 
-/// Writes each part and checks it by the MD5 the chip reads back, then resets the panel and
-/// returns what it printed as it booted.
+/// Erases the chip when `erase` says to, writes each part and checks it by the MD5 the chip reads
+/// back, then resets the panel and returns what it printed as it booted.
 async fn write_all(
     mut s: Box<dyn FlashSession>,
+    erase: bool,
     parts: Vec<FlashPart>,
     written: Arc<AtomicU64>,
 ) -> Result<String, Stop> {
+    if erase {
+        s.erase_all().await.map_err(Stop::Erase)?;
+    }
     let mut done = 0u64;
     for p in &parts {
         let base = done;
@@ -300,13 +323,18 @@ async fn follow(ctx: &mut StepCtx<'_>, mut task: Task) -> StepOutcome {
         Ok(ended) => ended,
         Err(_) => {
             let written = task.written.load(Ordering::Relaxed).min(task.total);
-            let out = progress(
-                writing_title(ctx, &task.version),
-                Some(format!(
+            let detail = if task.erase && written == 0 {
+                "Removing the old firmware and settings".to_string()
+            } else {
+                format!(
                     "{} of {} MB written",
                     megabytes(written),
                     megabytes(task.total)
-                )),
+                )
+            };
+            let out = progress(
+                writing_title(ctx, &task.version),
+                Some(detail),
                 Some(written as f32 / task.total.max(1) as f32),
             );
             ctx.session.flash = Some(task);
@@ -372,6 +400,14 @@ fn stopped(ctx: &mut StepCtx<'_>, stop: Stop) -> StepOutcome {
         },
         Stop::Write { part, error } => StepOutcome::Failed {
             reason: format!("writing {part} to the {name} failed: {error}"),
+            help: Some(MID_FLASH_HELP.into()),
+        },
+        Stop::Erase(TransportError::Disconnected) => StepOutcome::Failed {
+            reason: format!("the {name} disconnected while it was being erased"),
+            help: Some(MID_FLASH_HELP.into()),
+        },
+        Stop::Erase(error) => StepOutcome::Failed {
+            reason: format!("erasing the {name} failed: {error}"),
             help: Some(MID_FLASH_HELP.into()),
         },
         Stop::Verify { part } => StepOutcome::Failed {

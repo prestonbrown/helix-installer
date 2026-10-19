@@ -603,14 +603,26 @@ fn with_install(steps: Value) -> Value {
 #[test]
 fn a_usb_flash_may_end_with_the_flash_or_an_info_after_it() {
     let probe = json!({"type": "probe", "serial": "esp32"});
+    let warn = json!({"type": "info", "text": "this removes what is on it"});
     assert_eq!(
-        run(with_install(json!([probe, flash_step(json!({}))])), false),
+        run(
+            with_install(json!([probe, warn, flash_step(json!({}))])),
+            false
+        ),
         vec![]
     );
     let info = json!({"type": "info", "text": "set it up on its screen"});
     assert_eq!(
         run(
-            with_install(json!([probe, flash_step(json!({})), info])),
+            with_install(json!([probe, warn, flash_step(json!({})), info])),
+            false
+        ),
+        vec![]
+    );
+    // An update never erases, so it needs no warning.
+    assert_eq!(
+        run(
+            with_install(json!([probe, flash_step(json!({"update": true}))])),
             false
         ),
         vec![]
@@ -628,15 +640,25 @@ fn an_info_with_no_flash_before_it_still_does_not_end_an_install() {
 #[test]
 fn a_usb_flash_changes_the_panel_so_it_needs_the_commit() {
     only(
-        with_install(json!([flash_step(json!({"commits": false}))])),
+        with_install(json!([flash_step(
+            json!({"commits": false, "update": true})
+        )])),
         "no step has commits",
+    );
+}
+
+#[test]
+fn a_usb_install_that_may_erase_the_panel_must_say_so_first() {
+    only(
+        with_install(json!([{"type": "probe", "serial": "esp32"}, flash_step(json!({}))])),
+        "erase",
     );
 }
 
 #[test]
 fn a_usb_flash_needs_a_chip_and_its_flash_size() {
     only(
-        with_install(json!([flash_step(json!({"flash_mb": 0}))])),
+        with_install(json!([flash_step(json!({"flash_mb": 0, "update": true}))])),
         "chip and a flash_mb",
     );
 }

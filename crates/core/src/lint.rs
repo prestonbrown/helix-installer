@@ -356,6 +356,18 @@ fn lint_recipe(
                     ),
                 )
             }
+            // An install erases a panel that does not run HelixScreen; the user hears it first.
+            Step::SerialFlash { update: false, .. }
+                if !steps[..i].iter().any(|s| matches!(s, Step::Info { .. })) =>
+            {
+                err(
+                    id,
+                    format!(
+                        "step {i}: serial_flash erases a panel that does not run HelixScreen, so an \
+                         info step before it must say so"
+                    ),
+                )
+            }
             Step::Probe { .. } if s.probe().is_none() => err(
                 id,
                 format!("step {i}: probe needs exactly one of moonraker, ssh+fact, tcp_port+fact, serial"),

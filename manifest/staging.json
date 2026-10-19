@@ -2026,6 +2026,10 @@
         "doc": "https://helixscreen.org/docs/install-esp32"
       },
       {
+        "type": "info",
+        "text": "Installing HelixScreen removes everything on the K-Touch first: BigTreeTech's firmware, its WiFi and its settings. You set it up again on its own screen afterwards. Keep it plugged into this computer until the installer says it is done."
+      },
+      {
         "type": "serial_flash",
         "asset": "helixscreen-esp32-ktouch-{tag}.zip",
         "chip": "esp32s3",
@@ -2093,6 +2097,10 @@
         "equals": "16",
         "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
         "doc": "https://helixscreen.org/docs/install-esp32"
+      },
+      {
+        "type": "info",
+        "text": "The installer will write HelixScreen to the K-Touch again. If the K-Touch does not run HelixScreen now, everything on it is removed first, including its WiFi and settings. Keep it plugged into this computer until the installer says it is done."
       },
       {
         "type": "serial_flash",

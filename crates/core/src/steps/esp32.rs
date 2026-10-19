@@ -6,6 +6,7 @@
 
 use super::{StepCtx, StepOutcome};
 use crate::facts::Facts;
+use crate::runner::Prompt;
 use crate::transport::{ChipInfo, Serial, TransportError};
 use serde_json::{json, Value};
 use std::io::Read;
@@ -407,15 +408,29 @@ pub(crate) fn open_failure(e: TransportError, port: &str) -> StepOutcome {
     }
 }
 
-/// The `serial` probe: one open of the run's port, which reads the chip and the app's
-/// descriptor and then restarts the panel into its app.
-pub(crate) async fn probe(ctx: &mut StepCtx<'_>) -> Result<Facts, StepOutcome> {
-    let usb = ctx
-        .facts
-        .get("usb")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let port = find_port(ctx.env.serial.as_ref(), &ctx.host.addr, usb.as_deref())?;
+/// The port the run's panel is on now (`find_port` with the run's port and USB id).
+pub(crate) fn run_port(ctx: &StepCtx<'_>) -> Result<String, StepOutcome> {
+    let usb = ctx.facts.get("usb").and_then(Value::as_str);
+    find_port(ctx.env.serial.as_ref(), &ctx.host.addr, usb)
+}
+
+/// Asks before the installer opens `port`. The USB id it was found by is a common serial chip's,
+/// and opening the port restarts whatever is plugged in there.
+pub(crate) fn confirm_open(ctx: &StepCtx<'_>, port: &str) -> StepOutcome {
+    let name = ctx.printer_name();
+    StepOutcome::NeedInput(Prompt::Confirm {
+        text: format!(
+            "The {name} is plugged in at {port}. The installer will now connect to it, which \
+             restarts it. If {port} is some other device, unplug it or stop here."
+        ),
+        button: "Continue".into(),
+    })
+}
+
+/// The `serial` probe, once the user has confirmed `port`: one open, which reads the chip and the
+/// app's descriptor and then restarts the panel into its app.
+pub(crate) async fn probe(ctx: &mut StepCtx<'_>, port: &str) -> Result<Facts, StepOutcome> {
+    let port = port.to_string();
     let mut session = ctx
         .env
         .serial

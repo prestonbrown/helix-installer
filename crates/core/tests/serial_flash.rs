@@ -123,16 +123,15 @@ impl Rig {
     }
 
     fn runner(&self) -> Runner {
-        let m = staging();
-        let Identified::Recipe {
-            printer_id,
-            recipe_id,
-            ..
-        } = identify(&m, &usb_facts())
-        else {
+        let Identified::Recipe { recipe_id, .. } = identify(&staging(), &usb_facts()) else {
             panic!("the K-Touch did not identify");
         };
-        let state = RunState::new("run", printer_id, recipe_id, Host::new(PORT), usb_facts());
+        self.runner_for(&recipe_id)
+    }
+
+    fn runner_for(&self, recipe_id: &str) -> Runner {
+        let m = staging();
+        let state = RunState::new("run", "ktouch", recipe_id, Host::new(PORT), usb_facts());
         Runner::new(self.env(), Arc::new(m), state).with_cache_dir(self.cache.path().to_path_buf())
     }
 
@@ -157,7 +156,9 @@ async fn drive(r: &mut Runner) -> Trace {
             Event::Progress { .. } => {}
             Event::NeedInput(p) => {
                 match &p {
-                    Prompt::Info { .. } | Prompt::UserAction { .. } => input = Some(Input::Next),
+                    Prompt::Info { .. } | Prompt::UserAction { .. } | Prompt::Confirm { .. } => {
+                        input = Some(Input::Next)
+                    }
                     other => panic!("unexpected prompt {other:?}"),
                 }
                 prompts.push(p);
@@ -212,9 +213,26 @@ async fn a_first_install_writes_only_the_flash_args_parts_then_points_at_the_set
     let t = drive(&mut r).await;
     assert!(matches!(t.end, Event::Done), "{:?}", t.end);
     assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
-    // WiFi and settings survive: their partitions were never written.
-    assert_eq!(rig.serial.read_back(PORT, NVS, 16), b"wifi credentials");
-    assert_eq!(rig.serial.read_back(PORT, CFG, 13), b"settings.json");
+    // Over BTT's firmware the whole chip is erased first, so its WiFi and settings are gone;
+    // the new app reading back below proves the erase came before the writes.
+    assert_eq!(rig.serial.erases(), 1);
+    assert_eq!(rig.serial.read_back(PORT, NVS, 16), vec![0xff; 16]);
+    assert_eq!(rig.serial.read_back(PORT, CFG, 13), vec![0xff; 13]);
+    // The user was told before anything was opened, then before the erase.
+    match t.prompts.first() {
+        Some(Prompt::Confirm { text, button }) => {
+            assert!(text.contains(PORT), "{text}");
+            assert_eq!(button, "Continue");
+        }
+        other => panic!("expected the port to be confirmed first, got {other:?}"),
+    }
+    match t.prompts.get(1) {
+        Some(Prompt::Info { text, .. }) => {
+            assert!(text.contains("removes"), "{text}");
+            assert!(text.contains("WiFi"), "{text}");
+        }
+        other => panic!("expected the erase warning, got {other:?}"),
+    }
     // The factory image is in the zip and never written: no write is its size.
     assert!(rig.serial.writes().iter().all(|w| w.2 != FACTORY_LEN));
     assert_eq!(
@@ -239,8 +257,16 @@ async fn an_older_helixscreen_switches_to_the_update_and_ends_on_the_new_version
     let t = drive(&mut r).await;
     assert!(matches!(t.end, Event::Done), "{:?}", t.end);
     assert_eq!(r.state().recipe_id, "ktouch_update");
-    assert!(t.prompts.is_empty(), "{:?}", t.prompts);
+    assert!(
+        matches!(t.prompts.as_slice(), [Prompt::Confirm { .. }]),
+        "{:?}",
+        t.prompts
+    );
     assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+    // An update never erases: WiFi and settings survive.
+    assert_eq!(rig.serial.erases(), 0);
+    assert_eq!(rig.serial.read_back(PORT, NVS, 16), b"wifi credentials");
+    assert_eq!(rig.serial.read_back(PORT, CFG, 13), b"settings.json");
     assert_eq!(r.state().facts["helix_version"], json!("v1.1.0-beta.10"));
     assert_eq!(r.state().done_note, None);
 }
@@ -353,9 +379,21 @@ async fn a_panel_unplugged_mid_flash_says_what_state_it_is_in_and_is_not_retried
     let opened = rig.serial.connects().len();
     assert_eq!(opened, 2);
 
-    // Plugged back in, it comes back under another name; Try again finds it by its USB id and
-    // checks it is the same board before writing it again.
+    // Plugged back in, it comes back under another name; Try again finds it by its USB id, asks
+    // before opening that port, and checks it is the same board before writing it again.
     rig.plug("/dev/ttyUSB1", s3(MAC));
+    let mut ev = r.advance(None).await;
+    while matches!(ev, Event::Progress { .. }) {
+        ev = r.advance(None).await;
+    }
+    match &ev {
+        Event::NeedInput(Prompt::Confirm { text, .. }) => {
+            assert!(text.contains("/dev/ttyUSB1"), "{text}")
+        }
+        other => panic!("expected the new port to be confirmed, got {other:?}"),
+    }
+    assert_eq!(rig.serial.connects().len(), 2);
+    r.advance(Some(Input::Next)).await;
     let t = drive(&mut r).await;
     assert!(matches!(t.end, Event::Done), "{:?}", t.end);
     assert_eq!(
@@ -413,7 +451,9 @@ async fn an_update_whose_version_cannot_be_read_back_says_to_check_the_screen() 
 
 #[tokio::test]
 async fn a_panel_that_boots_another_version_fails() {
+    // An update (no erase) whose build puts the app in the other slot: the panel boots the old one.
     let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
     rig.publish(
         "v1.1.0-beta.10",
         &zip_with(
@@ -426,10 +466,7 @@ async fn a_panel_that_boots_another_version_fails() {
     let mut r = rig.runner();
     let (committed, reason, _) = failure(&drive(&mut r).await.end);
     assert!(committed);
-    assert!(
-        reason.contains("ktouch_stock") || reason.contains("2.1.0"),
-        "{reason}"
-    );
+    assert!(reason.contains("v1.1.0-beta.9"), "{reason}");
 }
 
 #[tokio::test]
@@ -484,5 +521,64 @@ async fn a_zip_that_does_not_match_its_github_digest_is_not_written() {
     let mut r = rig.runner();
     let (_, reason, _) = failure(&drive(&mut r).await.end);
     assert!(reason.contains("hash"), "{reason}");
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn no_port_is_opened_until_the_user_confirms_it_and_stopping_there_resets_nothing() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    match r.advance(None).await {
+        Event::NeedInput(Prompt::Confirm { text, .. }) => {
+            assert!(text.contains(PORT), "{text}");
+            assert!(text.contains("K-Touch"), "{text}");
+        }
+        other => panic!("expected a confirmation, got {other:?}"),
+    }
+    assert!(rig.serial.connects().is_empty());
+    match r.advance(Some(Input::Cancel)).await {
+        Event::Refused { cancelled, .. } => assert!(cancelled),
+        other => panic!("{other:?}"),
+    }
+    assert!(rig.serial.connects().is_empty());
+    assert_eq!(rig.serial.resets(), 0);
+}
+
+#[tokio::test]
+async fn a_board_with_no_readable_app_is_erased_before_the_install() {
+    let rig = Rig::new();
+    rig.serial.unplug(PORT);
+    rig.serial.plug(PORT, 0x1a86, 0x7522, s3(MAC));
+    rig.serial.preload(PORT, NVS, b"wifi credentials".to_vec());
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(r.state().recipe_id, "ktouch_install");
+    assert_eq!(rig.serial.erases(), 1);
+    assert_eq!(rig.serial.read_back(PORT, NVS, 16), vec![0xff; 16]);
+}
+
+#[tokio::test]
+async fn writing_helixscreen_again_over_helixscreen_never_erases() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.10");
+    let mut r = rig.runner_for("ktouch_reflash");
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+    assert_eq!(rig.serial.erases(), 0);
+    assert_eq!(rig.serial.read_back(PORT, NVS, 16), b"wifi credentials");
+    assert_eq!(rig.serial.read_back(PORT, CFG, 13), b"settings.json");
+}
+
+#[tokio::test]
+async fn a_panel_unplugged_while_it_is_erased_says_so() {
+    let rig = Rig::new();
+    rig.serial.vanish_on_erase();
+    let mut r = rig.runner();
+    let (committed, reason, help) = failure(&drive(&mut r).await.end);
+    assert!(committed);
+    assert!(reason.contains("erased"), "{reason}");
+    assert!(help.contains("may not start"), "{help}");
     assert!(rig.serial.writes().is_empty());
 }
