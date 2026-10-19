@@ -195,8 +195,9 @@ pub struct Partition {
 
 /// The entries of an ESP-IDF partition table, up to its end marker.
 pub fn partitions(table: &[u8]) -> Vec<Partition> {
-    table
-        .chunks_exact(32)
+    let (entries, _) = table.as_chunks::<32>();
+    entries
+        .iter()
         .take_while(|e| e[..2] == [0xaa, 0x50])
         .map(|e| Partition {
             offset: u32::from_le_bytes([e[4], e[5], e[6], e[7]]),
