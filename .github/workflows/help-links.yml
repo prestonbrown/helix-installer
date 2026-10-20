@@ -1,0 +1,21 @@
+name: Help links
+
+# Fetches every helixscreen.org help page the app and its manifests link and fails on any that is
+# not live. It runs on a schedule and by hand, never on a push, so a commit that links a page
+# whose site deploy has not happened yet does not turn `engine` red. A page waiting on a deploy
+# is listed in scripts/pending-help-pages.txt, which must be empty by release: release.yml runs
+# the same check with no list.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: python3 scripts/check_help_links.py --pending scripts/pending-help-pages.txt

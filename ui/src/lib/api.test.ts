@@ -82,10 +82,10 @@ describe("startRun", () => {
     expect(invoke).toHaveBeenCalledWith("start_run", { candidateKey: "SN42", printerId: null });
   });
   it("keeps the guide link of an unsupported printer", async () => {
-    rejectWith("unsupported", "no install recipe", "https://helixscreen.org/docs/k1");
+    rejectWith("unsupported", "no install recipe", "https://helixscreen.org/guide/install-k1/");
     const e = await failure(api.startRun("SN42", "k1"));
     expect(e.kind).toBe("unsupported");
-    expect(e.doc).toBe("https://helixscreen.org/docs/k1");
+    expect(e.doc).toBe("https://helixscreen.org/guide/install-k1/");
     expect(e.message).toMatch(/can't set up this printer/);
   });
   it("asks for the model", async () => {

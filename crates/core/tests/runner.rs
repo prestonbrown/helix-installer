@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const ADDR: &str = "192.168.1.50";
-const PRINTER_DOC: &str = "https://helixscreen.org/docs/install-k1";
+const PRINTER_DOC: &str = "https://helixscreen.org/guide/install-k1/";
 const PASSWORD: &str = "s3cret-pw";
 
 struct Fakes {

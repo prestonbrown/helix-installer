@@ -96,7 +96,7 @@ fn ad5x_stock_is_refused_with_the_printer_doc() {
         run("ad5x_stock"),
         Identified::Refuse {
             printer_id: Some("ad5x".into()),
-            doc: "https://helixscreen.org/docs/ad5x".into(),
+            doc: "https://helixscreen.org/guide/install-ad5x/".into(),
             reason: run_reason("ad5x_stock"),
         }
     );
@@ -170,7 +170,7 @@ fn nothing_recognised_gets_the_generic_refusal() {
         run("empty"),
         Identified::Refuse {
             printer_id: None,
-            doc: "https://helixscreen.org/docs/install".into(),
+            doc: "https://helixscreen.org/installation/".into(),
             reason: "printer not recognised".into(),
         }
     );
@@ -239,7 +239,7 @@ fn empty_when_never_matches() {
             reason,
         } => {
             assert_eq!(p, "k1");
-            assert_eq!(doc, "https://helixscreen.org/docs/k1");
+            assert_eq!(doc, "https://helixscreen.org/guide/install-k1/");
             assert!(reason.contains("Creality K1"), "{reason}");
         }
         other => panic!("expected Refuse, got {other:?}"),
@@ -289,7 +289,7 @@ fn a_picked_model_the_facts_contradict_is_refused() {
             reason,
         } => {
             assert_eq!(p, "k1");
-            assert_eq!(doc, "https://helixscreen.org/docs/k1");
+            assert_eq!(doc, "https://helixscreen.org/guide/install-k1/");
             assert!(reason.contains("Creality K1"), "{reason}");
         }
         other => panic!("expected Refuse, got {other:?}"),

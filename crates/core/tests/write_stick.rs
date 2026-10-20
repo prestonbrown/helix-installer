@@ -86,7 +86,7 @@ impl Rig {
                 "identify": [{ "model": "P" }],
                 "recipes": [{ "when": { "state": "stock" }, "recipe": "r" }],
                 "restore": "r",
-                "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-p" }
+                "fallback": { "refuse": true, "doc": "https://helixscreen.org/guide/supported-printers/" }
             }],
             "artifacts": {
                 "fw": { "url": FW_URL, "sha256": sha(FW), "filename": "firmware.bin" },

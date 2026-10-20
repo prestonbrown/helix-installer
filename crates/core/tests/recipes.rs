@@ -686,7 +686,7 @@ async fn a_k2_whose_installed_version_cannot_be_read_is_not_updated() {
         Event::Refused { reason, doc, .. } => {
             assert!(reason.contains("which HelixScreen version"), "{reason}");
             assert!(reason.contains("Reinstall"), "{reason}");
-            assert_eq!(doc, "https://helixscreen.org/docs/install-k2");
+            assert_eq!(doc, "https://helixscreen.org/guide/install-k2/");
         }
         other => panic!("expected a refusal, got {other:?}"),
     }

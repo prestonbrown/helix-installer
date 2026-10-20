@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// The install guide linked when no printer-specific one applies.
-pub const GENERIC_REFUSE_DOC: &str = "https://helixscreen.org/docs/install";
+pub const GENERIC_REFUSE_DOC: &str = "https://helixscreen.org/installation/";
 
 /// What is on the printer before the installer touches it.
 #[derive(Debug, Clone, PartialEq, Eq)]

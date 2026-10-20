@@ -86,7 +86,7 @@ const found: CandidateView[] = [
     answered: true,
     helix_version: null,
     choices: [],
-    doc: "https://helixscreen.org/docs/install",
+    doc: "https://helixscreen.org/installation/",
     reason: "printer not recognised",
   },
   {
@@ -113,7 +113,7 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   total_steps: 9,
   step_kind: "info",
   committed: false,
-  guide: "https://helixscreen.org/docs/install-k1",
+  guide: "https://helixscreen.org/guide/install-k1/",
   done_note: null,
   ...over,
 });
@@ -242,7 +242,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
   refused: {
     event: {
       event: "refused",
-      doc: "https://helixscreen.org/docs/install-k1",
+      doc: "https://helixscreen.org/guide/install-k1/",
       reason: "K1 firmware 1.2.9.15 is older than the 1.3.3.5 this install needs",
       cancelled: false,
     },
@@ -264,7 +264,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       committed: true,
       step: 7,
       reason: "install.sh step 4 of 6 failed: could not start helixscreen.service",
-      help: "https://helixscreen.org/docs/recovery-k1",
+      help: "https://helixscreen.org/guide/install-k1/",
     },
     run: run({ step: 7, step_kind: "helix_install", committed: true }),
   },

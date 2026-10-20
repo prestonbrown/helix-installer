@@ -13,8 +13,8 @@
       "recipes": [
         { "when": { "fw_version": "1.x" }, "recipe": "ad5m_forge_x" }
       ],
-      "restore": "https://helixscreen.org/docs/restore-ad5m",
-      "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/unsupported" },
+      "restore": "https://helixscreen.org/guide/install-ad5m/",
+      "fallback": { "refuse": true, "doc": "https://helixscreen.org/guide/supported-printers/" },
       "verified": { "by": "prestonbrown", "date": "2026-10-01", "firmware": "1.2.3" }
     }
   ],
@@ -29,7 +29,7 @@
       { "type": "info", "text": "Hello" },
       { "type": "probe", "moonraker": "printer_info" },
       { "type": "probe", "ssh": "uname -m", "fact": "arch" },
-      { "type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://helixscreen.org/docs/fw" },
+      { "type": "require", "fact": "fw_version", "range": ">=1.0", "doc": "https://helixscreen.org/guide/supported-printers/" },
       { "type": "download", "artifact": "helix_stick" },
       { "type": "wait_for", "target": { "port": 22 }, "timeout_s": 60, "message": "waiting", "help": "check cable" },
       { "type": "ssh_login", "logins": [ { "user": "root", "password": "root" } ], "ask_if_failed": true },

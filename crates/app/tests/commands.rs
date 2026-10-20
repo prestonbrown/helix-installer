@@ -20,7 +20,7 @@ use std::sync::Arc;
 const ADDR: &str = "192.168.1.50";
 const OTHER: &str = "192.168.1.51";
 const PASSWORD: &str = "typed-s3cret";
-const K1_DOC: &str = "https://helixscreen.org/docs/install-k1";
+const K1_DOC: &str = "https://helixscreen.org/guide/install-k1/";
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -67,7 +67,7 @@ fn manifest_json() -> Value {
                 "identify": [{ "model": "shared" }],
                 "recipes": [{ "when": { "state": "stock" }, "recipe": "stock" }],
                 "restore": "stock",
-                "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-k2" }
+                "fallback": { "refuse": true, "doc": "https://helixscreen.org/guide/install-k2/" }
             },
             {
                 "id": "pi",
@@ -75,7 +75,7 @@ fn manifest_json() -> Value {
                 "identify": [{ "klipper_hostname": "pi-box" }],
                 "recipes": [{ "when": { "state": "modded:moonraker" }, "recipe": "shell" }],
                 "restore": "shell",
-                "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-pi" }
+                "fallback": { "refuse": true, "doc": "https://helixscreen.org/guide/install-generic/" }
             }
         ],
         "artifacts": {},
@@ -97,7 +97,7 @@ fn manifest_json() -> Value {
             "stock": [
                 { "type": "info", "text": "Changing the printer", "commits": true },
                 { "type": "require", "fact": "stock_version", "range": ">=2",
-                  "doc": "https://helixscreen.org/docs/firmware" }
+                  "doc": "https://helixscreen.org/guide/supported-printers/" }
             ]
         }
     })
@@ -412,7 +412,7 @@ async fn a_committed_failure_is_listed_and_resumes_in_a_new_app() {
             step: 1,
             help: Some(help),
             ..
-        } => assert_eq!(help, "https://helixscreen.org/docs/firmware"),
+        } => assert_eq!(help, "https://helixscreen.org/guide/supported-printers/"),
         other => panic!("expected a committed failure, got {other:?}"),
     }
     assert!(view.run.committed);
@@ -602,7 +602,7 @@ async fn a_k_touch_on_usb_is_listed_as_connected_by_usb() {
         "identify": [{ "usb": "1a86:7522" }],
         "recipes": [{ "when": { "state": "stock" }, "recipe": "stock" }],
         "restore": "stock",
-        "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-esp32" }
+        "fallback": { "refuse": true, "doc": "https://helixscreen.org/1.1/guide/install-esp32/" }
     }));
     let src = tempfile::tempdir().unwrap();
     let bytes = serde_json::to_vec(&m).unwrap();

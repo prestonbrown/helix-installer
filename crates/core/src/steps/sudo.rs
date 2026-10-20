@@ -6,7 +6,8 @@ use super::{StepCtx, StepOutcome, USER_LOGIN_TRIES};
 use crate::runner::Prompt;
 use std::time::Duration;
 
-pub(crate) const SUDO_DOC: &str = "https://helixscreen.org/docs/install";
+pub(crate) const SUDO_DOC: &str =
+    "https://helixscreen.org/guide/install-generic/#the-sudo-password";
 const SUDO_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) enum SudoPlan {

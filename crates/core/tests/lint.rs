@@ -17,7 +17,7 @@ fn base() -> Value {
             "identify": [{"model": "p1"}],
             "recipes": [{"when": {"state": "stock"}, "recipe": "install"}],
             "restore": "restore",
-            "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/p1"},
+            "fallback": {"refuse": true, "doc": "https://helixscreen.org/guide/supported-printers/"},
             "verified": {"by": "me", "date": "2026-10-01", "firmware": "1.0"}
         }],
         "recipes": {
@@ -377,7 +377,7 @@ fn a_refused_printer_needs_no_recipes_restore_or_verified_record() {
     v["printers"].as_array_mut().unwrap().push(json!({
         "id": "u1", "name": "Snapmaker U1", "refused": true,
         "identify": [{"klipper_objects": {"contains": "machine_state_manager"}}],
-        "recipes": [], "fallback": {"refuse": true, "doc": "https://helixscreen.org/docs/u1"}
+        "recipes": [], "fallback": {"refuse": true, "doc": "https://helixscreen.org/guide/install-u1/"}
     }));
     assert_eq!(run(v.clone(), false), vec![]);
     v["printers"][1]["recipes"] = json!([{"when": {"state": "stock"}, "recipe": "install"}]);

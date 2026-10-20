@@ -257,7 +257,7 @@ fn manifest(steps: Value) -> Arc<Manifest> {
             "identify": [{ "model": "K1" }],
             "recipes": [{ "when": { "state": "stock" }, "recipe": "r" }],
             "restore": "r",
-            "fallback": { "refuse": true, "doc": "https://helixscreen.org/docs/install-k1" }
+            "fallback": { "refuse": true, "doc": "https://helixscreen.org/guide/install-k1/" }
         }],
         "artifacts": {},
         "recipes": { "r": steps }

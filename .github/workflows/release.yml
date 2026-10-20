@@ -39,8 +39,16 @@ jobs:
             echo "updater=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Every help page the app links must be live before a release is built, so a release never
+  # ships a dead link. No pending list is passed here.
+  help-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: python3 scripts/check_help_links.py
+
   build:
-    needs: plan
+    needs: [plan, help-links]
     strategy:
       fail-fast: false
       matrix:

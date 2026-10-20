@@ -27,7 +27,7 @@ const PORT: &str = "/dev/ttyUSB0";
 const MAC: &str = "dc:da:0c:11:22:33";
 const NVS: u32 = 0x9000;
 const CFG: u32 = 0xfe0000;
-const DOC: &str = "https://helixscreen.org/docs/install-esp32";
+const DOC: &str = "https://helixscreen.org/1.1/guide/install-esp32/";
 
 fn staging() -> Manifest {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../manifest/staging.json");

@@ -105,7 +105,7 @@
       "restore": "generic_restore",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-generic"
+        "doc": "https://helixscreen.org/guide/install-generic/"
       },
       "last_resort": true
     },
@@ -141,7 +141,7 @@
       "restore": "qidi_restore",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-qidi"
+        "doc": "https://helixscreen.org/guide/install-qidi/"
       }
     },
     {
@@ -172,7 +172,7 @@
       "restore": "k2_restore",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-k2"
+        "doc": "https://helixscreen.org/guide/install-k2/"
       }
     },
     {
@@ -209,7 +209,7 @@
       "restore": "k1_restore",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       }
     },
     {
@@ -255,7 +255,7 @@
       "restore": "ad5x_restore",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-ad5x"
+        "doc": "https://helixscreen.org/guide/install-ad5x/"
       }
     },
     {
@@ -356,7 +356,7 @@
       ],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-ad5m"
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
       }
     },
     {
@@ -457,7 +457,7 @@
       ],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-ad5m"
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
       }
     },
     {
@@ -479,7 +479,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-snapmaker-u1"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#snapmaker-u1"
       }
     },
     {
@@ -494,7 +494,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-qidi-tjc"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#qidi-with-a-tjc-screen"
       }
     },
     {
@@ -511,7 +511,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-sovol"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#sovol"
       }
     },
     {
@@ -533,7 +533,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-elegoo-neptune4"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#elegoo-neptune-4"
       }
     },
     {
@@ -550,7 +550,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-elegoo-cc1"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#elegoo-centauri-carbon"
       }
     },
     {
@@ -578,7 +578,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-flashforge-creator5"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#flashforge-creator-5"
       }
     },
     {
@@ -595,7 +595,7 @@
       "recipes": [],
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-anycubic-kobra"
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#anycubic-kobra"
       }
     },
     {
@@ -623,7 +623,7 @@
       "restore": "ktouch_reflash",
       "fallback": {
         "refuse": true,
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       }
     }
   ],
@@ -671,7 +671,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
       }
     ],
     "generic_update": [
@@ -707,7 +707,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
       }
     ],
     "generic_restore": [
@@ -762,7 +762,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-qidi"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-qidi/"
       }
     ],
     "qidi_update": [
@@ -797,7 +797,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-qidi"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-qidi/"
       }
     ],
     "qidi_restore": [
@@ -865,7 +865,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k2"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k2/"
       }
     ],
     "k2_update": [
@@ -913,7 +913,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k2"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k2/"
       }
     ],
     "k2_restore": [
@@ -967,7 +967,7 @@
         "fact": "k1_root_menu",
         "equals": "yes",
         "reason": "This printer has no root option. Some 2025 K1C units ship without it, and the installer cannot put HelixScreen on them.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "info",
@@ -1002,7 +1002,7 @@
         "fact": "k1_model_ok",
         "equals": "true",
         "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1024,7 +1024,7 @@
         "fact": "k1_firmware_version",
         "range": ">=1.3.3.5",
         "reason": "Simple AF needs Creality firmware 1.3.3.5 or newer. Update the printer from its own screen, then run the installer again.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1036,7 +1036,7 @@
         "fact": "k1_leftovers",
         "equals": "false",
         "reason": "Something from an earlier mod is on this printer (Helper Script, Creality's Fluidd or Mainsail script, or files in /opt). Simple AF installs only on a printer fresh from a factory reset: reset it from its Settings, then run the installer again.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "ssh_run",
@@ -1049,7 +1049,7 @@
         "target": "moonraker",
         "timeout_s": 900,
         "message": "Simple AF is starting the printer's new services. Do not power off the printer.",
-        "help": "If the printer's screen shows an error, follow the recovery steps in the K1 guide: https://helixscreen.org/docs/install-k1"
+        "help": "If the printer's screen shows an error, follow the recovery steps in the K1 guide: https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1076,7 +1076,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k1/"
       }
     ],
     "k1_modded": [
@@ -1100,7 +1100,7 @@
         "fact": "k1_model_ok",
         "equals": "true",
         "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1124,7 +1124,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k1/"
       }
     ],
     "k1_update": [
@@ -1148,7 +1148,7 @@
         "fact": "k1_model_ok",
         "equals": "true",
         "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
-        "doc": "https://helixscreen.org/docs/install-k1"
+        "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1174,13 +1174,13 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-k1"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k1/"
       }
     ],
     "k1_restore": [
       {
         "type": "info",
-        "text": "This removes HelixScreen and puts back the screen the printer had before it (GrumpyScreen on Simple AF, or the one your Helper Script setup used). Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/docs/install-k1"
+        "text": "This removes HelixScreen and puts back the screen the printer had before it (GrumpyScreen on Simple AF, or the one your Helper Script setup used). Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "ssh_login",
@@ -1258,7 +1258,7 @@
         "fact": "stock_version",
         "range": "=1.1.7 || =1.1.9 || =1.2.0 || =1.2.1 || =1.2.2 || =1.2.3 || =3.0.3 || =3.0.9 || =3.1.0",
         "reason": "ZMOD installs only over stock firmware 1.1.7 to 1.2.3 (not 1.1.8), 3.0.3, 3.0.9 or 3.1.0. The AD5X guide explains how to put a supported version on first.",
-        "doc": "https://helixscreen.org/docs/install-ad5x"
+        "doc": "https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "info",
@@ -1285,7 +1285,7 @@
         "target": "klipper_ready",
         "timeout_s": 2400,
         "message": "ZMOD is installing; this can take up to 40 minutes. Do not power off the printer. Remove the USB stick afterwards.",
-        "help": "If the printer's screen shows an error or stays on one message for a long time, follow the AD5X guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error or stays on one message for a long time, follow the AD5X guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "user_action",
@@ -1304,7 +1304,7 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "The printer restarts to add ZMOD's plugin list, which carries HelixScreen. Do not power off the printer.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "probe",
@@ -1323,7 +1323,7 @@
         "target": "helix_service",
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       }
     ],
     "ad5x_enable_helix": [
@@ -1332,7 +1332,7 @@
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "moonraker_gcode",
@@ -1344,7 +1344,7 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "The printer restarts to add ZMOD's plugin list, which carries HelixScreen. Do not power off the printer.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "probe",
@@ -1363,7 +1363,7 @@
         "target": "helix_service",
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       }
     ],
     "ad5x_helix_update": [
@@ -1377,20 +1377,20 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to restart with the update.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       }
     ],
     "ad5x_restore": [
       {
         "type": "info",
-        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5X guide explains it: https://helixscreen.org/docs/install-ad5x"
+        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5X guide explains it: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "wait_for",
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "moonraker_gcode",
@@ -1436,7 +1436,7 @@
         "fact": "stock_version",
         "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
         "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
-        "doc": "https://helixscreen.org/docs/install-ad5m"
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "download",
@@ -1463,7 +1463,7 @@
         "target": "moonraker",
         "timeout_s": 1200,
         "message": "Waiting for the printer to start with Forge-X. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "probe",
@@ -1504,14 +1504,14 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_pro_forgex": [
@@ -1552,7 +1552,7 @@
         "fact": "stock_version",
         "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
         "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
-        "doc": "https://helixscreen.org/docs/install-ad5m"
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "download",
@@ -1582,7 +1582,7 @@
         "target": "moonraker",
         "timeout_s": 1200,
         "message": "Waiting for the printer to start with Forge-X. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "probe",
@@ -1623,14 +1623,14 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_forgex_install": [
@@ -1679,14 +1679,14 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_forgex_update": [
@@ -1737,14 +1737,14 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
-        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "wait_for",
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_zmod_enable": [
@@ -1753,7 +1753,7 @@
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "moonraker_gcode",
@@ -1765,7 +1765,7 @@
         "target": "klipper_restart",
         "timeout_s": 900,
         "message": "The printer restarts to add ZMOD's plugin list, which carries HelixScreen. Do not power off the printer.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "probe",
@@ -1788,7 +1788,7 @@
         "target": "helix_service",
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_zmod_update": [
@@ -1802,13 +1802,13 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to restart with the update.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ad5m_restore": [
       {
         "type": "info",
-        "text": "This removes HelixScreen from Forge-X and brings back Forge-X's own screen. To make the printer fully stock, flash Forge-X's uninstall image from a USB stick afterwards; the AD5M guide links it: https://helixscreen.org/docs/install-ad5m"
+        "text": "This removes HelixScreen from Forge-X and brings back Forge-X's own screen. To make the printer fully stock, flash Forge-X's uninstall image from a USB stick afterwards; the AD5M guide links it: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "ssh_login",
@@ -1835,14 +1835,14 @@
     "ad5m_zmod_restore": [
       {
         "type": "info",
-        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5M guide explains it: https://helixscreen.org/docs/install-ad5m"
+        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5M guide explains it: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "wait_for",
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "moonraker_gcode",
@@ -1866,7 +1866,7 @@
         "fact": "board_ok",
         "equals": "true",
         "reason": "The installer does not recognise this computer's board, so it will not guess which HelixScreen build it needs. The manual install guide covers other boards.",
-        "doc": "https://helixscreen.org/docs/install"
+        "doc": "https://helixscreen.org/installation/"
       },
       {
         "type": "helix_install",
@@ -1893,7 +1893,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
       }
     ],
     "generic_update_board": [
@@ -1912,7 +1912,7 @@
         "fact": "board_ok",
         "equals": "true",
         "reason": "The installer does not recognise this computer's board, so it will not guess which HelixScreen build it needs. The manual install guide covers other boards.",
-        "doc": "https://helixscreen.org/docs/install"
+        "doc": "https://helixscreen.org/installation/"
       },
       {
         "type": "helix_install",
@@ -1941,7 +1941,7 @@
         "target": "helix_service",
         "timeout_s": 300,
         "message": "Waiting for HelixScreen to start on the printer.",
-        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/docs/install-generic"
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
       }
     ],
     "ad5x_switch_screen": [
@@ -1950,7 +1950,7 @@
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       },
       {
         "type": "moonraker_update",
@@ -1970,7 +1970,7 @@
         "target": "helix_service",
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5x"
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/guide/install-ad5x/"
       }
     ],
     "ad5m_zmod_switch_screen": [
@@ -1979,7 +1979,7 @@
         "target": "klipper_ready",
         "timeout_s": 300,
         "message": "Waiting for Klipper on the printer to be ready.",
-        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       },
       {
         "type": "moonraker_update",
@@ -2003,7 +2003,7 @@
         "target": "helix_service",
         "timeout_s": 600,
         "message": "ZMOD is restarting the printer with HelixScreen as its screen. Do not power off the printer.",
-        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/docs/install-ad5m"
+        "help": "If HelixScreen does not appear, follow the guide: https://helixscreen.org/guide/install-ad5m/"
       }
     ],
     "ktouch_install": [
@@ -2016,14 +2016,14 @@
         "fact": "esp_chip",
         "equals": "esp32s3",
         "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "require",
         "fact": "flash_mb",
         "equals": "16",
         "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "info",
@@ -2056,14 +2056,14 @@
         "fact": "esp_chip",
         "equals": "esp32s3",
         "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "require",
         "fact": "flash_mb",
         "equals": "16",
         "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "serial_flash",
@@ -2089,14 +2089,14 @@
         "fact": "esp_chip",
         "equals": "esp32s3",
         "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "require",
         "fact": "flash_mb",
         "equals": "16",
         "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
-        "doc": "https://helixscreen.org/docs/install-esp32"
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {
         "type": "info",

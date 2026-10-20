@@ -48,3 +48,8 @@ jobs:
       - name: Test the updater manifest script
         if: runner.os == 'Linux'
         run: python3 scripts/test_updater_manifest.py
+      - name: Check help links against the site's address scheme
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/test_check_help_links.py
+          python3 scripts/check_help_links.py --scheme
