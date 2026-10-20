@@ -41,6 +41,14 @@ pub struct AppDesc {
     pub version: String,
 }
 
+/// The flash `p` claims, `[start, end)`: the flasher erases whole 4 KiB sectors before writing,
+/// so a part claims every sector it touches.
+pub(crate) fn sectors(p: &FlashPart) -> (u64, u64) {
+    let start = p.offset as u64 & !(SECTOR - 1);
+    let end = (p.offset as u64 + p.data.len() as u64).div_ceil(SECTOR) * SECTOR;
+    (start, end)
+}
+
 /// One file `flash_args` writes, and where.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlashPart {
@@ -319,20 +327,13 @@ pub fn check_image(img: &FlashImage, flash_bytes: u64, keep: &[String]) -> Resul
             flash_bytes / MIB
         ));
     }
-    // The flasher erases whole 4 KiB sectors before writing, so a part claims every sector it
-    // touches.
-    let span = |p: &FlashPart| {
-        let start = p.offset as u64 & !(SECTOR - 1);
-        let end = (p.offset as u64 + p.data.len() as u64).div_ceil(SECTOR) * SECTOR;
-        (start, end)
-    };
     for p in &img.parts {
-        if span(p).1 > flash_bytes {
+        if sectors(p).1 > flash_bytes {
             return Err(format!("{} does not fit in the board's flash", p.name));
         }
     }
     for w in img.parts.windows(2) {
-        if span(&w[0]).1 > span(&w[1]).0 {
+        if sectors(&w[0]).1 > sectors(&w[1]).0 {
             return Err(format!("{} and {} overlap", w[0].name, w[1].name));
         }
     }
@@ -349,7 +350,11 @@ pub fn check_image(img: &FlashImage, flash_bytes: u64, keep: &[String]) -> Resul
             ));
         };
         let (a, b) = (kept.offset as u64, kept.offset as u64 + kept.size as u64);
-        if let Some(p) = img.parts.iter().find(|p| span(p).0 < b && a < span(p).1) {
+        if let Some(p) = img
+            .parts
+            .iter()
+            .find(|p| sectors(p).0 < b && a < sectors(p).1)
+        {
             return Err(format!("{} would overwrite the {label} partition", p.name));
         }
     }
@@ -524,5 +529,20 @@ pub(crate) async fn probe(ctx: &mut StepCtx<'_>, port: &str) -> Result<Facts, St
     if let Err(e) = reset {
         ctx.log(format!("could not restart the panel after reading it: {e}"));
     }
+    ctx.log(running_app(ctx.printer_name(), &app));
     Ok(probe_facts(&chip, &app))
+}
+
+/// What the panel runs, as the run log records it before anything is written.
+pub fn running_app(name: &str, app: &[u8]) -> String {
+    match app_desc(app) {
+        Some(d) if d.project.starts_with(HELIX_PROJECT_PREFIX) => {
+            format!("the {name} runs HelixScreen {}", d.version)
+        }
+        Some(d) => format!(
+            "the {name} runs {} {}, not HelixScreen",
+            d.project, d.version
+        ),
+        None => format!("the {name} has no app the installer can read"),
+    }
 }

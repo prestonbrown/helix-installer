@@ -21,7 +21,7 @@ use md5::Digest;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
@@ -57,7 +57,19 @@ pub(crate) struct Task {
     offered: ReleaseVersion,
     total: u64,
     written: Arc<AtomicU64>,
+    /// Each part's read-back check as the run log records it, taken by the next advance.
+    checks: Checks,
     job: Job,
+}
+
+type Checks = Arc<Mutex<Vec<String>>>;
+
+/// Moves the checks the background write has recorded into the run log.
+fn log_checks(ctx: &mut StepCtx<'_>, checks: &Checks) {
+    let lines = std::mem::take(&mut *checks.lock().unwrap_or_else(|e| e.into_inner()));
+    for line in lines {
+        ctx.log(line);
+    }
 }
 
 impl Task {
@@ -111,8 +123,13 @@ pub async fn run(ctx: &mut StepCtx<'_>, spec: &Spec<'_>, input: Option<Input>) -
             // without it (the save failed) the prepared flash is dropped unwritten.
             match (ready, ctx.committed) {
                 (Some((session, parts)), true) => {
-                    let handle =
-                        tokio::spawn(write_all(session, task.erase, parts, task.written.clone()));
+                    let handle = tokio::spawn(write_all(
+                        session,
+                        task.erase,
+                        parts,
+                        task.written.clone(),
+                        task.checks.clone(),
+                    ));
                     task.job = Job::Running(handle);
                     let title = writing_title(ctx, &task.version);
                     ctx.session.flash = Some(task);
@@ -274,6 +291,7 @@ async fn start(
         offered,
         total,
         written: Arc::new(AtomicU64::new(0)),
+        checks: Checks::default(),
         job: Job::Ready(Some((session, image.parts))),
     })
 }
@@ -332,8 +350,9 @@ async fn write_all(
     erase: bool,
     parts: Vec<FlashPart>,
     written: Arc<AtomicU64>,
+    checks: Checks,
 ) -> Result<String, Stop> {
-    match write_parts(s.as_mut(), erase, &parts, &written).await {
+    match write_parts(s.as_mut(), erase, &parts, &written, &checks).await {
         Ok(()) => s
             .reset(BOOT_VERSION_MARKER, BOOT_LISTEN)
             .await
@@ -351,6 +370,7 @@ async fn write_parts(
     erase: bool,
     parts: &[FlashPart],
     written: &AtomicU64,
+    checks: &Mutex<Vec<String>>,
 ) -> Result<(), Stop> {
     if erase {
         s.erase_all().await.map_err(Stop::Erase)?;
@@ -368,13 +388,43 @@ async fn write_parts(
         written.store(done, Ordering::Relaxed);
         let want: [u8; 16] = md5::Md5::digest(&p.data).into();
         let len = p.data.len() as u32;
-        if s.md5(p.offset, len).await.map_err(stopped)? != want {
+        let got = s.md5(p.offset, len).await.map_err(stopped)?;
+        checks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(check_line(p, &want, &got));
+        if got != want {
             return Err(Stop::Verify {
                 part: p.name.clone(),
             });
         }
     }
     Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A part's read-back check for the run log: where it sits, the whole sectors the write erased
+/// for it, and the MD5 the chip read back against the one written.
+fn check_line(p: &FlashPart, want: &[u8; 16], got: &[u8; 16]) -> String {
+    let (start, end) = esp32::sectors(p);
+    let place = format!(
+        "{} at 0x{:x}, {} bytes, sectors 0x{start:x}-0x{end:x}",
+        p.name,
+        p.offset,
+        p.data.len()
+    );
+    if got == want {
+        format!("{place}: MD5 {} matches", hex(got))
+    } else {
+        format!(
+            "{place}: MD5 read back {} does not match the {} written",
+            hex(got),
+            hex(want)
+        )
+    }
 }
 
 /// Closes a session that wrote nothing, restarting the panel into the app it already has.
@@ -391,7 +441,9 @@ async fn follow(ctx: &mut StepCtx<'_>, mut task: Task) -> StepOutcome {
     let Job::Running(handle) = &mut task.job else {
         return StepOutcome::failed("the flash was never started");
     };
-    let ended = match tokio::time::timeout(POLL, handle).await {
+    let ended = tokio::time::timeout(POLL, handle).await;
+    log_checks(ctx, &task.checks);
+    let ended = match ended {
         Ok(ended) => ended,
         Err(_) => {
             let written = task.written.load(Ordering::Relaxed).min(task.total);
@@ -423,9 +475,9 @@ async fn follow(ctx: &mut StepCtx<'_>, mut task: Task) -> StepOutcome {
     }
 }
 
-/// The flash ended with the panel reset: done once it boots the version written. An update whose
-/// boot printed no version ends with a note to check the screen, since nothing more can be read
-/// back; an install goes on to the setup screen, where the user sees it.
+/// The flash ended with the panel reset: done once it boots the version written. An update ends
+/// there with a note naming that version, or, when its boot printed none, a note to check the
+/// screen; an install goes on to the setup screen, where the user sees it.
 fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
     let name = ctx.printer_name().to_string();
     match esp32::boot_version(log) {
@@ -433,7 +485,17 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
             ctx.log(format!("the {name} restarted running HelixScreen {v}"));
             ctx.facts.insert("helix_installed".into(), json!(true));
             ctx.facts.insert("helix_version".into(), json!(v));
-            StepOutcome::Done
+            if !task.update {
+                return StepOutcome::Done;
+            }
+            // An update never erases and never writes the parts the recipe keeps.
+            StepOutcome::Complete {
+                note: format!(
+                    "the {name} restarted running HelixScreen {v}, and its WiFi and settings \
+                     were kept"
+                ),
+                kind: DoneKind::Note,
+            }
         }
         Some(v) => StepOutcome::Failed {
             reason: format!(

@@ -289,7 +289,97 @@ async fn an_older_helixscreen_switches_to_the_update_and_ends_on_the_new_version
     assert_eq!(rig.serial.read_back(PORT, NVS, 16), b"wifi credentials");
     assert_eq!(rig.serial.read_back(PORT, CFG, 13), b"settings.json");
     assert_eq!(r.state().facts["helix_version"], json!("v1.1.0-beta.10"));
-    assert_eq!(r.state().done_note, None);
+}
+
+#[tokio::test]
+async fn a_finished_update_says_what_the_panel_now_runs_and_that_its_wifi_and_settings_were_kept() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(
+        r.state().done_kind,
+        Some(helix_installer_core::run_state::DoneKind::Note)
+    );
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(
+        note.contains("BTT K-Touch restarted running HelixScreen v1.1.0-beta.10"),
+        "{note}"
+    );
+    assert!(note.contains("WiFi and settings were kept"), "{note}");
+}
+
+fn log_lines(r: &Runner) -> Vec<String> {
+    r.state().log.iter().map(|e| e.text.clone()).collect()
+}
+
+fn md5_hex(bytes: &[u8]) -> String {
+    use md5::Digest;
+    md5::Md5::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_run_log_names_the_version_read_before_the_write_and_each_parts_checked_md5() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    let mut r = rig.runner();
+    drive(&mut r).await;
+    let log = log_lines(&r);
+    let read = log
+        .iter()
+        .position(|l| l.contains("the BTT K-Touch runs HelixScreen v1.1.0-beta.9"))
+        .unwrap_or_else(|| panic!("no version read before the write: {log:#?}"));
+    let writing = log
+        .iter()
+        .position(|l| l.starts_with("writing HelixScreen"))
+        .unwrap_or_else(|| panic!("no write logged: {log:#?}"));
+    assert!(read < writing, "{log:#?}");
+    for (_, offset, len) in rig.serial.writes() {
+        let md5 = md5_hex(&rig.serial.read_back(PORT, offset, len as u32));
+        let start = offset & !0xfff;
+        let end = (offset as usize + len).div_ceil(0x1000) * 0x1000;
+        let line = log
+            .iter()
+            .find(|l| l.contains(&format!("at 0x{offset:x}")) && l.contains("MD5"))
+            .unwrap_or_else(|| panic!("no check logged for 0x{offset:x}: {log:#?}"));
+        assert!(line.contains(&md5), "{line}");
+        assert!(line.contains("matches"), "{line}");
+        assert!(
+            line.contains(&format!("sectors 0x{start:x}-0x{end:x}")),
+            "{line}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_run_log_names_what_a_stock_panel_ran_before_the_install() {
+    let rig = Rig::new();
+    let mut r = rig.runner();
+    drive(&mut r).await;
+    let log = log_lines(&r);
+    assert!(
+        log.iter()
+            .any(|l| l.contains("the BTT K-Touch runs ktouch_stock 2.1.0, not HelixScreen")),
+        "{log:#?}"
+    );
+}
+
+#[tokio::test]
+async fn the_run_log_shows_both_md5s_of_a_part_that_did_not_read_back() {
+    let rig = Rig::new();
+    rig.serial.corrupt_writes();
+    let mut r = rig.runner();
+    drive(&mut r).await;
+    let log = log_lines(&r);
+    let line = log
+        .iter()
+        .find(|l| l.contains("MD5") && l.contains("does not match"))
+        .unwrap_or_else(|| panic!("no failed check logged: {log:#?}"));
+    assert!(line.contains("at 0x0"), "{line}");
 }
 
 #[tokio::test]
