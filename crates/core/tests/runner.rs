@@ -2098,3 +2098,124 @@ async fn a_reopened_run_probes_the_printer_again_before_it_acts() {
     }
     assert_eq!(flaky.runs(), 1, "nothing more was sent");
 }
+
+/// A power cycle the user is asked for, then the wait for the printer to come back from it.
+fn power_cycle_steps() -> Arc<Manifest> {
+    manifest(json!([
+        { "type": "user_action", "text": "Turn the printer off and on again." },
+        { "type": "wait_for", "target": "klipper_restart", "timeout_s": 900, "message": "Waiting" }
+    ]))
+}
+
+#[tokio::test]
+async fn a_power_cycle_done_before_the_user_presses_counts_from_when_it_was_asked_for() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), power_cycle_steps(), state("run1", json!({})));
+    assert!(matches!(
+        settle(&mut r, None).await,
+        Event::NeedInput(Prompt::UserAction { .. })
+    ));
+    // The user switches off and on and presses only once the printer is fully back: it has
+    // been up 20 seconds, 60 seconds after the prompt appeared.
+    f.clock.sleep(Duration::from_secs(60)).await;
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 20.0 }));
+    let start = f.clock.now();
+    assert!(matches!(
+        settle(&mut r, Some(Input::Next)).await,
+        Event::Done
+    ));
+    let waited = f.clock.now().duration_since(start).unwrap();
+    assert!(waited < Duration::from_secs(10), "{waited:?}");
+}
+
+#[tokio::test]
+async fn pressing_on_without_a_power_cycle_does_not_pass() {
+    let f = Fakes::new();
+    f.moonraker
+        .set_printer_info(ADDR, json!({ "state": "ready" }));
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 4.0 * 86400.0 }));
+    let mut r = Runner::new(f.env(), power_cycle_steps(), state("run1", json!({})));
+    let _ = settle(&mut r, None).await;
+    match settle(&mut r, Some(Input::Next)).await {
+        Event::Failed { reason, .. } => assert!(reason.contains("did not restart"), "{reason}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn klipper_stuck_in_an_error_ends_the_wait_early_with_its_message() {
+    let f = Fakes::new();
+    f.moonraker.set_printer_info(
+        ADDR,
+        json!({ "state": "error", "state_message": "MCU Protocol error, older firmware on the MCU" }),
+    );
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 20.0 }));
+    let mut r = Runner::new(f.env(), power_cycle_steps(), state("run1", json!({})));
+    let _ = settle(&mut r, None).await;
+    let start = f.clock.now();
+    match settle(&mut r, Some(Input::Next)).await {
+        Event::Failed { reason, .. } => {
+            assert!(reason.contains("MCU Protocol error"), "{reason}")
+        }
+        e => panic!("{e:?}"),
+    }
+    let waited = f.clock.now().duration_since(start).unwrap();
+    assert!(
+        waited >= Duration::from_secs(60) && waited < Duration::from_secs(400),
+        "{waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn klipper_in_an_error_only_for_a_moment_is_waited_out() {
+    let f = Fakes::new();
+    let mut answers = vec![Some(json!({ "state": "error", "state_message": "starting" })); 10];
+    answers.push(Some(json!({ "state": "ready" })));
+    f.moonraker.script_printer_info(ADDR, answers);
+    f.moonraker
+        .set_proc_stats(ADDR, json!({ "system_uptime": 20.0 }));
+    let mut r = Runner::new(f.env(), power_cycle_steps(), state("run1", json!({})));
+    let _ = settle(&mut r, None).await;
+    assert!(matches!(
+        settle(&mut r, Some(Input::Next)).await,
+        Event::Done
+    ));
+}
+
+#[tokio::test]
+async fn a_self_committing_step_that_stopped_before_its_commit_is_not_called_maybe_run() {
+    // A helix_install whose release list cannot be read stops before it commits.
+    let f = Fakes::new();
+    let m = manifest(json!([
+        { "type": "ssh_login", "logins": [{ "user": "root", "password": "pw" }] },
+        { "type": "helix_install", "platform": "pi", "commits": true }
+    ]));
+    f.ssh.accept(ADDR, "root", "pw");
+    f.ssh.on_command("id -u", out("0\n"));
+    let mut r = Runner::new(f.env(), m.clone(), state("run1", json!({})));
+    match settle(&mut r, None).await {
+        Event::Failed {
+            committed: false,
+            step: 1,
+            ..
+        } => {}
+        e => panic!("{e:?}"),
+    }
+    // Reopened from its saved state, as after the app closed.
+    let mut r = Runner::new(f.env(), m, r.state().clone());
+    match settle(&mut r, None).await {
+        Event::Failed {
+            committed: false,
+            step: 1,
+            ..
+        } => {}
+        e => panic!("a retry should run the step again, not ask: {e:?}"),
+    }
+}

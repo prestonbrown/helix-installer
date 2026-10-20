@@ -758,6 +758,13 @@ fn k1_rig(k1: K1) -> Rig {
         .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "K1C-0000" }));
     rig.moonraker
         .set_objects_list(ADDR, json!({ "objects": objects }));
+    // The power cycle Simple AF asks for: Moonraker is gone for a while once it has run.
+    let moonraker = rig.moonraker.clone();
+    rig.ssh.on_spawn(move |cmd| {
+        if cmd == SIMPLE_AF {
+            moonraker.restart(ADDR, 3);
+        }
+    });
     rig
 }
 
@@ -952,6 +959,15 @@ async fn a_stock_k1_installs_the_beta_while_stable_is_older_than_1_1() {
         "{:?}",
         rig.installs()
     );
+    // The check, the dry run and the install read one release: GitHub is asked about it once
+    // (its unauthenticated API allows 60 requests an hour).
+    let github = rig
+        .fetch
+        .requests()
+        .into_iter()
+        .filter(|u| u.starts_with(GITHUB_RELEASE_API))
+        .count();
+    assert_eq!(github, 1);
 }
 
 #[tokio::test]
@@ -987,7 +1003,7 @@ async fn a_stock_k1_whose_release_cannot_be_installed_is_refused_before_simple_a
 }
 
 #[tokio::test]
-async fn simple_af_is_followed_by_a_power_cycle_and_klipper_ready() {
+async fn simple_af_is_followed_by_a_power_cycle_and_a_wait_that_sees_the_reboot() {
     let m = staging();
     let steps = &m.recipes["k1_stock"];
     let simple_af = steps
@@ -1006,7 +1022,7 @@ async fn simple_af_is_followed_by_a_power_cycle_and_klipper_ready() {
         matches!(
             steps[simple_af + 2],
             Step::WaitFor {
-                target: WaitTarget::KlipperReady,
+                target: WaitTarget::KlipperRestart,
                 ..
             }
         ),

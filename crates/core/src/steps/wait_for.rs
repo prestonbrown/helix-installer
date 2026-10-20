@@ -22,7 +22,13 @@ enum Poll {
     Silent,
     /// No source available can say whether the target is up; only the user can.
     CannotTell,
+    /// Klipper answers in its error or shutdown state, with its message.
+    Faulted(String),
 }
+
+/// How long Klipper may report an error or shutdown before the wait ends with its message:
+/// long enough for a boot that passes through one on its way to ready.
+const KLIPPER_FAULT_GRACE: Duration = Duration::from_secs(180);
 
 /// The first run only reports the step's message, so the UI shows it (and "do not power off")
 /// for the whole wait; the next run polls until the target answers or the timeout passes.
@@ -47,7 +53,7 @@ pub async fn run(
     }
     if ctx.calls == 0 {
         if target == WaitTarget::KlipperRestart {
-            note_restart_wait(ctx);
+            note_restart_wait(ctx, ctx.step);
         }
         return StepOutcome::Progress {
             title: message.to_string(),
@@ -75,15 +81,33 @@ pub async fn run(
             };
         }
     }
+    let mut faulted_since = None;
     loop {
+        let now = ctx.env.clock.now();
         let silent = match poll(ctx, target).await {
             Poll::Up => {
                 ctx.facts.remove(RESTART_SINCE_FACT);
                 return StepOutcome::Done;
             }
-            Poll::NotYet => false,
-            Poll::Silent => true,
+            Poll::NotYet => {
+                faulted_since = None;
+                false
+            }
+            Poll::Silent => {
+                faulted_since = None;
+                true
+            }
             Poll::CannotTell => return ask_if_showing(),
+            Poll::Faulted(message) => {
+                let since = *faulted_since.get_or_insert(now);
+                if now.duration_since(since).unwrap_or_default() >= KLIPPER_FAULT_GRACE {
+                    return StepOutcome::Failed {
+                        reason: format!("Klipper on the printer reports an error: {message}"),
+                        help,
+                    };
+                }
+                false
+            }
         };
         let waited = ctx
             .env
@@ -110,9 +134,9 @@ pub async fn run(
 const RESTART_SINCE_FACT: &str = "restart_wait_since";
 const RESTART_BY_HAND: &str = "Restart the printer, then press Try this step again.";
 
-/// Records when the wait for this step's restart began, unless an earlier attempt already did.
-fn note_restart_wait(ctx: &mut StepCtx<'_>) {
-    let step = ctx.step;
+/// Records that the restart step `step` waits for may happen from now on, unless an earlier
+/// attempt (or the action that asked for the restart) already did.
+pub(crate) fn note_restart_wait(ctx: &mut StepCtx<'_>, step: usize) {
     let recorded = ctx
         .facts
         .get(RESTART_SINCE_FACT)
@@ -137,7 +161,7 @@ fn restart_wait_since(ctx: &mut StepCtx<'_>) -> f64 {
         }
         // A run reopened mid-wait from before the fact existed: from now.
         _ => {
-            note_restart_wait(ctx);
+            note_restart_wait(ctx, ctx.step);
             unix_secs(ctx.env.clock.now())
         }
     }
@@ -207,7 +231,18 @@ async fn poll(ctx: &mut StepCtx<'_>, target: WaitTarget) -> Poll {
         WaitTarget::Moonraker => up(env.moonraker.printer_info(host).await.is_ok()),
         WaitTarget::KlipperReady | WaitTarget::KlipperRestart => {
             match env.moonraker.printer_info(host).await {
-                Ok(info) => up(info.get("state").and_then(|s| s.as_str()) == Some("ready")),
+                Ok(info) => match info.get("state").and_then(|s| s.as_str()) {
+                    Some("ready") => Poll::Up,
+                    Some(state @ ("error" | "shutdown")) => Poll::Faulted(
+                        info.get("state_message")
+                            .and_then(|m| m.as_str())
+                            .map(str::trim)
+                            .filter(|m| !m.is_empty())
+                            .unwrap_or(state)
+                            .to_string(),
+                    ),
+                    _ => Poll::NotYet,
+                },
                 Err(_) => Poll::NotYet,
             }
         }

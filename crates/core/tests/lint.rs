@@ -712,3 +712,52 @@ fn a_release_check_is_neither_an_update_nor_a_dry_run_nor_a_commit() {
         );
     }
 }
+
+#[test]
+fn the_check_before_the_commit_must_be_for_the_install_after_it() {
+    // install_after_commit installs armv7, unpinned, as a new install.
+    for (check, why) in [
+        (
+            json!({"type": "helix_install", "platform": "k1", "check": true}),
+            "another platform",
+        ),
+        (
+            json!({"type": "helix_install", "platform": "armv7", "channel": "stable", "check": true}),
+            "another channel",
+        ),
+        (
+            json!({"type": "helix_install", "platform": "armv7", "update": true, "dry_run": true}),
+            "an update's dry run",
+        ),
+    ] {
+        let errs = run(install_after_commit(check), false);
+        assert!(
+            errs.iter().any(|e| e.message.contains("release")),
+            "{why}: {errs:?}"
+        );
+    }
+    // A dry run of the same install covers it as well as a check does.
+    assert_eq!(
+        run(
+            install_after_commit(
+                json!({"type": "helix_install", "platform": "armv7", "dry_run": true})
+            ),
+            false
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn every_install_after_the_commit_needs_its_own_check() {
+    let mut v =
+        install_after_commit(json!({"type": "helix_install", "platform": "armv7", "check": true}));
+    let steps = v["recipes"]["install"].as_array_mut().unwrap();
+    let last = steps.len() - 1;
+    steps.insert(last, json!({"type": "helix_install", "platform": "k1"}));
+    let errs = run(v, false);
+    assert!(
+        errs.iter().any(|e| e.message.contains("release")),
+        "{errs:?}"
+    );
+}

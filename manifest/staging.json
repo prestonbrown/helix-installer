@@ -1088,7 +1088,7 @@
       },
       {
         "type": "wait_for",
-        "target": "klipper_ready",
+        "target": "klipper_restart",
         "timeout_s": 900,
         "message": "Waiting for the printer to start again with Simple AF. Do not power off the printer.",
         "help": "If the printer's screen shows an error, power it off, wait 10 seconds and power it on again, then follow the recovery steps in the K1 guide: https://helixscreen.org/guide/install-k1/"

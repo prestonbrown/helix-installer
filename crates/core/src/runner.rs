@@ -403,6 +403,17 @@ impl Runner {
                     return self.fail(format!("could not save install progress: {e}"), None);
                 }
             }
+            // A step that commits itself and stopped before it did changed nothing, so running
+            // it again needs no "may already have run" question.
+            if !self.state.committed
+                && matches!(step, Step::SerialFlash { .. } | Step::HelixInstall { .. })
+                && matches!(
+                    outcome,
+                    StepOutcome::Failed { .. } | StepOutcome::Refused { .. }
+                )
+            {
+                self.state.started_step = None;
+            }
             match outcome {
                 StepOutcome::Done => {
                     if step.commits() && self.state.identity.is_none() {

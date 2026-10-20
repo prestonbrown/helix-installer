@@ -195,7 +195,7 @@ async fn start(
             "the release names an unusable file: {name}"
         )));
     }
-    let artifact = release::github_asset(ctx.env, &rel.tag, &name).await?;
+    let artifact = release::github_asset_cached(ctx, &rel.tag, &name).await?;
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
     };

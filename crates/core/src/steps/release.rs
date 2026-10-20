@@ -82,6 +82,8 @@ pub(crate) fn update_channels(pinned: Option<Channel>, installed: &ReleaseVersio
 
 /// The first stable release a new install takes. Until it is the stable release, new installs
 /// take the beta: the stable releases before it ship an `install.sh` this installer cannot drive.
+/// The decision reads whatever the stable list names, so a patch release published to the stable
+/// list from an older series (a 1.0.x after 1.1.0) sends new installs back to the beta.
 const FIRST_STABLE_FOR_NEW_INSTALLS: &str = "1.1.0";
 
 /// The channel a new install (or a removal, which has no installed version to follow) reads
@@ -158,6 +160,22 @@ pub(crate) async fn fetch_json<T: for<'de> Deserialize<'de>>(
         .map_err(|e| StepOutcome::failed(format!("could not fetch {what}: {e}")))?;
     serde_json::from_str(&text)
         .map_err(|e| StepOutcome::failed(format!("{what} is unreadable: {e}")))
+}
+
+/// `github_asset`, answered from the session's earlier lookups when it has one.
+pub(crate) async fn github_asset_cached(
+    ctx: &mut super::StepCtx<'_>,
+    tag: &str,
+    name: &str,
+) -> Result<Artifact, StepOutcome> {
+    let key = (tag.to_string(), name.to_string());
+    if let Some(a) = ctx.session.github_assets.get(&key) {
+        return Ok(a.clone());
+    }
+    let env = ctx.env;
+    let asset = github_asset(env, tag, name).await?;
+    ctx.session.github_assets.insert(key, asset.clone());
+    Ok(asset)
 }
 
 /// The asset `name` of the GitHub release `tag`, checked against the asset's `digest`.

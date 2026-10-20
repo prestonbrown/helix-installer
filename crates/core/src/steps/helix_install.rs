@@ -346,16 +346,30 @@ impl PreparedLaunch {
 }
 
 /// Sends what the printer lacks and starts install.sh there.
+/// A file goes into the uploaded record only once it is on the printer, so a cleanup never
+/// removes a file of that name this run did not put there.
 async fn start(ctx: &mut StepCtx<'_>, p: PreparedLaunch) -> Result<RemoteJob, StepOutcome> {
+    let mut sent_files = Vec::new();
     let sent = async {
         let ssh = ctx.ssh().await?;
         for (local, remote) in &p.to_send {
             ssh.upload(local, remote).await?;
+            sent_files.push(remote.clone());
         }
         ssh.spawn_detached(&p.command, p.sudo_password.as_deref())
             .await
     }
     .await;
+    let mut uploaded = uploaded_files(ctx);
+    for remote in sent_files {
+        if !uploaded.contains(&remote) {
+            uploaded.push(remote);
+        }
+    }
+    if !uploaded.is_empty() {
+        ctx.facts
+            .insert(UPLOADED_FACT.into(), serde_json::json!(uploaded));
+    }
     match sent {
         Ok(job) => Ok(job),
         Err(e) => Err(transport_stop(ctx, e).await),
@@ -406,7 +420,7 @@ async fn resolve(
     let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
         return Err(StepOutcome::failed("no download cache directory is set"));
     };
-    let script = release::github_asset(ctx.env, &release.tag, "install.sh").await?;
+    let script = release::github_asset_cached(ctx, &release.tag, "install.sh").await?;
     let script_local = fetch_artifact(ctx.env, &script, &cache, &|_, _| {})
         .await
         .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
@@ -486,14 +500,6 @@ async fn prepare(
         script_remote.clone(),
         script.sha256.clone(),
     ));
-    let mut uploaded = earlier.clone();
-    for (_, remote, _) in &sends {
-        if !uploaded.contains(remote) {
-            uploaded.push(remote.clone());
-        }
-    }
-    ctx.facts
-        .insert(UPLOADED_FACT.into(), serde_json::json!(uploaded));
     let checked = async {
         let ssh = ctx.ssh().await?;
         let mut to_send = Vec::new();

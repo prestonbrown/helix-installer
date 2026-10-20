@@ -258,30 +258,63 @@ fn first_change(steps: &[Step]) -> Option<usize> {
 }
 
 /// A `helix_install` resolves its release, and refuses one it cannot install, before it acts. One
-/// after the point of no return would refuse a half-changed printer, so a `helix_install` before
-/// the commit (a check or a dry run) must have resolved it first.
+/// after the point of no return would refuse a half-changed printer, so each must be covered by
+/// a `helix_install` before the commit that resolves the same release: the same platform and
+/// channel, as a check (a new install) or a dry run of the same mode.
 fn release_checked_before(
     id: &str,
     steps: &[Step],
     commit: usize,
     err: &mut impl FnMut(&str, String),
 ) {
-    let checked = steps[..commit]
-        .iter()
-        .any(|s| matches!(s, Step::HelixInstall { .. }));
-    if checked {
-        return;
+    for (i, s) in steps.iter().enumerate().skip(commit + 1) {
+        let Some(install) = InstallRelease::of(s) else {
+            continue;
+        };
+        let covered = steps[..commit]
+            .iter()
+            .filter_map(InstallRelease::of)
+            .any(|before| before == install);
+        if !covered {
+            err(
+                id,
+                format!(
+                    "step {i} installs HelixScreen after the point of no return (step {commit}), \
+                     but no helix_install before the commit checks the same release (platform, \
+                     channel and mode); add one with check: true"
+                ),
+            );
+        }
     }
-    if let Some(i) =
-        (commit + 1..steps.len()).find(|&i| matches!(steps[i], Step::HelixInstall { .. }))
-    {
-        err(
-            id,
-            format!(
-                "step {i} installs HelixScreen after the point of no return (step {commit}), but no \
-                 helix_install before it checks the release; add one with check: true"
-            ),
-        );
+}
+
+/// What decides the release a `helix_install` resolves: its platform, channel and mode. A
+/// check resolves a new install.
+#[derive(PartialEq)]
+struct InstallRelease {
+    platform: serde_json::Value,
+    channel: Option<crate::manifest::Channel>,
+    update: bool,
+    uninstall: bool,
+}
+
+impl InstallRelease {
+    fn of(s: &Step) -> Option<InstallRelease> {
+        match s {
+            Step::HelixInstall {
+                platform,
+                channel,
+                update,
+                uninstall,
+                ..
+            } => Some(InstallRelease {
+                platform: serde_json::to_value(platform).unwrap_or_default(),
+                channel: *channel,
+                update: *update,
+                uninstall: *uninstall,
+            }),
+            _ => None,
+        }
     }
 }
 

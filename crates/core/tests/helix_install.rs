@@ -2307,3 +2307,24 @@ async fn a_login_sudo_will_not_serve_fails_plainly_instead_of_asking_again() {
     }
     assert!(f.ssh.uploads().is_empty());
 }
+
+#[tokio::test]
+async fn a_connection_lost_before_a_file_went_up_never_removes_that_file() {
+    // The connection drops at each point of the install in turn; whatever the run then cleans
+    // up, it only removes files it uploaded.
+    for drop_at in 1..=8 {
+        let f = Fakes::standard(&["pi"]);
+        f.ssh.drop_after(drop_at);
+        let mut r = f.runner("root", install_step(json!("pi")), json!({}));
+        let _ = settle(&mut r).await;
+        let uploaded: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
+        for rm in rm_commands(&f) {
+            for path in ["/tmp/helixscreen-pi-v1.0.5.tar.gz", "/tmp/install.sh"] {
+                assert!(
+                    !rm.contains(path) || uploaded.iter().any(|u| u == path),
+                    "drop at {drop_at}: {rm} removes {path}, never uploaded ({uploaded:?})"
+                );
+            }
+        }
+    }
+}

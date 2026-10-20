@@ -2,8 +2,8 @@
 
 //! `info` and `user_action`: show the user something and wait for Next.
 
-use super::{probe, StepCtx, StepOutcome};
-use crate::manifest::Probe;
+use super::{probe, wait_for, StepCtx, StepOutcome};
+use crate::manifest::{Probe, Step, WaitTarget};
 use crate::runner::{Input, Prompt};
 
 pub fn info(text: &str, image: &Option<String>, input: Option<Input>) -> StepOutcome {
@@ -26,6 +26,18 @@ pub async fn user_action(
     input: Option<Input>,
 ) -> StepOutcome {
     if !matches!(input, Some(Input::Next)) {
+        // The restart this action asks for can happen before the user comes back to press on:
+        // the wait that follows counts a boot from the moment the action was shown.
+        let next = ctx.step + 1;
+        if matches!(
+            ctx.recipe.get(next),
+            Some(Step::WaitFor {
+                target: WaitTarget::KlipperRestart,
+                ..
+            })
+        ) {
+            wait_for::note_restart_wait(ctx, next);
+        }
         return StepOutcome::NeedInput(Prompt::UserAction {
             text: text.to_string(),
             image: image.clone(),

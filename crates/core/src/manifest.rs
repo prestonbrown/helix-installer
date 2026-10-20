@@ -405,6 +405,11 @@ pub enum PlatformSel {
 }
 
 /// One recipe step. `commits` marks the point of no return.
+///
+/// A run is pinned to the hash of its recipe's steps as serialized here
+/// (`run_state::recipe_sha256`), so a field added after that hash existed is left out when it
+/// holds its default: a step that does not use the field then hashes as it always did, and a
+/// saved run still resumes.
 /// Which HelixScreen release list a `helix_install` step reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -488,7 +493,7 @@ pub enum Step {
         doc: String,
         /// A fact that does not fit warns instead of refusing: the user reads `reason`, with
         /// `doc`, and continues or stops.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         warn: bool,
         #[serde(default)]
         commits: bool,
@@ -557,7 +562,7 @@ pub enum Step {
         /// the platform's build, install.sh's capabilities) without the printer: for a recipe
         /// whose install comes after an earlier point of no return, so a release it cannot
         /// install stops the run before anything changes.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         check: bool,
         #[serde(default)]
         dir: Option<String>,

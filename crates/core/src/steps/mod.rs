@@ -104,6 +104,11 @@ pub struct Session {
     refused_secrets: Vec<String>,
     /// A `helix_install` launch announced by the step's last call, started by its next.
     pub(crate) prepared_install: Option<helix_install::PreparedLaunch>,
+    /// GitHub release assets already looked up this app session, by (tag, name): a run's check,
+    /// dry run and install read the same release, and GitHub's unauthenticated API allows 60
+    /// requests an hour.
+    pub(crate) github_assets:
+        std::collections::HashMap<(String, String), crate::manifest::Artifact>,
 }
 
 impl Session {

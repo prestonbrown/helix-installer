@@ -424,3 +424,17 @@ fn a_serial_flash_step_with_unknown_fields_is_rejected() {
     }));
     assert!(r.is_err());
 }
+
+/// k1_stock as a real run saved it (its run's own manifest copy), and the recipe hash that run
+/// stored. A run resumes only while the hash of its saved recipe still comes out the same, so a
+/// new step field must not change how the steps that do not use it serialize.
+#[test]
+fn a_saved_runs_recipe_still_hashes_as_it_did_when_the_run_was_saved() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recipe_k1_stock_saved.json");
+    let steps: Vec<Step> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        helix_installer_core::run_state::recipe_sha256(&steps),
+        "ec453ef2b0ac65ae4325593ec680a918088563297adc1aa4998a1d54de7c16e2"
+    );
+}
