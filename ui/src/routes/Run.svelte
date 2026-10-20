@@ -469,6 +469,10 @@
     gap: 0.5rem;
     align-items: center;
   }
+  /* A field after a checkbox gets the space a field leaves below itself. */
+  .check + .field {
+    margin-top: 1rem;
+  }
   .drives {
     display: grid;
     gap: 0.5rem;

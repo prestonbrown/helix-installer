@@ -2,7 +2,9 @@
 // Development only: answers the Tauri commands in a plain browser so each screen can be seen
 // and captured without the Rust side. Loaded by main.ts in `vite --mode mock` and nowhere else.
 // `?screen=<name>` picks what the install shows after the first printer's button is pressed.
-import { mockIPC } from "@tauri-apps/api/mocks";
+// `?list=staging` lists the printers of `manifest/staging.json` instead of the stand-ins, and
+// manifest images (served from `manifest/` in this mode) load as the app loads them.
+import { setHandler } from "./mock-core";
 import type {
   AdvanceView,
   CandidateView,
@@ -109,6 +111,36 @@ const found: CandidateView[] = [
   },
 ];
 
+const forgex: CandidateView = {
+  key: "192.168.1.70",
+  address: "192.168.1.70",
+  connection: "network",
+  name: "FlashForge Adventurer 5X with Forge-X",
+  photo: null,
+  printer_id: "ad5x_forgex",
+  status: "unsupported",
+  answered: true,
+  helix_version: null,
+  host_name: "ad5x",
+  choices: [],
+  doc: "https://helixscreen.org/guide/install-ad5x/",
+  reason: "this installer cannot put HelixScreen on a FlashForge Adventurer 5X with Forge-X",
+};
+
+const klipperHost = {
+  printer_name: "Raspberry Pi with Klipper",
+  address: "192.168.1.163",
+  host_name: "helixpi",
+  guide: "https://helixscreen.org/installation/",
+};
+
+const ktouchRun = {
+  printer_name: "BTT K-Touch",
+  address: "/dev/ttyUSB0",
+  host_name: null,
+  guide: "https://helixscreen.org/1.1/guide/install-esp32/",
+};
+
 const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   run_id: "run-mock",
   printer_name: "Creality K1",
@@ -134,7 +166,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       text: "The BTT K-Touch is plugged in at /dev/ttyUSB0. The installer will now connect to it, which restarts it. If /dev/ttyUSB0 is some other device, unplug it or stop here.",
       button: "Continue",
     },
-    run: run({ printer_name: "BTT K-Touch", address: "/dev/ttyUSB0", step: 0, total_steps: 7, step_kind: "probe" }),
+    run: run({ ...ktouchRun, step: 0, total_steps: 6, step_kind: "probe" }),
   },
   warn: {
     event: {
@@ -178,6 +210,17 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     },
     run: run({ printer_name: "FlashForge Adventurer 5X", step: 1, total_steps: 8, step_kind: "ask" }),
   },
+  login_key: {
+    event: {
+      event: "need_input",
+      prompt: "login",
+      user_hint: "pi",
+      password_hint: null,
+      has_ssh_key: true,
+      key_locked: false,
+    },
+    run: run({ ...klipperHost, step: 0, total_steps: 4, step_kind: "ssh_login" }),
+  },
   login: {
     event: {
       event: "need_input",
@@ -191,7 +234,39 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
   },
   sudo: {
     event: { event: "need_input", prompt: "sudo_password", user: "pi", refused: false },
-    run: run({ step: 4, step_kind: "helix_install" }),
+    run: run({ ...klipperHost, step: 2, total_steps: 4, step_kind: "helix_install" }),
+  },
+  k1_user_action: {
+    event: {
+      event: "need_input",
+      prompt: "user_action",
+      text: "Turn on root access: on the printer's screen open Settings, then Root account information. Read the notice, wait for the countdown, then press OK. Then press I've done this.",
+      image: "k1/root-account.png",
+    },
+    run: run({ printer_name: "Creality K1 / K1C / K1 Max", step: 4, total_steps: 21, step_kind: "user_action" }),
+  },
+  ktouch_blank: {
+    event: {
+      event: "failed",
+      committed: true,
+      step: 4,
+      reason:
+        "the BTT K-Touch disconnected while it was being written; the BTT K-Touch was erased for the install and is blank until a flash completes",
+      help: "The BTT K-Touch is blank until a flash completes: it shows nothing and will not start. This cannot damage it: its chip always accepts a new write over USB. Keep it plugged in (plug it back in if it came loose) and choose Try this step again to write it.",
+    },
+    run: run({ ...ktouchRun, step: 4, total_steps: 6, step_kind: "serial_flash", committed: true }),
+  },
+  ktouch_done: {
+    event: { event: "done" },
+    run: run({
+      ...ktouchRun,
+      step: 4,
+      total_steps: 4,
+      step_kind: null,
+      committed: true,
+      done_note: "the BTT K-Touch restarted running HelixScreen v1.1.0-beta.10, and its WiFi and settings were kept",
+      done_kind: "note",
+    }),
   },
   drive: {
     event: {
@@ -253,6 +328,23 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       step_kind: null,
       done_note: "1.1.0-beta.9 is installed, and the newest beta release is 1.1.0-beta.9",
       done_kind: "up_to_date",
+    }),
+  },
+  refused_forgex: {
+    event: {
+      event: "refused",
+      doc: "https://helixscreen.org/guide/install-ad5x/",
+      reason: "this installer cannot put HelixScreen on a FlashForge Adventurer 5X with Forge-X",
+      cancelled: false,
+    },
+    run: run({
+      printer_name: "FlashForge Adventurer 5X",
+      address: "192.168.1.70",
+      host_name: "ad5x",
+      step: 1,
+      total_steps: 16,
+      step_kind: "probe",
+      guide: "https://helixscreen.org/guide/install-ad5x/",
     }),
   },
   refused: {
@@ -323,23 +415,38 @@ log:
   [1760800400] step 7: failed: install.sh step 4 of 6 failed
 `;
 
+/** The printer list in `manifest/staging.json`, as the app's `printers` command gives it. */
+async function stagingPrinters(): Promise<PrinterView[]> {
+  const m = await (await fetch("/staging.json")).json();
+  return m.printers.map((p: PrinterView) => ({
+    id: p.id,
+    name: p.name,
+    photo: p.photo ?? null,
+    verified: p.verified ?? null,
+  }));
+}
+
 export function install(): void {
-  const screen = new URLSearchParams(location.search).get("screen") ?? "picker";
+  const params = new URLSearchParams(location.search);
+  const screen = params.get("screen") ?? "picker";
+  const staging = params.get("list") === "staging";
   let advanced = false;
-  mockIPC((cmd, args) => {
+  setHandler((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (cmd) {
       case "pending_update":
         return null;
       case "app_info":
-        return { version: "0.1.0", image_base: null };
+        return { version: "0.1.0", image_base: `${location.origin}/img/` };
       case "printers":
         if (screen === "no_list") {
           throw { kind: "no_printer_list", message: "manifest signature is not valid", doc: null };
         }
-        return printers;
-      case "discover":
-        return new Promise((resolve) => setTimeout(() => resolve(found), 300));
+        return staging ? stagingPrinters() : printers;
+      case "discover": {
+        const list = screen === "picker_forgex" ? [found[0], forgex, found[3]] : found;
+        return new Promise((resolve) => setTimeout(() => resolve(list), 300));
+      }
       case "unfinished_runs":
         return screen === "resume" ? unfinished : [];
       case "dismiss_run": {
