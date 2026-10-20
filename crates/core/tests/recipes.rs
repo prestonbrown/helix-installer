@@ -2322,3 +2322,74 @@ fn a_zmod_ad5x_keeps_its_route() {
         recipe("ad5x", modded(), "ad5x_enable_helix")
     );
 }
+
+/// The AD5X's facts without `cpu_arch` (its system_info answer lost) and without the objects
+/// named in `drop`.
+fn ad5x_forgex_without(drop: &[&str]) -> Facts {
+    let mut f = fleet("ad5x_forgex");
+    f.remove("cpu_arch");
+    let objects: Vec<serde_json::Value> = f["klipper_objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| !drop.contains(&o.as_str().unwrap()))
+        .cloned()
+        .collect();
+    f.insert("klipper_objects".into(), json!(objects));
+    f
+}
+
+const AD5X_IFS_OBJECTS: [&str; 3] = ["ifs", "ifs_materials", "ifs_toolhead_sensor toolhead"];
+
+fn not_told_apart() -> Identified {
+    Identified::Refuse {
+        printer_id: Some("ad5x_forgex".into()),
+        doc: "https://helixscreen.org/guide/install-ad5x/".into(),
+        reason: "the printer did not report enough to tell it apart from a FlashForge Adventurer 5X with Forge-X, which this installer cannot put HelixScreen on".into(),
+    }
+}
+
+#[test]
+fn a_forgex_printer_that_does_not_report_its_cpu_is_refused_not_offered_an_ad5m_recipe() {
+    let m = staging();
+    let f = ad5x_forgex_without(&AD5X_IFS_OBJECTS);
+    assert_eq!(identify(&m, &f), not_told_apart());
+    for picked in ["ad5m", "ad5m_pro"] {
+        assert_eq!(identify_as(&m, picked, &f), not_told_apart(), "{picked}");
+    }
+    // The same holds for a real AD5M whose cpu went unreported: it cannot be told apart either.
+    let mut ad5m = fleet("ad5m_forgex");
+    ad5m.remove("cpu_arch");
+    assert_eq!(identify_as(&m, "ad5m", &ad5m), not_told_apart());
+}
+
+#[test]
+fn the_ad5x_ifs_objects_alone_refuse_it() {
+    let m = staging();
+    for kept in AD5X_IFS_OBJECTS.iter().skip(1) {
+        let mut drop: Vec<&str> = AD5X_IFS_OBJECTS
+            .iter()
+            .copied()
+            .filter(|o| o != kept)
+            .collect();
+        drop.push("gcode_macro SUPPORT_FORGE_X");
+        let f = ad5x_forgex_without(&drop);
+        assert!(
+            matches!(identify_as(&m, "ad5m", &f), Identified::Refuse { printer_id: Some(ref p), .. } if p == "ad5x_forgex"),
+            "{kept}: {:?}",
+            identify_as(&m, "ad5m", &f)
+        );
+    }
+}
+
+#[test]
+fn a_forgex_ad5x_that_answers_flashforge_udp_is_still_refused() {
+    let m = staging();
+    let mut f = fleet("ad5x_forgex");
+    f.insert("flashforge_udp.model".into(), json!("AD5X"));
+    f.insert("model".into(), json!("AD5X"));
+    assert!(matches!(
+        identify(&m, &f),
+        Identified::Refuse { printer_id: Some(ref p), .. } if p == "ad5x_forgex"
+    ));
+}

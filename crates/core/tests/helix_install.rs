@@ -1874,15 +1874,30 @@ fn the_version_probe_reads_the_running_binarys_tree_first_and_knows_the_payload_
     assert!(!p[scan..].contains("exit 0"), "{p}");
 }
 
-/// Runs the version probe against a printer faked in a temporary directory: `pidof` finds one
-/// `helix-screen`, whose `/proc/<pid>/exe` is `<tree>/bin/helix-screen`, a script printing
-/// `binary_says`, and `<tree>/release_info.json` names `release_info_says`.
+/// What the version probe printed against a faked printer, and whether it ran the binary.
 #[cfg(unix)]
-fn run_version_probe(binary_says: &str, release_info_says: &str) -> String {
+struct ProbeRun {
+    stdout: String,
+    ran_binary: bool,
+    took: Duration,
+}
+
+/// The `helix-screen` a release from 0.9.1 on carries: `--version` prints its version line.
+#[cfg(unix)]
+fn binary_printing(line: &str) -> String {
+    format!("# printf(\"helix-screen %s\\n\")\nprintf '%s' '{line}'")
+}
+
+/// Runs the version probe against a printer faked in a temporary directory: `pidof` finds one
+/// `helix-screen`, whose `/proc/<pid>/exe` is `<tree>/bin/helix-screen`, a script with `binary`
+/// as its body, and `<tree>/release_info.json` names `release_info_says`.
+#[cfg(unix)]
+fn run_version_probe_on(binary: &str, release_info_says: &str) -> ProbeRun {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let stubs = dir.path().join("stubs");
     let tree = dir.path().join("helixscreen");
+    let ran = dir.path().join("ran");
     std::fs::create_dir_all(&stubs).unwrap();
     std::fs::create_dir_all(tree.join("bin")).unwrap();
     let exe = tree.join("bin/helix-screen");
@@ -1892,7 +1907,7 @@ fn run_version_probe(binary_says: &str, release_info_says: &str) -> String {
     };
     script(&stubs.join("pidof"), "echo 4242".into());
     script(&stubs.join("readlink"), format!("echo '{}'", exe.display()));
-    script(&exe, format!("printf '%s' '{binary_says}'"));
+    script(&exe, format!(": > '{}'\n{binary}", ran.display()));
     std::fs::write(
         tree.join("release_info.json"),
         format!(r#"{{"project_name":"helixscreen","version":"{release_info_says}"}}"#),
@@ -1903,12 +1918,22 @@ fn run_version_probe(binary_says: &str, release_info_says: &str) -> String {
         stubs.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    let started = std::time::Instant::now();
     let out = std::process::Command::new("sh")
         .args(["-c", INSTALLED_VERSION_PROBE])
         .env("PATH", path)
         .output()
         .unwrap();
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    ProbeRun {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        ran_binary: ran.exists(),
+        took: started.elapsed(),
+    }
+}
+
+#[cfg(unix)]
+fn run_version_probe(binary_says: &str, release_info_says: &str) -> String {
+    run_version_probe_on(&binary_printing(binary_says), release_info_says).stdout
 }
 
 #[cfg(unix)]
@@ -1928,6 +1953,36 @@ fn release_info_names_the_running_version_when_the_binary_prints_none() {
         run_version_probe("", "v1.1.0-beta.1"),
         "running v1.1.0-beta.1\n"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_line_that_is_not_a_version_does_not_count_as_one() {
+    assert_eq!(
+        run_version_probe("starting\nhelix-screen 1.1.0 (abc)\n", "v1.1.0-beta.1"),
+        "running v1.1.0-beta.1\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_binary_older_than_its_version_flag_is_never_run() {
+    // Before 0.9.1 `--version` was an unknown argument, and the binary started the UI.
+    let run = run_version_probe_on("printf 'helix-screen 0.9.0 (abc)\\n'", "v0.9.0");
+    assert!(!run.ran_binary, "{}", run.stdout);
+    assert_eq!(run.stdout, "running v0.9.0\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_binary_that_hangs_is_stopped_and_release_info_answers() {
+    let run = run_version_probe_on(
+        &format!("{}\nexec sleep 60", binary_printing("")),
+        "v1.1.0-beta.1",
+    );
+    assert!(run.ran_binary);
+    assert_eq!(run.stdout, "running v1.1.0-beta.1\n");
+    assert!(run.took < Duration::from_secs(20), "{:?}", run.took);
 }
 
 #[cfg(unix)]

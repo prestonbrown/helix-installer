@@ -270,9 +270,13 @@
           }
         },
         {
-          "cpu_arch": "mips",
-          "os_distribution": {
-            "prefix": "Forge-X"
+          "klipper_objects": {
+            "contains": "ifs_materials"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains": "ifs_toolhead_sensor toolhead"
           }
         }
       ],

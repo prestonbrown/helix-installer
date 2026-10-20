@@ -3,7 +3,7 @@
 //! Maps the facts gathered about a printer to a recipe, or refuses.
 
 use crate::facts::Facts;
-use crate::manifest::{Cond, Manifest, Printer, RestoreSel};
+use crate::manifest::{Cond, IdentifyRule, Manifest, Printer, RestoreSel};
 use crate::version::FwVersion;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -120,14 +120,20 @@ pub fn could_answer_as(m: &Manifest, printer_id: &str, f: &Facts) -> bool {
     m.printers
         .iter()
         .find(|p| p.id == printer_id)
-        .is_some_and(|p| {
-            p.identify.iter().any(|rule| {
-                !rule.is_empty()
-                    && rule
-                        .iter()
-                        .all(|(k, c)| f.get(k).is_none_or(|v| cond_matches(c, Some(v))))
-            })
-        })
+        .is_some_and(|p| p.identify.iter().any(|rule| uncontradicted(rule, f)))
+}
+
+/// No fact `f` holds contradicts the non-empty `rule`; the facts it lacks may still match.
+fn uncontradicted(rule: &IdentifyRule, f: &Facts) -> bool {
+    !rule.is_empty()
+        && rule
+            .iter()
+            .all(|(k, c)| f.get(k).is_none_or(|v| cond_matches(c, Some(v))))
+}
+
+/// The facts back some of `rule` and contradict none of it.
+fn partly_matches(rule: &IdentifyRule, f: &Facts) -> bool {
+    uncontradicted(rule, f) && rule.keys().any(|k| f.contains_key(k))
 }
 
 /// What identification makes of the facts for the manifest's printer `printer_id`: a recipe,
@@ -160,11 +166,25 @@ fn matching<'a>(m: &'a Manifest, f: &Facts) -> Vec<&'a Printer> {
     }
 }
 
-/// The first refused printer the facts match: it wins over every other match.
-fn refused_match<'a>(m: &'a Manifest, f: &Facts) -> Option<&'a Printer> {
-    m.printers
-        .iter()
-        .find(|p| p.refused && printer_matches(p, f))
+/// The first refused printer the facts match, else the first one they partly match: either
+/// wins over every other match. A printer that left unsaid the facts telling it apart from a
+/// refused one is refused too, since installing on it could put the wrong recipe on that one.
+fn refused_match(m: &Manifest, f: &Facts) -> Option<Identified> {
+    let refused = || m.printers.iter().filter(|p| p.refused);
+    if let Some(p) = refused().find(|p| printer_matches(p, f)) {
+        return Some(turned_away(p));
+    }
+    refused()
+        .find(|p| p.identify.iter().any(|rule| partly_matches(rule, f)))
+        .map(|p| Identified::Refuse {
+            printer_id: Some(p.id.clone()),
+            doc: p.fallback.doc.clone(),
+            reason: format!(
+                "the printer did not report enough to tell it apart from a {}, which this \
+                 installer cannot put HelixScreen on",
+                p.name
+            ),
+        })
 }
 
 fn turned_away(p: &Printer) -> Identified {
@@ -176,8 +196,8 @@ fn turned_away(p: &Printer) -> Identified {
 }
 
 pub fn identify(m: &Manifest, f: &Facts) -> Identified {
-    if let Some(p) = refused_match(m, f) {
-        return turned_away(p);
+    if let Some(refused) = refused_match(m, f) {
+        return refused;
     }
     let matched = matching(m, f);
     let printer = match matched.as_slice() {
@@ -254,8 +274,8 @@ pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
     let Some(printer) = m.printers.iter().find(|p| p.id == printer_id) else {
         return not_recognised();
     };
-    if let Some(p) = refused_match(m, f) {
-        return turned_away(p);
+    if let Some(refused) = refused_match(m, f) {
+        return refused;
     }
     let matched = matching(m, f);
     let matched_any = !matched.is_empty();
