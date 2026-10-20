@@ -132,6 +132,23 @@ impl Rig {
         self.fetch.add(&url, zip.to_vec());
     }
 
+    /// Makes `tag` the newest beta with its K-Touch zip in the release list under `list_sha`
+    /// (else the zip's own), and nothing on GitHub: a read of GitHub's release fails the run.
+    fn publish_listed(&self, tag: &str, zip: &[u8], list_sha: Option<&str>) {
+        let name = format!("helixscreen-esp32-ktouch-{tag}.zip");
+        let url = format!("https://releases.helixscreen.org/beta/releases/{tag}/{name}");
+        let list_sha = list_sha.map_or_else(|| sha(zip), str::to_string);
+        let release = json!({ "version": tag.trim_start_matches('v'), "tag": tag, "assets": {
+            "pi": { "url": "https://example.invalid/pi.tar.gz", "sha256": sha(b"x"), "size": 1 },
+            "esp32-ktouch": { "url": url, "sha256": list_sha, "size": zip.len() },
+        }});
+        self.fetch.add(
+            &releases_manifest_url(Channel::Beta),
+            release.to_string().into_bytes(),
+        );
+        self.fetch.add(&url, zip.to_vec());
+    }
+
     fn env(&self) -> Env {
         Env {
             moonraker: Arc::new(FakeMoonraker::new()),
@@ -648,6 +665,34 @@ async fn a_zip_that_does_not_match_its_github_digest_is_not_written() {
     rig.publish(
         "v1.1.0-beta.10",
         &release_zip("v1.1.0-beta.10"),
+        Some(&"0".repeat(64)),
+    );
+    let mut r = rig.runner();
+    let (committed, reason, _) = failure(&drive(&mut r).await.end);
+    assert!(!committed, "nothing was written");
+    assert!(reason.contains("hash"), "{reason}");
+    assert!(rig.serial.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_zip_in_the_release_list_is_fetched_and_checked_without_asking_github() {
+    let rig = Rig::new();
+    rig.publish_listed("v1.1.0-beta.11", &release_zip("v1.1.0-beta.11"), None);
+    let mut r = rig.runner();
+    let trace = drive(&mut r).await;
+    assert!(
+        !rig.serial.writes().is_empty(),
+        "the listed zip was written: {:?}",
+        trace.end
+    );
+}
+
+#[tokio::test]
+async fn a_zip_that_does_not_match_its_release_list_hash_is_not_written() {
+    let rig = Rig::new();
+    rig.publish_listed(
+        "v1.1.0-beta.11",
+        &release_zip("v1.1.0-beta.11"),
         Some(&"0".repeat(64)),
     );
     let mut r = rig.runner();

@@ -197,6 +197,21 @@ pub(crate) async fn github_asset_cached(
     Ok(asset)
 }
 
+/// The release list's entry for the file `name`, found by the file name its URL ends in so
+/// the lookup does not depend on the key the list files it under. A release published before
+/// the list carried this file has no entry; the caller falls back to GitHub.
+pub(crate) fn listed_asset(release: &ReleaseManifest, name: &str) -> Option<Artifact> {
+    release
+        .assets
+        .values()
+        .find(|a| a.url.rsplit('/').next() == Some(name))
+        .map(|a| Artifact {
+            url: a.url.clone(),
+            sha256: a.sha256.clone(),
+            filename: Some(name.into()),
+        })
+}
+
 /// The asset `name` of the GitHub release `tag`, checked against the asset's `digest`.
 pub(crate) async fn github_asset(
     env: &Env,

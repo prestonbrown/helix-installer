@@ -392,6 +392,7 @@ async fn transport_stop(ctx: &mut StepCtx<'_>, e: TransportError) -> StepOutcome
 /// verified) this installer can drive.
 struct Resolved {
     offered: ReleaseVersion,
+    tag: String,
     tarball: Option<Artifact>,
     script: Artifact,
     script_local: PathBuf,
@@ -438,6 +439,7 @@ async fn resolve(
     }
     Ok(Resolved {
         offered,
+        tag: release.tag,
         tarball,
         script,
         script_local,
@@ -452,6 +454,7 @@ async fn prepare(
 ) -> Result<PreparedLaunch, StepOutcome> {
     let mode = run.mode;
     let Resolved {
+        tag,
         tarball,
         script,
         script_local,
@@ -518,7 +521,7 @@ async fn prepare(
     .await;
     if mode == Mode::Update && !run.dry_run {
         ctx.facts
-            .insert(UPDATED_TO_FACT.into(), serde_json::json!(release.tag));
+            .insert(UPDATED_TO_FACT.into(), serde_json::json!(tag));
     }
     match checked {
         Ok(to_send) => Ok(PreparedLaunch {
