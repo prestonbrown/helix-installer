@@ -55,11 +55,18 @@ function modelList(choices: PrinterView[]): string {
  * host name is often a model id (`ad5m`) that says nothing to the user. */
 export function cardTitle(c: CandidateView): string {
   if (c.status === "choose" && c.choices.length > 0) return modelList(c.choices);
-  return hostTitle(c.host_name) ?? c.name;
+  return nameLines(c.name, c.host_name).title;
 }
 
 /** What the installer takes the printer for, under a title that is the printer's own name. */
 export function cardSubtitle(c: CandidateView): string | null {
   if (c.status === "choose" && c.choices.length > 0) return null;
-  return hostTitle(c.host_name) !== null ? c.name : null;
+  return nameLines(c.name, c.host_name).subtitle;
+}
+
+/** A printer's name for a heading: its own host name over the installer's name for it, or
+ * that name alone when it gave none. Picker cards and the run's header both use it. */
+export function nameLines(displayName: string, hostName: string | null): { title: string; subtitle: string | null } {
+  const own = hostTitle(hostName);
+  return own === null ? { title: displayName, subtitle: null } : { title: own, subtitle: displayName };
 }

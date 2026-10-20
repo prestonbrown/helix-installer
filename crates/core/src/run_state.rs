@@ -89,10 +89,33 @@ pub struct RunState {
     pub log: Vec<LogEntry>,
     #[serde(default)]
     pub status: RunStatus,
-    /// Why a run that ended before its last step is done, for the finish screen ("HelixScreen
-    /// is up to date").
+    /// Why a run that ended before its last step is done, for the finish screen
+    /// ("1.1.0 is installed, and the newest stable release is 1.1.0").
     #[serde(default)]
     pub done_note: Option<String>,
+    /// What kind of ending `done_note` describes.
+    #[serde(default)]
+    pub done_kind: Option<DoneKind>,
+}
+
+/// Why a run ended before its last step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoneKind {
+    /// HelixScreen was already current; nothing on the printer changed.
+    UpToDate,
+    /// The install finished with something for the user to check.
+    Note,
+}
+
+impl DoneKind {
+    /// How the run log introduces the note.
+    pub fn label(self) -> &'static str {
+        match self {
+            DoneKind::UpToDate => "HelixScreen is up to date: ",
+            DoneKind::Note => "",
+        }
+    }
 }
 
 impl RunState {
@@ -121,6 +144,7 @@ impl RunState {
             log: Vec::new(),
             status: RunStatus::Running,
             done_note: None,
+            done_kind: None,
         }
     }
 }

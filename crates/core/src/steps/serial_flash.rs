@@ -13,6 +13,7 @@ use super::esp32::{self, FlashPart, BOOT_VERSION_MARKER};
 use super::release;
 use super::{StepCtx, StepOutcome};
 use crate::manifest::Channel;
+use crate::run_state::DoneKind;
 use crate::runner::Input;
 use crate::transport::{ChipInfo, FlashSession, TransportError};
 use crate::version::ReleaseVersion;
@@ -184,6 +185,7 @@ async fn start(
         if offered <= *installed {
             return Err(StepOutcome::Complete {
                 note: release::up_to_date_note(installed, &channels, &offered),
+                kind: DoneKind::UpToDate,
             });
         }
     }
@@ -447,6 +449,7 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
                  installer could not read its version back: check its screen shows HelixScreen",
                 task.version
             ),
+            kind: DoneKind::Note,
         },
         None => {
             ctx.log(format!(

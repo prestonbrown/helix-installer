@@ -816,7 +816,10 @@ async fn the_k1c_on_the_newest_beta_is_up_to_date_and_never_gets_the_older_stabl
     assert!(rig.ssh.uploads().is_empty());
     assert!(!r.state().committed, "nothing on the printer changed");
     let note = r.state().done_note.clone().unwrap_or_default();
-    assert!(note.contains("HelixScreen is up to date"), "{note:?}");
+    assert_eq!(
+        r.state().done_kind,
+        Some(helix_installer_core::run_state::DoneKind::UpToDate)
+    );
     assert!(note.contains("1.1.0-beta.9"), "{note:?}");
 }
 

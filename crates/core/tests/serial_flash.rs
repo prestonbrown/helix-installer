@@ -296,8 +296,10 @@ async fn an_up_to_date_panel_is_not_written() {
     assert!(rig.serial.writes().is_empty());
     assert_eq!(rig.serial.connects().len(), 1);
     assert!(!r.state().committed, "nothing was written");
-    let note = r.state().done_note.clone().unwrap_or_default();
-    assert!(note.contains("up to date"), "{note}");
+    assert_eq!(
+        r.state().done_kind,
+        Some(helix_installer_core::run_state::DoneKind::UpToDate)
+    );
 }
 
 #[tokio::test]
@@ -465,6 +467,10 @@ async fn an_update_whose_version_cannot_be_read_back_says_to_check_the_screen() 
     assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
     let note = r.state().done_note.clone().unwrap_or_default();
     assert!(note.contains("restarted"), "{note}");
+    assert_eq!(
+        r.state().done_kind,
+        Some(helix_installer_core::run_state::DoneKind::Note)
+    );
     assert!(note.contains("check its screen"), "{note}");
 }
 

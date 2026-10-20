@@ -25,7 +25,7 @@ use helix_installer_core::manifest::{
     verify_and_parse, Channel, Manifest, ManifestCache, SignedManifest, Verified,
 };
 use helix_installer_core::record::record;
-use helix_installer_core::run_state::{RunState, RunStatus};
+use helix_installer_core::run_state::{DoneKind, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Runner};
 use helix_installer_core::transport::Env;
 use serde::Serialize;
@@ -184,8 +184,12 @@ pub struct RunInfo {
     pub committed: bool,
     /// The printer's install guide.
     pub guide: String,
-    /// Why a run that ended early is done, for the finish screen ("HelixScreen is up to date").
+    /// Why a run that ended early is done, for the finish screen.
     pub done_note: Option<String>,
+    /// What kind of ending `done_note` describes.
+    pub done_kind: Option<DoneKind>,
+    /// The name the printer's own system goes by, as on its picker card.
+    pub host_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,12 +244,24 @@ fn printer_name(m: &Manifest, printer_id: &str) -> String {
         .map_or_else(|| printer_id.to_string(), |p| p.name.clone())
 }
 
+/// The longest name shown or logged for a printer: a DNS label's length.
+const MAX_NAME_LEN: usize = 63;
+
+/// A name a device reported about itself, made safe to show and log: control characters (a
+/// newline would forge app-log lines) are dropped and it is cut to `MAX_NAME_LEN` characters.
+/// Nothing printable left is no name.
+fn clean_name(raw: &str) -> Option<String> {
+    let kept: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let name: String = kept.trim().chars().take(MAX_NAME_LEN).collect();
+    let name = name.trim_end().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 /// What the printer calls itself, for one the manifest does not name.
 fn reported_name(facts: &Facts) -> Option<String> {
     ["model", "flashforge_udp.model", "klipper_hostname"]
         .iter()
-        .find_map(|k| facts.get(*k).and_then(Value::as_str))
-        .map(str::to_string)
+        .find_map(|k| facts.get(*k).and_then(Value::as_str).and_then(clean_name))
 }
 
 /// One picker card for the log: where, what it was taken for, and what it runs.
@@ -295,6 +311,14 @@ fn describe_event(event: &Event) -> String {
     }
 }
 
+/// The name the printer's own system goes by (Moonraker's `hostname`).
+fn host_name(facts: &Facts) -> Option<String> {
+    facts
+        .get("klipper_hostname")
+        .and_then(Value::as_str)
+        .and_then(clean_name)
+}
+
 fn is_url(location: &str) -> bool {
     location.starts_with("https://") || location.starts_with("http://")
 }
@@ -315,6 +339,8 @@ fn run_info(r: &Runner) -> RunInfo {
         committed: state.committed,
         guide: r.guide(),
         done_note: state.done_note.clone(),
+        done_kind: state.done_kind,
+        host_name: host_name(&state.facts),
     }
 }
 
@@ -383,6 +409,9 @@ impl AppCore {
         if seen.line != line {
             self.log(&line, &secrets);
             seen.line = line;
+        }
+        if matches!(event, Event::Done | Event::Refused { .. }) {
+            logged.remove(&state.run_id);
         }
     }
 
@@ -520,11 +549,7 @@ impl AppCore {
             status: CandidateStatus::NoAnswer,
             answered,
             helix_version: None,
-            host_name: c
-                .facts
-                .get("klipper_hostname")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            host_name: host_name(&c.facts),
             choices: Vec::new(),
             doc: None,
             reason: None,
@@ -778,6 +803,10 @@ impl AppCore {
             ));
         }
         self.log(&format!("{run_id}: dismissed"), &[]);
+        self.logged
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(run_id);
         match r.advance(Some(Input::Cancel)).await {
             Event::Failed { reason, .. } => Err(CommandError::new(ErrorKind::Storage, reason)),
             _ => Ok(()),

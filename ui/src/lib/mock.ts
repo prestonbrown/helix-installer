@@ -119,6 +119,8 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   committed: false,
   guide: "https://helixscreen.org/guide/install-k1/",
   done_note: null,
+  done_kind: null,
+  host_name: "k1-printer",
   ...over,
 });
 
@@ -239,8 +241,8 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     run: run({
       step: 9,
       step_kind: null,
-      done_note:
-        "HelixScreen is up to date: 1.1.0-beta.9 is installed, and the newest beta release is 1.1.0-beta.9",
+      done_note: "1.1.0-beta.9 is installed, and the newest beta release is 1.1.0-beta.9",
+      done_kind: "up_to_date",
     }),
   },
   refused: {

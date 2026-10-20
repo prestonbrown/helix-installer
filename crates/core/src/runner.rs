@@ -445,9 +445,10 @@ impl Runner {
                 }
                 StepOutcome::Refused { doc, reason } => return self.fail(reason, Some(doc)),
                 StepOutcome::Failed { reason, help } => return self.fail(reason, help),
-                StepOutcome::Complete { note } => {
-                    self.log(index, note.clone());
+                StepOutcome::Complete { note, kind } => {
+                    self.log(index, format!("{}{note}", kind.label()));
                     self.state.done_note = Some(note);
+                    self.state.done_kind = Some(kind);
                     self.state.status = RunStatus::Done;
                     self.state.step_index = steps.len();
                     self.state.started_step = None;

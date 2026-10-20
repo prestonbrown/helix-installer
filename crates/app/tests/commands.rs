@@ -715,3 +715,148 @@ async fn the_app_log_follows_a_run_with_timestamps_and_never_the_password() {
     assert!(section.contains(&run), "{bundle}");
     assert!(!bundle.contains(ADDR), "masked: {bundle}");
 }
+
+/// A core logging to `log` whose `pi-box` printer at 10.0.0.9 fails its setup job with output
+/// that repeats the login password.
+fn failing_setup(f: &Fakes) {
+    f.ssh.accept("10.0.0.9", "root", PASSWORD);
+    f.ssh.on_command(
+        "id -u",
+        ExecOutput {
+            stdout: "0\n".into(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    f.moonraker.set_printer_info(
+        "10.0.0.9",
+        json!({ "hostname": "pi-box", "state": "ready" }),
+    );
+    let echoed = format!("setup: logging in with {PASSWORD}\n");
+    f.ssh.script_job(vec![(&echoed, None), ("", Some(1))]);
+}
+
+#[tokio::test]
+async fn a_password_the_printer_echoes_into_a_failure_is_not_logged() {
+    let f = Fakes::new();
+    failing_setup(&f);
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let log = Arc::new(AppLog::open(logs.path(), std::time::SystemTime::now()).unwrap());
+    let c = core_with_log(
+        &f,
+        data.path(),
+        Some(write_manifest(src.path(), false)),
+        log.clone(),
+    );
+    let host = c.add_manual_host("10.0.0.9").await.unwrap();
+    let run = c.start_run(&host.key, None).await.unwrap();
+    let ev = settle(&c, &run, None).await;
+    assert!(matches!(ev, Event::Failed { .. }), "{ev:?}");
+    let text = log.contents();
+    assert!(
+        text.contains("setup: logging in with <secret>"),
+        "the failure is logged, redacted: {text}"
+    );
+    assert!(!text.contains(PASSWORD), "{text}");
+}
+
+#[tokio::test]
+async fn a_printers_own_name_is_cleaned_before_it_is_shown_or_logged() {
+    let f = Fakes::new();
+    let long = "x".repeat(1000);
+    let devices = vec![
+        Candidate::new(
+            Host::new("10.0.0.20"),
+            facts(
+                json!({ "klipper_hostname": "evil\n2026-01-01T00:00:00.000Z passed the point of no return" }),
+            ),
+        ),
+        Candidate::new(
+            Host::new("10.0.0.21"),
+            facts(json!({ "klipper_hostname": long })),
+        ),
+        Candidate::new(
+            Host::new("10.0.0.22"),
+            facts(json!({ "klipper_hostname": "\u{7}\t " })),
+        ),
+    ];
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let log = Arc::new(AppLog::open(logs.path(), std::time::SystemTime::now()).unwrap());
+    let c = AppCore::new(AppConfig {
+        discovery: Arc::new(Fixed(devices)),
+        log: Some(log.clone()),
+        ..config(&f, data.path(), Some(write_manifest(src.path(), false)))
+    });
+    let views = c.discover().await.unwrap();
+    let forged = views[0].host_name.clone().unwrap();
+    assert!(!forged.contains('\n'), "{forged:?}");
+    assert!(!views[0].name.contains('\n'), "{:?}", views[0].name);
+    assert_eq!(views[1].host_name.as_deref().map(str::len), Some(63));
+    assert_eq!(views[1].name.len(), 63);
+    assert_eq!(views[2].host_name, None, "nothing printable is no name");
+    let text = log.contents();
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.contains("passed the point of no return"))
+            .count(),
+        1,
+        "{text}"
+    );
+    for line in text.lines() {
+        assert!(
+            line.as_bytes().get(10) == Some(&b'T') && !line.starts_with("2026-01-01"),
+            "a forged line: {line:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_masked_bundle_leaves_out_the_other_runs_of_the_launch() {
+    let f = Fakes::new();
+    failing_setup(&f);
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let log = Arc::new(AppLog::open(logs.path(), std::time::SystemTime::now()).unwrap());
+    let c = core_with_log(
+        &f,
+        data.path(),
+        Some(write_manifest(src.path(), false)),
+        log.clone(),
+    );
+    c.discover().await.unwrap();
+    let other = c.start_run("SN42", None).await.unwrap();
+    settle(&c, &other, None).await;
+    let host = c.add_manual_host("10.0.0.9").await.unwrap();
+    let run = c.start_run(&host.key, None).await.unwrap();
+    settle(&c, &run, None).await;
+    assert!(log.contents().contains("SN42"), "the launch log names it");
+
+    let masked = c.export_bundle(&run, true).await.unwrap();
+    assert!(!masked.contains("SN42"), "{masked}");
+    assert!(!masked.contains(&other), "{masked}");
+    assert!(!masked.contains("k1-printer"), "{masked}");
+    assert!(
+        !masked.contains("pi-box"),
+        "its own host name is masked: {masked}"
+    );
+    let (_, section) = masked.split_once("installer log:\n").unwrap();
+    assert!(section.contains(&run), "{masked}");
+}
+
+#[tokio::test]
+async fn the_run_carries_the_printers_own_name() {
+    let f = Fakes::new();
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let c = core(&f, data.path(), Some(write_manifest(src.path(), false)));
+    c.discover().await.unwrap();
+    let run = c.start_run("SN42", None).await.unwrap();
+    let view = c.advance(&run, None).await.unwrap();
+    assert_eq!(view.run.host_name.as_deref(), Some("k1-printer"));
+    assert_eq!(view.run.printer_name, "Creality K1");
+}

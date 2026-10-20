@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use helix_installer_core::bundle::support_bundle;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::{Channel, Login, Manifest, Secret, Step};
-use helix_installer_core::run_state::RunState;
+use helix_installer_core::run_state::{DoneKind, RunState};
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
     releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE, INSTALLED_VERSION_PROBE,
@@ -1592,6 +1592,8 @@ fn remote_checks(tarball: &'static [u8], script: &'static [u8]) -> impl Fn(&str)
     }
 }
 
+/// `TARBALL` with its last byte changed: the same size, so only the sha256 tells them apart.
+const TARBALL_ONE_BYTE_OFF: &[u8] = b"helixscreen tarball bytez";
 const COPYING: &str = "Copying the HelixScreen files to the printer";
 const ALREADY: &str = "The HelixScreen files are already on the printer";
 
@@ -1725,7 +1727,7 @@ async fn the_progress_says_the_files_are_already_on_the_printer_when_they_are_re
 async fn a_changed_remote_file_is_copied_again_and_not_called_already_there() {
     let f = Fakes::standard(&["pi"]);
     f.ssh
-        .set_fallback(remote_checks(b"something else", INSTALL_SH));
+        .set_fallback(remote_checks(TARBALL_ONE_BYTE_OFF, INSTALL_SH));
     let mut r = dry_run_then_install(&f);
     let (ev, titles) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
@@ -1775,6 +1777,7 @@ async fn the_version_read_on_the_printer_wins_over_moonrakers() {
     assert!(f.ssh.uploads().is_empty());
     let note = r.state().done_note.clone().unwrap_or_default();
     assert!(note.contains("1.0.5 is installed"), "{note:?}");
+    assert_eq!(r.state().done_kind, Some(DoneKind::UpToDate));
 }
 
 #[tokio::test]
@@ -1825,6 +1828,7 @@ async fn with_nothing_running_the_newest_install_found_counts_not_the_first() {
     assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
     let note = r.state().done_note.clone().unwrap_or_default();
     assert!(note.contains("1.0.5 is installed"), "{note:?}");
+    assert_eq!(r.state().done_kind, Some(DoneKind::UpToDate));
 }
 
 #[tokio::test]

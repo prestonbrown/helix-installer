@@ -92,23 +92,33 @@ impl AppLog {
     }
 }
 
-/// Removes the oldest logs past `KEEP_LOGS`, never `current`. Names sort by launch time.
+/// A log file's launch order: its millisecond, then its same-millisecond counter.
+fn launch_order(name: &str) -> Option<(u128, u32)> {
+    let stem = name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
+    let (ms, n) = stem.split_once('-').unwrap_or((stem, "0"));
+    Some((ms.parse().ok()?, n.parse().ok()?))
+}
+
+/// Removes the oldest logs past `KEEP_LOGS`, never `current`.
 fn prune(dir: &Path, current: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut logs: Vec<PathBuf> = entries
+    let mut logs: Vec<((u128, u32), PathBuf)> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(PREFIX) && n.ends_with(SUFFIX))
+        .filter_map(|p| {
+            let order = launch_order(p.file_name()?.to_str()?)?;
+            Some((order, p))
         })
         .collect();
     logs.sort();
     let excess = logs.len().saturating_sub(KEEP_LOGS);
-    for old in logs.iter().take(excess).filter(|p| p.as_path() != current) {
+    for (_, old) in logs
+        .iter()
+        .take(excess)
+        .filter(|(_, p)| p.as_path() != current)
+    {
         let _ = std::fs::remove_file(old);
     }
 }

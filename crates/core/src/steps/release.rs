@@ -94,13 +94,11 @@ pub(crate) fn up_to_date_note(
         .join(" or ");
     if installed > offered {
         return format!(
-            "HelixScreen is up to date: a newer build of HelixScreen is installed ({installed}) \
-             than the newest {channels} release ({offered}), so nothing was changed"
+            "a newer build of HelixScreen is installed ({installed}) than the newest {channels} \
+             release ({offered})"
         );
     }
-    format!(
-        "HelixScreen is up to date: {installed} is installed, and the newest {channels} release is {offered}"
-    )
+    format!("{installed} is installed, and the newest {channels} release is {offered}")
 }
 
 /// The newest release of `channels`, the first winning a tie.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { cardSubtitle, cardTitle, readyLine, startLabel, whereLine } from "./candidates";
+import { cardSubtitle, cardTitle, nameLines, readyLine, startLabel, whereLine } from "./candidates";
 import type { CandidateView } from "./types";
 
 const candidate = (over: Partial<CandidateView>): CandidateView => ({
@@ -107,5 +107,18 @@ describe("the card's title and subtitle", () => {
   it("joins models with nothing in common in full", () => {
     const c = candidate({ status: "choose", choices: [model("a", "Creality K1"), model("b", "Sovol SV08")] });
     expect(cardTitle(c)).toBe("Creality K1 or Sovol SV08");
+  });
+});
+
+describe("a run's header", () => {
+  it("leads with the name the printer goes by, like its card did", () => {
+    expect(nameLines("Klipper host (Voron)", "voronv0")).toEqual({
+      title: "voronv0",
+      subtitle: "Klipper host (Voron)",
+    });
+    expect(nameLines("Klipper host (Voron)", "voron-b827eb1a2b3c").title).toBe("voron");
+  });
+  it("uses the printer's display name alone when it gave no name of its own", () => {
+    expect(nameLines("Creality K1", null)).toEqual({ title: "Creality K1", subtitle: null });
   });
 });

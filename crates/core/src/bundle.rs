@@ -11,6 +11,7 @@ const SECRET: &str = "<secret>";
 const IP: &str = "<ip>";
 const MAC: &str = "<mac>";
 pub(crate) const SERIAL: &str = "<serial>";
+const HOST: &str = "<host>";
 
 /// `secrets` are the passwords seen in the run (the run state never holds them). Each is
 /// removed wherever it appears; an empty one is ignored. `mask` additionally hides IPv4 and
@@ -26,7 +27,8 @@ pub fn support_bundle(
 }
 
 /// `support_bundle` with the app's own log (`app_log::AppLog`) after the printer's, redacted
-/// and masked the same way.
+/// the same way. The log covers the whole launch, so a masked bundle keeps only this run's
+/// lines (other printers and runs stay out) and also hides this printer's host name.
 pub fn support_bundle_with_app_log(
     state: &RunState,
     job_logs: &[String],
@@ -38,12 +40,16 @@ pub fn support_bundle_with_app_log(
     let mut text = render(state, job_logs, mask);
     if !app_log.is_empty() {
         text.push_str("installer log:\n");
-        for line in app_log.lines() {
+        let own = format!(" {}: ", state.run_id);
+        for line in app_log.lines().filter(|l| !mask || l.contains(&own)) {
             text.push_str(&format!("  {line}\n"));
         }
     }
     let mut text = redact(&text, secrets);
     if mask {
+        if let Some(host) = state.facts.get("klipper_hostname").and_then(Value::as_str) {
+            text = mask_word(&text, host, HOST);
+        }
         if let Some(serial) = serial.filter(|s| !s.is_empty()) {
             text = text.replace(&serial, SERIAL);
         }
@@ -62,6 +68,32 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
         text = text.replace(s, SECRET);
     }
     text
+}
+
+/// `text` with every whole-word `word` replaced: a match glued to a letter, digit, `-` or `_`
+/// is part of a longer name and stays.
+fn mask_word(text: &str, word: &str, with: &str) -> String {
+    let word = word.trim();
+    if word.is_empty() {
+        return text.to_string();
+    }
+    let in_name = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_');
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (i, _) in text.match_indices(word) {
+        if i < copied {
+            continue;
+        }
+        let before = text[..i].chars().next_back();
+        let after = text[i + word.len()..].chars().next();
+        if !in_name(before) && !in_name(after) {
+            out.push_str(&text[copied..i]);
+            out.push_str(with);
+            copied = i + word.len();
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 /// Hides MAC, IPv6 and IPv4 addresses (in that order, so a MAC is not read as IPv6).

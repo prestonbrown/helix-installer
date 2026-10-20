@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Wording the screens share, keyed by the manifest step type the engine reports.
+import type { DoneKind } from "./types";
 
 const STEP_LABELS: Record<string, string> = {
   info: "Getting ready",
@@ -26,11 +27,6 @@ export function stepLabel(kind: string | null, committed: boolean): string {
   return (kind && STEP_LABELS[kind]) || "Installing";
 }
 
-/** Whether to warn against switching off or unplugging: only once the run has passed its
- * point of no return, since nothing on the printer changes before it. */
-export function keepPowerOn(committed: boolean): boolean {
-  return committed;
-}
 
 /** What must not happen while `kind` runs: a screen flashed over USB must stay plugged in. */
 export function keepOnLabel(kind: string | null): string {
@@ -73,28 +69,27 @@ export function sentence(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1).replace(/([^.!?])$/, "$1.") : s;
 }
 
-const UP_TO_DATE = "HelixScreen is up to date";
-
-/** The finish screen. A run that ended early without changing the printer (`note` says why,
- * "HelixScreen is up to date: ...") is a success that changed nothing; one that changed it and
- * left a note says what to check. */
+/** The finish screen. A run that found HelixScreen current is a success that changed
+ * nothing; one that ended with a note says what to check. */
 export function finishScreen(
+  kind: DoneKind | null,
   note: string | null,
   printerName: string,
-  committed: boolean,
 ): { heading: string; lines: string[] } {
-  if (committed || !note) {
+  if (kind === "up_to_date") {
     return {
-      heading: "HelixScreen is installed",
-      lines: [
-        note
-          ? sentence(note)
-          : `Your ${printerName} may restart on its own. When it has, its screen shows HelixScreen.`,
-      ],
+      heading: "HelixScreen is up to date",
+      lines: [sentence(note ?? ""), "Nothing on your printer was changed."].filter((l) => l),
     };
   }
-  const rest = note.startsWith(`${UP_TO_DATE}: `) ? note.slice(UP_TO_DATE.length + 2) : note;
-  return { heading: UP_TO_DATE, lines: [sentence(rest), "Nothing on your printer was changed."] };
+  return {
+    heading: "HelixScreen is installed",
+    lines: [
+      note
+        ? sentence(note)
+        : `Your ${printerName} may restart on its own. When it has, its screen shows HelixScreen.`,
+    ],
+  };
 }
 
 export function isUrl(s: string | null | undefined): s is string {

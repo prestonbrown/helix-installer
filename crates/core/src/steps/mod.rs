@@ -23,7 +23,7 @@ pub mod write_stick;
 use crate::facts::Facts;
 use crate::identify::{self, GENERIC_REFUSE_DOC};
 use crate::manifest::{Channel, Login, Manifest, Step};
-use crate::run_state::{LogEntry, IDENTITY_KEYS};
+use crate::run_state::{DoneKind, LogEntry, IDENTITY_KEYS};
 use crate::runner::{unix_secs, Input, Prompt};
 use crate::transport::{Env, Host, RemoteJob, SshSession, TransportError};
 use async_trait::async_trait;
@@ -53,6 +53,7 @@ pub enum StepOutcome {
     /// says why on the finish screen.
     Complete {
         note: String,
+        kind: DoneKind,
     },
 }
 

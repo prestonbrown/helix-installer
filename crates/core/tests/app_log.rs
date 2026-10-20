@@ -119,14 +119,14 @@ fn a_full_log_stops_growing_and_says_so_once() {
 fn the_support_bundle_carries_the_app_log_redacted_and_masked() {
     let state = RunState::new("run1", "k1", "r", Host::new("192.168.1.50"), Facts::new());
     let app_log = format!(
-        "2026-10-20T15:28:28.586Z discovered 192.168.1.50\n2026-10-20T15:28:28.590Z echo {PASSWORD}\n"
+        "2026-10-20T15:28:28.586Z run1: started at 192.168.1.50\n2026-10-20T15:28:28.590Z run1: echo {PASSWORD}\n"
     );
     let plain = support_bundle_with_app_log(&state, &[], &app_log, &[PASSWORD], false);
     let (_, section) = plain
         .split_once("installer log:\n")
         .expect("the bundle has an installer log section");
     assert!(
-        section.contains("  2026-10-20T15:28:28.586Z discovered 192.168.1.50"),
+        section.contains("  2026-10-20T15:28:28.586Z run1: started at 192.168.1.50"),
         "{plain}"
     );
     assert!(!plain.contains(PASSWORD), "{plain}");
@@ -135,5 +135,63 @@ fn the_support_bundle_carries_the_app_log_redacted_and_masked() {
     assert!(
         masked.contains("2026-10-20T15:28:28.586Z"),
         "times are not addresses: {masked}"
+    );
+}
+
+#[test]
+fn of_two_launches_in_one_millisecond_the_later_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "installer-0000000000003.log",
+        "installer-0000000000003-1.log",
+        "installer-0000000000004.log",
+        "installer-0000000000005.log",
+        "installer-0000000000006.log",
+    ] {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+    AppLog::open(dir.path(), UNIX_EPOCH + Duration::from_millis(7)).unwrap();
+    let names = logs_in(dir.path());
+    assert_eq!(names.len(), KEEP_LOGS, "{names:?}");
+    assert!(
+        names.contains(&"installer-0000000000003-1.log".to_string()),
+        "the second launch of ms 3 is newer: {names:?}"
+    );
+    assert!(
+        !names.contains(&"installer-0000000000003.log".to_string()),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_masked_bundle_keeps_only_its_own_runs_log_lines_with_the_host_name_masked() {
+    let facts: Facts =
+        serde_json::from_value(serde_json::json!({ "klipper_hostname": "voronv0" })).unwrap();
+    let state = RunState::new("run-1", "k1", "r", Host::new("192.168.1.50"), facts);
+    let app_log = "\
+2026-10-20T15:28:28.586Z discovery found 2 printers
+2026-10-20T15:28:28.586Z   192.168.1.51 Ready K1 (host name other-box, printer k1, HelixScreen -)
+2026-10-20T15:28:28.590Z run-2: started for SN-OTHER at 192.168.1.51 (printer k1, recipe r)
+2026-10-20T15:28:28.591Z run-1: started for 192.168.1.50 at 192.168.1.50 (printer k1, recipe r)
+2026-10-20T15:28:28.592Z run-1: step 1: connected to voronv0 (voronv0.local), not voronv0x
+";
+    let masked = support_bundle_with_app_log(&state, &[], app_log, &[], true);
+    let (_, section) = masked.split_once("installer log:\n").unwrap();
+    assert!(!masked.contains("SN-OTHER"), "{masked}");
+    assert!(!masked.contains("other-box"), "{masked}");
+    assert!(!section.contains("run-2"), "{section}");
+    assert!(section.contains("run-1: started"), "{section}");
+    assert!(
+        section.contains("connected to <host> (<host>.local), not voronv0x"),
+        "{section}"
+    );
+    assert!(
+        !masked.contains("\"voronv0\""),
+        "the facts section masks it too: {masked}"
+    );
+    let plain = support_bundle_with_app_log(&state, &[], app_log, &[], false);
+    assert!(
+        plain.contains("run-2: started for SN-OTHER"),
+        "unmasked keeps the launch: {plain}"
     );
 }

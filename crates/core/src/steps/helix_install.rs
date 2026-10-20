@@ -13,6 +13,7 @@ use super::sudo::{self, SudoPlan};
 use super::{StepCtx, StepOutcome};
 use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, Channel, PlatformSel, Step};
+use crate::run_state::DoneKind;
 use crate::runner::Input;
 use crate::transport::ssh_russh::sh_quote;
 use crate::transport::{RemoteJob, SshSession, TransportError};
@@ -323,6 +324,7 @@ async fn prepare(
         if offered <= *installed {
             return Err(StepOutcome::Complete {
                 note: release::up_to_date_note(installed, target.channels, &offered),
+                kind: DoneKind::UpToDate,
             });
         }
     }

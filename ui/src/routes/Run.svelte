@@ -9,7 +9,8 @@
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
   import { signInInput, sudoInput } from "../lib/login";
-  import { finishScreen, formatBytes, isUrl, keepPowerOn, keepPowerText, sentence, stepLabel } from "../lib/text";
+  import { finishScreen, formatBytes, isUrl, keepPowerText, sentence, stepLabel } from "../lib/text";
+  import { nameLines } from "../lib/candidates";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
 
@@ -88,9 +89,11 @@
 
 <div class="run">
   {#if run}
+    {@const named = nameLines(run.printer_name, run.host_name)}
     <header class="strip">
       <div>
-        <div class="printer">{run.printer_name}</div>
+        <div class="printer">{named.title}</div>
+        {#if named.subtitle}<div class="muted">{named.subtitle}</div>{/if}
         {#if run.total_steps > 0 && ev?.event !== "done"}
           <div class="muted">
             Step {Math.min(run.step + 1, run.total_steps)} of {run.total_steps}: {stepLabel(run.step_kind, run.committed)}
@@ -325,14 +328,15 @@
       <div class="bar" class:indeterminate={ev.fraction === null}>
         <span style:width={ev.fraction === null ? "35%" : `${Math.round(ev.fraction * 100)}%`}></span>
       </div>
-      {#if keepPowerOn(run?.committed ?? false)}
+      <!-- Nothing on the printer changes before the point of no return, so no warning until then. -->
+      {#if run?.committed}
         <div class="notice warn" role="status">
           {keepPowerText(run?.step_kind ?? null)}
         </div>
       {/if}
     </section>
   {:else if ev.event === "done"}
-    {@const finish = finishScreen(run?.done_note ?? null, run?.printer_name ?? "printer", run?.committed ?? false)}
+    {@const finish = finishScreen(run?.done_kind ?? null, run?.done_note ?? null, run?.printer_name ?? "printer")}
     <section class="card body done">
       <div class="badge ok" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>

@@ -91,6 +91,9 @@ export type RunEvent =
   | { event: "refused"; doc: string; reason: string; cancelled: boolean }
   | { event: "failed"; committed: boolean; step: number; reason: string; help: string | null };
 
+/** Why a run ended before its last step. */
+export type DoneKind = "up_to_date" | "note";
+
 export interface RunInfo {
   run_id: string;
   printer_name: string;
@@ -100,8 +103,11 @@ export interface RunInfo {
   step_kind: string | null;
   committed: boolean;
   guide: string;
-  /** Why a run that ended early is done ("HelixScreen is up to date: ..."). */
+  /** Why a run that ended early is done ("1.1.0 is installed, and the newest ..."). */
   done_note: string | null;
+  done_kind: DoneKind | null;
+  /** The name the printer's own system goes by, as on its picker card. */
+  host_name: string | null;
 }
 
 export interface AdvanceView {
