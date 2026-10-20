@@ -1874,6 +1874,62 @@ fn the_version_probe_reads_the_running_binarys_tree_first_and_knows_the_payload_
     assert!(!p[scan..].contains("exit 0"), "{p}");
 }
 
+/// Runs the version probe against a printer faked in a temporary directory: `pidof` finds one
+/// `helix-screen`, whose `/proc/<pid>/exe` is `<tree>/bin/helix-screen`, a script printing
+/// `binary_says`, and `<tree>/release_info.json` names `release_info_says`.
+#[cfg(unix)]
+fn run_version_probe(binary_says: &str, release_info_says: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let stubs = dir.path().join("stubs");
+    let tree = dir.path().join("helixscreen");
+    std::fs::create_dir_all(&stubs).unwrap();
+    std::fs::create_dir_all(tree.join("bin")).unwrap();
+    let exe = tree.join("bin/helix-screen");
+    let script = |path: &std::path::Path, body: String| {
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    script(&stubs.join("pidof"), "echo 4242".into());
+    script(&stubs.join("readlink"), format!("echo '{}'", exe.display()));
+    script(&exe, format!("printf '%s' '{binary_says}'"));
+    std::fs::write(
+        tree.join("release_info.json"),
+        format!(r#"{{"project_name":"helixscreen","version":"{release_info_says}"}}"#),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = std::process::Command::new("sh")
+        .args(["-c", INSTALLED_VERSION_PROBE])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn the_running_binarys_own_version_wins_over_a_stale_release_info() {
+    // A build deployed by hand over an older install leaves the old release_info.json behind.
+    assert_eq!(
+        run_version_probe("helix-screen 1.1.0-beta.10 (917215c35c)\n", "v1.0.0"),
+        "running helix-screen 1.1.0-beta.10 (917215c35c)\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn release_info_names_the_running_version_when_the_binary_prints_none() {
+    assert_eq!(
+        run_version_probe("", "v1.1.0-beta.1"),
+        "running v1.1.0-beta.1\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn the_version_probe_is_valid_sh() {

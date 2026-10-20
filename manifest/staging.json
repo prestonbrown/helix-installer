@@ -259,6 +259,30 @@
       }
     },
     {
+      "id": "ad5x_forgex",
+      "name": "FlashForge Adventurer 5X with Forge-X",
+      "refused": true,
+      "identify": [
+        {
+          "cpu_arch": "mips",
+          "klipper_objects": {
+            "contains": "gcode_macro SUPPORT_FORGE_X"
+          }
+        },
+        {
+          "cpu_arch": "mips",
+          "os_distribution": {
+            "prefix": "Forge-X"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-ad5x/"
+      }
+    },
+    {
       "id": "ad5m",
       "name": "FlashForge Adventurer 5M",
       "identify": [

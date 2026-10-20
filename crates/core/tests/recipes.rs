@@ -2278,3 +2278,47 @@ fn a_picked_generic_host_cannot_be_a_qidi() {
         Identified::Refuse { printer_id: Some(ref p), .. } if p == "generic_klipper"
     ));
 }
+
+/// Forge-X officially runs only on the AD5M and 5M Pro; this AD5X runs it with a port of
+/// ZMOD's IFS support, and answers with Forge-X's macros on a MIPS board.
+#[test]
+fn an_ad5x_running_forgex_is_refused_and_never_offered_an_ad5m_recipe() {
+    let m = staging();
+    let f = fleet("ad5x_forgex");
+    let refused = Identified::Refuse {
+        printer_id: Some("ad5x_forgex".into()),
+        doc: "https://helixscreen.org/guide/install-ad5x/".into(),
+        reason: "this installer cannot put HelixScreen on a FlashForge Adventurer 5X with Forge-X"
+            .into(),
+    };
+    assert_eq!(identify(&m, &f), refused);
+    for picked in ["ad5m", "ad5m_pro", "ad5x", "ad5x_forgex"] {
+        assert_eq!(identify_as(&m, picked, &f), refused, "{picked}");
+    }
+}
+
+#[test]
+fn the_forgex_ad5m_still_installs_as_an_ad5m() {
+    let m = staging();
+    let f = fleet("ad5m_forgex");
+    assert_eq!(
+        identify_as(&m, "ad5m", &f),
+        recipe("ad5m", modded(), "ad5m_forgex_install")
+    );
+}
+
+#[test]
+fn a_zmod_ad5x_keeps_its_route() {
+    let m = staging();
+    let mut f = fleet("ad5x_forgex");
+    f.insert("helix_installed".into(), json!(false));
+    f.insert("os_distribution".into(), json!("Buildroot 2020.02.1"));
+    f.insert(
+        "klipper_objects".into(),
+        zmod_ad5x_objects()["objects"].clone(),
+    );
+    assert_eq!(
+        identify(&m, &f),
+        recipe("ad5x", modded(), "ad5x_enable_helix")
+    );
+}

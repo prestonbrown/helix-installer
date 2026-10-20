@@ -28,12 +28,12 @@ pub use super::release::{releases_manifest_url, GITHUB_RELEASE_API};
 pub const HELIX_INSTALL_SILENCE: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DIR: &str = "/tmp";
 /// Prints the installed HelixScreen's version, one tagged line per install. A running
-/// `helix-screen` is read in its own tree only (`release_info.json`, which every install by
-/// install.sh writes, else the binary's `--version` line, `helix-screen 1.1.0-beta.9 (9ed38c74d5)`)
-/// as `running <version>`, and nothing else is read. With nothing running, every place install.sh
+/// `helix-screen` is asked for its own `--version` line (`helix-screen 1.1.0-beta.9 (9ed38c74d5)`),
+/// else its tree's `release_info.json` is read, as `running <version>`, and nothing else is read:
+/// a build copied over an install by hand leaves that install's `release_info.json` behind. With nothing running, every place install.sh
 /// installs to is read, the Forge-X payload root and the root its record names included, each
 /// as `found <version>`: an old standalone tree can sit beside the current payload.
-pub const INSTALLED_VERSION_PROBE: &str = r#"v() { if [ -f "$1/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/release_info.json" | head -n 1; elif [ -x "$1/bin/helix-screen" ]; then "$1/bin/helix-screen" --version 2>/dev/null | head -n 1; fi; }; p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); if [ -n "$e" ]; then r=$(v "${e%/bin/*}"); [ -z "$r" ] && r=$("$e" --version 2>/dev/null | head -n 1); [ -n "$r" ] && { echo "running $r"; exit 0; }; fi; for f in /opt/config/mod_data/helixscreen_payload_root /usr/data/config/mod_data/helixscreen_payload_root; do [ -f "$f" ] && set -- "$@" "$(head -n 1 "$f")"; done; for d in "$@" /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /opt/config/mod_data/helixscreen /usr/data/config/mod_data/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do r=$(v "$d"); [ -n "$r" ] && echo "found $r"; done; true"#;
+pub const INSTALLED_VERSION_PROBE: &str = r#"v() { if [ -f "$1/release_info.json" ]; then sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/release_info.json" | head -n 1; elif [ -x "$1/bin/helix-screen" ]; then "$1/bin/helix-screen" --version 2>/dev/null | head -n 1; fi; }; p=$(pidof helix-screen 2>/dev/null | cut -d' ' -f1); e=; [ -n "$p" ] && e=$(readlink "/proc/$p/exe" 2>/dev/null); if [ -n "$e" ]; then r=$("$e" --version 2>/dev/null | head -n 1); [ -z "$r" ] && r=$(v "${e%/bin/*}"); [ -n "$r" ] && { echo "running $r"; exit 0; }; fi; for f in /opt/config/mod_data/helixscreen_payload_root /usr/data/config/mod_data/helixscreen_payload_root; do [ -f "$f" ] && set -- "$@" "$(head -n 1 "$f")"; done; for d in "$@" /usr/data/helixscreen /mnt/UDISK/helixscreen /opt/helixscreen /opt/config/mod_data/helixscreen /usr/data/config/mod_data/helixscreen /srv/helixscreen /root/printer_software/helixscreen /root/helixscreen /home/*/helixscreen; do r=$(v "$d"); [ -n "$r" ] && echo "found $r"; done; true"#;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The fact holding the installed HelixScreen's version (`v1.1.0-beta.9`).
 const VERSION_FACT: &str = "helix_version";
