@@ -2,7 +2,7 @@
 
 A desktop app that installs [HelixScreen](https://github.com/prestonbrown/helixscreen) onto 3D printers for people who would rather not use a terminal. Users download it from [helixscreen.org/installer](https://helixscreen.org/installer/). This file is for people changing it.
 
-The installer logic lives in `crates/core` (pure Rust, no Tauri), the Tauri 2 shell in `crates/app`, and the Svelte 5 + Vite + TypeScript interface in `ui/`. The design and the rules each task follows are in the main repository: `docs/devel/plans/2026-10-16-easy-installer-design.md`, and `docs/devel/INSTALLER.md` for how the app drives `install.sh`.
+The installer logic lives in `crates/core` (pure Rust, no Tauri), the Tauri 2 shell in `crates/app`, and the Svelte 5 + Vite + TypeScript interface in `ui/`. `docs/devel/INSTALLER.md` in the main repository describes how the app drives `install.sh`.
 
 ## Build and run
 
@@ -102,7 +102,7 @@ target/release/manifest-lint manifest/staging.json manifest/img --allow-unverifi
 
 Every `https://helixscreen.org/...` link in the manifests and source is a help page. The site serves its guides at `https://helixscreen.org/guide/<page>/`, and `/installation/` for the general install guide; the pages are built from `docs/user/` in the main repository, and a new page needs an entry in the website's sync script and sidebar.
 
-`scripts/check_help_links.py` finds every link and checks it. `--scheme` is offline and runs in CI on every push: it fails on an address the site doesn't serve. The live check (HEAD, then GET; redirects followed; non-200 fails) runs daily in `.github/workflows/help-links.yml` and before every release in `release.yml`. Pages waiting on a site deploy are listed in `scripts/pending-help-pages.txt`, which the daily run tolerates and a release does not, so the file must be empty by release. The manifest tree at `/installer/v1/` is not a help page and is skipped.
+`scripts/check_help_links.py` finds every link and checks it. `--scheme` is offline and runs in CI on every push: it fails on an address the site doesn't serve. The live check (HEAD, then GET; redirects followed; non-200 fails; a link with a `#fragment` also fetches the page and needs an element with that id) runs daily in `.github/workflows/help-links.yml` and before every release in `release.yml`. Pages waiting on a site deploy are listed in `scripts/pending-help-pages.txt`, which the daily run tolerates and a release does not, so the file must be empty by release. When the site promotes 1.1 to stable, `/1.1/...` links stop resolving: change them (and the pending file) in the same step as the redirect or the link rewrite. The manifest tree at `/installer/v1/` is not a help page and is skipped.
 
 ## Signing and publishing
 

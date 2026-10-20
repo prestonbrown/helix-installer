@@ -28,9 +28,9 @@ class Extraction(unittest.TestCase):
             set(got), {"https://helixscreen.org/guide/install-k1/", "https://helixscreen.org/installation/"}
         )
 
-    def test_fragment_is_dropped_so_the_page_is_what_gets_checked(self):
+    def test_fragment_is_kept_so_the_anchor_can_be_checked(self):
         got = links_in("https://helixscreen.org/guide/install-generic/#the-sudo-password")
-        self.assertEqual(set(got), {"https://helixscreen.org/guide/install-generic/"})
+        self.assertEqual(set(got), {"https://helixscreen.org/guide/install-generic/#the-sudo-password"})
 
     def test_manifest_tree_and_other_hosts_are_not_help_links(self):
         got = links_in(
@@ -54,6 +54,30 @@ class Scheme(unittest.TestCase):
     def test_the_retired_docs_prefix_and_pages_without_a_trailing_slash_fail(self):
         bad = self.problems("/docs/install-k1", "/guide/install-k1", "/guide/Install_K1/")
         self.assertEqual(len(bad), 3)
+
+
+class Anchors(unittest.TestCase):
+    PAGE = '<h2 id="the-sudo-password">The sudo Password</h2>'
+
+    def test_a_heading_id_is_found(self):
+        self.assertTrue(c.has_anchor(self.PAGE, "the-sudo-password"))
+
+    def test_a_missing_anchor_is_not(self):
+        self.assertFalse(c.has_anchor(self.PAGE, "the-sudo-passwords"))
+
+    def test_live_check_fails_on_a_missing_anchor_and_passes_on_a_present_one(self):
+        links = {
+            "https://helixscreen.org/guide/x/#here": ["a:1"],
+            "https://helixscreen.org/guide/x/#gone": ["a:2"],
+        }
+        with mock.patch.object(c, "help_links", return_value=links), mock.patch.object(
+            c, "status", return_value=200
+        ), mock.patch.object(c, "body", return_value='<h2 id="here">x</h2>'):
+            self.assertEqual(c.main([]), 1)
+        with mock.patch.object(c, "help_links", return_value={k: v for k, v in links.items() if "here" in k}), mock.patch.object(
+            c, "status", return_value=200
+        ), mock.patch.object(c, "body", return_value='<h2 id="here">x</h2>'):
+            self.assertEqual(c.main([]), 0)
 
 
 class Pending(unittest.TestCase):

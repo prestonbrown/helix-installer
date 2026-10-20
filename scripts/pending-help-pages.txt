@@ -5,5 +5,4 @@
 /guide/install-qidi/
 /guide/install-generic/
 /guide/easy-installer-unsupported/
-/1.1/guide/install-esp32/
 /installer/

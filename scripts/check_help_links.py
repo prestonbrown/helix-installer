@@ -6,7 +6,8 @@ A help link is any https://helixscreen.org/... URL in a tracked text file except
 own manifest tree (/installer/v1/), which is data the app fetches, not a page. Two checks:
 
   --scheme   offline: every link's path is a page address the site can serve
-  (default)  live: every link answers 200 (HEAD, then GET when HEAD is refused; redirects followed)
+  (default)  live: every link answers 200 (HEAD, then GET when HEAD is refused; redirects followed),
+             and a link with a #fragment names an id that exists in the page
 
   --pending FILE   live check only: paths listed in FILE (one per line, # comments) are expected
                    to be missing until the site deploys and are reported, not failed. The release
@@ -42,11 +43,12 @@ ATTEMPTS = 3
 
 def tracked_files():
     out = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
-    return [ROOT / p for p in out.decode().split("\0") if p]
+    # The tests carry made-up addresses on purpose.
+    return [ROOT / p for p in out.decode().split("\0") if p and not p.endswith("test_check_help_links.py")]
 
 
 def help_links(files=None):
-    """{url without fragment: [file:line, ...]} for every help link."""
+    """{url, fragment included: [file:line, ...]} for every help link."""
     found = {}
     for path in files if files is not None else tracked_files():
         try:
@@ -58,9 +60,8 @@ def help_links(files=None):
                 url = m.group(0).rstrip(TRAILING)
                 if any(urlsplit(url).path.startswith(p) for p in NOT_HELP):
                     continue
-                url = urldefrag(url)[0]
                 if urlsplit(url).path == "":
-                    url += "/"
+                    url = url.replace("https://helixscreen.org", "https://helixscreen.org/", 1)
                 where = f"{path.relative_to(ROOT)}:{n}" if path.is_relative_to(ROOT) else f"{path}:{n}"
                 found.setdefault(url, []).append(where)
     return found
@@ -68,6 +69,23 @@ def help_links(files=None):
 
 def scheme_problems(links):
     return {u: w for u, w in links.items() if not PAGE.match(urlsplit(u).path)}
+
+
+def body(url):
+    """The page's HTML, or None when it cannot be fetched."""
+    for attempt in range(ATTEMPTS):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "helix-installer-link-check"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(2 * (attempt + 1))
+    return None
+
+
+def has_anchor(html, fragment):
+    """Whether the page carries an element with this id (Starlight gives every heading one)."""
+    return f'id="{fragment}"' in html
 
 
 def status(url):
@@ -120,16 +138,32 @@ def main(argv=None):
 
     pending = read_pending(args.pending)
     failed = []
-    for url in sorted(links):
-        path = urlsplit(url).path
-        got = status(url)
-        if got == 200:
-            print(f"ok       {url}")
-        elif path in pending:
-            print(f"pending  {url}  ({got})")
-        else:
-            print(f"FAIL     {url}  ({got})  used in {', '.join(links[url][:3])}")
-            failed.append(url)
+    pages = {}
+    for url in links:
+        pages.setdefault(urldefrag(url)[0], []).append(url)
+    for page in sorted(pages):
+        path = urlsplit(page).path
+        got = status(page)
+        used = [w for u in pages[page] for w in links[u]]
+        if got != 200:
+            if path in pending:
+                print(f"pending  {page}  ({got})")
+            else:
+                print(f"FAIL     {page}  ({got})  used in {', '.join(used[:3])}")
+                failed.append(page)
+            continue
+        print(f"ok       {page}")
+        fragments = sorted({urldefrag(u)[1] for u in pages[page] if urldefrag(u)[1]})
+        if not fragments:
+            continue
+        html = body(page)
+        for frag in fragments:
+            if html is not None and has_anchor(html, frag):
+                print(f"ok       {page}#{frag}")
+            else:
+                where = [w for u in pages[page] if urldefrag(u)[1] == frag for w in links[u]]
+                print(f"FAIL     {page}#{frag}  no such anchor  used in {', '.join(where[:3])}")
+                failed.append(f"{page}#{frag}")
     print(f"{len(links)} help links, {len(failed)} failed")
     return 1 if failed else 0
 
