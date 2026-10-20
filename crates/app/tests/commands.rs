@@ -2,12 +2,14 @@
 
 use async_trait::async_trait;
 use helix_installer_app_lib::commands::{
-    AppConfig, AppCore, CandidateStatus, CommandError, Connection, Discovery, ErrorKind,
+    printer_view, updated_to, AppConfig, AppCore, CandidateStatus, CommandError, Connection,
+    Discovery, ErrorKind,
 };
 use helix_installer_core::app_log::AppLog;
 use helix_installer_core::discovery::Candidate;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::Login;
+use helix_installer_core::run_state::{DoneKind, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Prompt};
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSerial, FakeSsh,
@@ -859,4 +861,41 @@ async fn the_run_carries_the_printers_own_name() {
     let view = c.advance(&run, None).await.unwrap();
     assert_eq!(view.run.host_name.as_deref(), Some("k1-printer"));
     assert_eq!(view.run.printer_name, "Creality K1");
+}
+
+fn printer(identify: Value) -> helix_installer_core::manifest::Printer {
+    serde_json::from_value(json!({
+        "id": "p", "name": "P", "identify": identify, "recipes": [],
+        "fallback": { "refuse": true, "doc": "https://example.invalid/" }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_printer_found_only_by_its_usb_id_is_marked_usb_only() {
+    assert!(printer_view(&printer(json!([{ "usb": "1a86:7522" }]))).usb_only);
+    assert!(!printer_view(&printer(json!([{ "cpu_arch": "mips" }]))).usb_only);
+    assert!(
+        !printer_view(&printer(
+            json!([{ "usb": "1a86:7522" }, { "cpu_arch": "mips" }])
+        ))
+        .usb_only
+    );
+    assert!(!printer_view(&printer(json!([]))).usb_only);
+}
+
+#[test]
+fn a_finished_update_names_the_version_it_installed() {
+    let mut s = RunState::new("r", "p", "u", Host::new("h"), Facts::new());
+    s.facts
+        .insert("helix_updated_to".into(), json!("v1.1.0-beta.10"));
+    assert_eq!(updated_to(&s), None, "not while the run is going");
+    s.status = RunStatus::Done;
+    assert_eq!(updated_to(&s).as_deref(), Some("v1.1.0-beta.10"));
+    s.done_kind = Some(DoneKind::UpToDate);
+    assert_eq!(updated_to(&s), None, "an up-to-date check updated nothing");
+    s.done_kind = Some(DoneKind::Note);
+    assert_eq!(updated_to(&s).as_deref(), Some("v1.1.0-beta.10"));
+    s.facts.clear();
+    assert_eq!(updated_to(&s), None, "a first install");
 }

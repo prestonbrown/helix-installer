@@ -27,6 +27,7 @@ use helix_installer_core::manifest::{
 use helix_installer_core::record::record;
 use helix_installer_core::run_state::{DoneKind, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Runner};
+use helix_installer_core::steps::UPDATED_TO_FACT;
 use helix_installer_core::transport::Env;
 use serde::Serialize;
 use serde_json::Value;
@@ -127,6 +128,8 @@ pub struct PrinterView {
     pub name: String,
     pub photo: Option<String>,
     pub verified: Option<Verified>,
+    /// Found only by its USB id: it cannot be reached by typing an address.
+    pub usb_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -191,6 +194,8 @@ pub struct RunInfo {
     pub done_kind: Option<DoneKind>,
     /// The name the printer's own system goes by, as on its picker card.
     pub host_name: Option<String>,
+    /// The version a finished update installed (`updated_to`).
+    pub updated_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,13 +234,27 @@ pub struct AppCore {
     logged: std::sync::Mutex<HashMap<String, RunLogged>>,
 }
 
-fn printer_view(p: &helix_installer_core::manifest::Printer) -> PrinterView {
+pub fn printer_view(p: &helix_installer_core::manifest::Printer) -> PrinterView {
     PrinterView {
         id: p.id.clone(),
         name: p.name.clone(),
         photo: p.photo.clone(),
         verified: p.verified.clone(),
+        usb_only: !p.identify.is_empty() && p.identify.iter().all(|r| r.contains_key("usb")),
     }
+}
+
+/// The HelixScreen version a finished update installed; `None` for a first install, a run that
+/// found HelixScreen current, or one still going.
+pub fn updated_to(state: &RunState) -> Option<String> {
+    if state.status != RunStatus::Done || state.done_kind == Some(DoneKind::UpToDate) {
+        return None;
+    }
+    state
+        .facts
+        .get(UPDATED_TO_FACT)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 fn printer_name(m: &Manifest, printer_id: &str) -> String {
@@ -342,6 +361,7 @@ fn run_info(r: &Runner) -> RunInfo {
         done_note: state.done_note.clone(),
         done_kind: state.done_kind,
         host_name: host_name(&state.facts),
+        updated_to: updated_to(state),
     }
 }
 

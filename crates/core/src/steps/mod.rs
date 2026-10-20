@@ -73,6 +73,10 @@ pub trait StepHandler: Send + Sync {
     async fn run(&self, ctx: &mut StepCtx<'_>, step: &Step, input: Option<Input>) -> StepOutcome;
 }
 
+/// The fact a step that updates HelixScreen sets to the version it installs, for the finish
+/// screen. A first install never sets it.
+pub const UPDATED_TO_FACT: &str = "helix_updated_to";
+
 /// Logins the user may type before an SSH step gives up.
 pub(crate) const USER_LOGIN_TRIES: u32 = 3;
 

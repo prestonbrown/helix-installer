@@ -11,7 +11,7 @@
 use super::download::fetch_artifact;
 use super::esp32::{self, FlashPart, BOOT_VERSION_MARKER};
 use super::release;
-use super::{StepCtx, StepOutcome};
+use super::{StepCtx, StepOutcome, UPDATED_TO_FACT};
 use crate::manifest::Channel;
 use crate::run_state::DoneKind;
 use crate::runner::Input;
@@ -31,9 +31,10 @@ const POLL: Duration = Duration::from_millis(500);
 const BOOT_LISTEN: Duration = Duration::from_secs(20);
 const MIB: u64 = 1024 * 1024;
 
-const MID_FLASH_HELP: &str = "The K-Touch may not start until it is written again, and its \
-screen may stay blank. This cannot damage it: its chip always accepts a new write over USB. Plug \
-it back in, check the cable carries data, then choose Try this step again to write it again.";
+/// What to do after a write that stopped part way. The stopped screen already says what state the
+/// panel is in and that a new write cannot damage it, so this does not repeat it.
+const MID_FLASH_HELP: &str = "Plug the K-Touch back in, check the cable carries data, then \
+choose Try this step again to write it again.";
 
 /// The step's manifest fields.
 pub struct Spec<'a> {
@@ -488,6 +489,7 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
             if !task.update {
                 return StepOutcome::Done;
             }
+            ctx.facts.insert(UPDATED_TO_FACT.into(), json!(v));
             // An update never erases and never writes the parts the recipe keeps.
             StepOutcome::Complete {
                 note: format!(
@@ -506,14 +508,18 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
                 "Unplug the {name}, plug it back in, and choose Try this step again to write it again."
             )),
         },
-        None if task.update => StepOutcome::Complete {
+        None if task.update => {
+            ctx.facts
+                .insert(UPDATED_TO_FACT.into(), json!(task.version));
+            StepOutcome::Complete {
             note: format!(
                 "HelixScreen {} was written to the {name} and checked, and it restarted, but the \
                  installer could not read its version back: check its screen shows HelixScreen",
                 task.version
             ),
             kind: DoneKind::Note,
-        },
+        }
+        }
         None => {
             ctx.log(format!(
                 "the {name} restarted, but printed no version the installer could read"
@@ -536,10 +542,9 @@ fn stopped(ctx: &mut StepCtx<'_>, stop: Stop, erased: bool) -> StepOutcome {
                  completes"
             ),
             help: Some(format!(
-                "The {name} is blank until a flash completes: it shows nothing and will not \
-                 start. This cannot damage it: its chip always accepts a new write over USB. Keep \
-                 it plugged in (plug it back in if it came loose) and choose Try this step again \
-                 to write it."
+                "The {name} shows nothing and will not start until a flash completes. Keep it \
+                 plugged in (plug it back in if it came loose) and choose Try this step again to \
+                 write it."
             )),
         },
         other => other,

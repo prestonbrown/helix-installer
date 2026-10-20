@@ -11,7 +11,7 @@ use helix_installer_core::steps::helix_install::{
     INSTALLED_VERSION_PROBE,
 };
 use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
-use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
+use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome, UPDATED_TO_FACT};
 use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
@@ -358,6 +358,10 @@ async fn installs_the_platform_for_the_cpu_and_reports_its_steps() {
     assert!(f.fetch.requests().contains(&tarball_url("pi")));
     assert!(!f.fetch.requests().contains(&tarball_url("pi32")));
     assert_eq!(r.state().job, None, "a finished job is forgotten");
+    assert!(
+        !r.state().facts.contains_key(UPDATED_TO_FACT),
+        "an install is not an update"
+    );
 }
 
 #[tokio::test]
@@ -380,6 +384,7 @@ async fn a_fixed_platform_installs_into_the_recipe_dir_as_an_update() {
         spawned(&f)[0].0,
         "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.1.5.tar.gz' --progress --update"
     );
+    assert_eq!(r.state().facts[UPDATED_TO_FACT], json!(TAG));
 }
 
 #[tokio::test]

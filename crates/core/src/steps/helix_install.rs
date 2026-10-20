@@ -10,7 +10,7 @@ use super::job::{self, Followed};
 use super::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use super::release::{self, safe_name, ReleaseManifest};
 use super::sudo::{self, SudoPlan};
-use super::{StepCtx, StepOutcome};
+use super::{StepCtx, StepOutcome, UPDATED_TO_FACT};
 use crate::identify::GENERIC_REFUSE_DOC;
 use crate::manifest::{Artifact, Channel, PlatformSel, Step};
 use crate::run_state::DoneKind;
@@ -516,6 +516,10 @@ async fn prepare(
         Ok(to_send)
     }
     .await;
+    if mode == Mode::Update && !run.dry_run {
+        ctx.facts
+            .insert(UPDATED_TO_FACT.into(), serde_json::json!(release.tag));
+    }
     match checked {
         Ok(to_send) => Ok(PreparedLaunch {
             step: ctx.step,

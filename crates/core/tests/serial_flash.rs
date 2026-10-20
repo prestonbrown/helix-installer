@@ -13,6 +13,7 @@ use helix_installer_core::manifest::{Channel, Manifest};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{releases_manifest_url, GITHUB_RELEASE_API};
+use helix_installer_core::steps::UPDATED_TO_FACT;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSerial, FakeSsh,
 };
@@ -268,6 +269,10 @@ async fn a_first_install_writes_only_the_flash_args_parts_then_points_at_the_set
         other => panic!("expected the setup screen, got {other:?}"),
     }
     assert_eq!(r.state().facts["helix_version"], json!("v1.1.0-beta.10"));
+    assert!(
+        !r.state().facts.contains_key(UPDATED_TO_FACT),
+        "a first install is not an update"
+    );
 }
 
 #[tokio::test]
@@ -308,6 +313,7 @@ async fn a_finished_update_says_what_the_panel_now_runs_and_that_its_wifi_and_se
         "{note}"
     );
     assert!(note.contains("WiFi and settings were kept"), "{note}");
+    assert_eq!(r.state().facts[UPDATED_TO_FACT], json!("v1.1.0-beta.10"));
 }
 
 fn log_lines(r: &Runner) -> Vec<String> {
@@ -488,7 +494,9 @@ async fn a_panel_unplugged_mid_flash_says_what_state_it_is_in_and_is_not_retried
     let (committed, reason, help) = failure(&drive(&mut r).await.end);
     assert!(committed);
     assert!(reason.contains("while it was being written"), "{reason}");
-    assert!(help.contains("blank until a flash completes"), "{help}");
+    assert!(help.contains("until a flash completes"), "{help}");
+    // The stopped screen says once that the panel cannot be damaged; the help does not repeat it.
+    assert!(!help.contains("cannot damage"), "{help}");
     assert!(help.contains("Try this step again"), "{help}");
     let opened = rig.serial.connects().len();
     assert_eq!(opened, 2);
@@ -701,7 +709,8 @@ async fn a_panel_unplugged_while_it_is_erased_says_so() {
     let (committed, reason, help) = failure(&drive(&mut r).await.end);
     assert!(committed);
     assert!(reason.contains("erased"), "{reason}");
-    assert!(help.contains("blank until a flash completes"), "{help}");
+    assert!(help.contains("until a flash completes"), "{help}");
+    assert!(!help.contains("cannot damage"), "{help}");
     assert!(rig.serial.writes().is_empty());
 }
 
@@ -805,7 +814,7 @@ async fn a_first_install_stopped_after_the_erase_says_the_panel_is_blank_and_try
     let (committed, reason, help) = failure(&drive(&mut r).await.end);
     assert!(committed);
     assert!(reason.contains("blank"), "{reason}");
-    assert!(help.contains("blank until"), "{help}");
+    assert!(help.contains("until a flash completes"), "{help}");
     assert!(help.contains("Try this step again"), "{help}");
     assert_eq!(rig.serial.erases(), 1);
     assert_eq!(rig.serial.read_back(PORT, APP_OFFSET, 4), vec![0xff; 4]);
