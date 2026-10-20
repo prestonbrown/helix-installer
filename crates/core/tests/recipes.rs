@@ -19,6 +19,7 @@ use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
 use helix_installer_core::transport::{Env, ExecOutput, Host};
+use helix_installer_core::version::FwVersion;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -713,7 +714,7 @@ async fn k2_restore_runs_the_uninstaller() {
 
 const SIMPLE_AF: &str = "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull || { echo 'FATAL: could not update /usr/data/pellcorp (git pull failed); check the printer can reach github.com, then retry'; exit 1; }; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells";
 const K1_MODEL_PROBE: &str = r#"case "$(/usr/bin/get_sn_mac.sh model 2>/dev/null)" in CR-K1|K1C|"CR-K1 Max") echo yes;; *) echo no;; esac"#;
-const OTA_PROBE: &str = r"sed -n 's/^ota_version=6\.//p' /etc/ota_info";
+const OTA_PROBE: &str = r"sed -n 's/^ota_version=\(6\.\)\{0,1\}//p' /etc/ota_info";
 const LEFTOVERS_PROBE: &str = r#"if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ] || { [ -d /opt ] && [ ! -L /opt ] && [ -n "$(ls -1 /opt)" ]; }; then echo yes; else echo no; fi"#;
 
 struct K1 {
@@ -889,10 +890,11 @@ async fn a_stock_k1_picked_from_the_grid_gets_simple_af_then_helixscreen() {
     let trace = drive(&mut r, stock_k1_answers).await;
     assert!(trace.done(), "{:?}", trace.end);
     let texts = trace.texts();
-    assert_eq!(texts.len(), 3, "{texts:?}");
-    assert!(texts[0].contains("Root account information"), "{texts:?}");
-    assert!(texts[1].contains("factory reset"), "{texts:?}");
-    assert!(texts[2].contains("Root account information"), "{texts:?}");
+    assert_eq!(texts.len(), 4, "{texts:?}");
+    assert!(texts[0].contains("tap Cancel"), "{texts:?}");
+    assert!(texts[1].contains("Root account information"), "{texts:?}");
+    assert!(texts[2].contains("factory reset"), "{texts:?}");
+    assert!(texts[3].contains("Root account information"), "{texts:?}");
     assert!(ran(&rig, SIMPLE_AF), "{:?}", rig.ssh.commands());
     assert!(r.state().committed);
     assert!(
@@ -916,6 +918,7 @@ async fn a_k1_without_the_root_option_is_refused_before_anything_runs() {
             assert!(choices.iter().any(|c| c.value == "no"));
             Input::Choice("no".into())
         }
+        Prompt::Info { .. } => Input::Next,
         other => panic!("unexpected prompt {other:?}"),
     })
     .await;
@@ -2447,4 +2450,107 @@ fn a_forgex_ad5x_that_answers_flashforge_udp_is_still_refused() {
         identify(&m, &f),
         Identified::Refuse { printer_id: Some(ref p), .. } if p == "ad5x_forgex"
     ));
+}
+
+// ---------------------------------------------------------------- stock K1 texts and probes
+
+fn k1_stock_ota_probe() -> String {
+    staging().recipes["k1_stock"]
+        .iter()
+        .find_map(|s| match s {
+            Step::Probe {
+                ssh: Some(cmd),
+                fact: Some(fact),
+                ..
+            } if fact == "k1_firmware_version" => Some(cmd.clone()),
+            _ => None,
+        })
+        .expect("k1_stock reads the firmware version")
+}
+
+/// The K1's firmware version probe run against an `/etc/ota_info` holding `ota_info`.
+#[cfg(unix)]
+fn firmware_version_from(ota_info: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ota_info");
+    std::fs::write(&file, ota_info).unwrap();
+    let probe = k1_stock_ota_probe();
+    assert!(probe.contains("/etc/ota_info"), "{probe}");
+    let probe = probe.replace("/etc/ota_info", &file.display().to_string());
+    let out = std::process::Command::new("sh")
+        .args(["-c", &probe])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn the_k1_firmware_version_is_read_with_or_without_the_6_prefix() {
+    // A stock K1C on 1.3.3.46 writes it without the prefix; other units write `6.1.3.3.46`.
+    for ota_info in [
+        "ota_version=1.3.3.46\nota_board_name=K1C\n",
+        "ota_version=6.1.3.3.46\nota_board_name=K1C\n",
+    ] {
+        assert_eq!(firmware_version_from(ota_info), "1.3.3.46\n", "{ota_info}");
+    }
+}
+
+#[test]
+fn the_k1_firmware_floor_compares_numerically() {
+    let floor = staging().recipes["k1_stock"]
+        .iter()
+        .find_map(|s| match s {
+            Step::Require {
+                fact,
+                range: Some(r),
+                ..
+            } if fact == "k1_firmware_version" => Some(r.clone()),
+            _ => None,
+        })
+        .expect("k1_stock has a firmware floor");
+    for (v, ok) in [
+        ("1.3.3.46", true),
+        ("1.3.3.5", true),
+        ("1.3.3.4", false),
+        ("1.3.10.1", true),
+    ] {
+        assert_eq!(
+            floor.matches(&FwVersion::parse(v).unwrap()),
+            ok,
+            "{v} against {floor:?}"
+        );
+    }
+}
+
+/// The button under every `user_action` reads "I've done this" (ui/src/routes/Run.svelte).
+#[test]
+fn user_action_texts_name_the_button_the_screen_shows() {
+    for (id, steps) in &staging().recipes {
+        for s in steps {
+            if let Step::UserAction { text, .. } = s {
+                assert!(!text.contains("ress Next"), "{id}: {text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_stock_k1_is_told_to_cancel_creality_s_update_offer_before_settings() {
+    let steps = &staging().recipes["k1_stock"];
+    let first_settings = steps
+        .iter()
+        .position(|s| match s {
+            Step::Ask { question: t, .. } | Step::UserAction { text: t, .. } => {
+                t.contains("Settings")
+            }
+            _ => false,
+        })
+        .expect("k1_stock sends the user into Settings");
+    let cancel = steps[..first_settings].iter().find_map(|s| match s {
+        Step::Info { text, .. } if text.contains("tap Cancel") => Some(text),
+        _ => None,
+    });
+    let cancel = cancel.expect("the update offer is dealt with before Settings");
+    assert!(!cancel.contains('\u{2014}'), "{cancel}");
 }

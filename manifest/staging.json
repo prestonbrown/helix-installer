@@ -854,7 +854,7 @@
     "k2_install": [
       {
         "type": "user_action",
-        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
         "image": "k2/root-account.png",
         "verify": {
           "tcp_port": 22,
@@ -900,7 +900,7 @@
     "k2_update": [
       {
         "type": "user_action",
-        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
         "image": "k2/root-account.png",
         "verify": {
           "tcp_port": 22,
@@ -948,7 +948,7 @@
     "k2_restore": [
       {
         "type": "user_action",
-        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press Next here.",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
         "image": "k2/root-account.png",
         "verify": {
           "tcp_port": 22,
@@ -975,6 +975,10 @@
       }
     ],
     "k1_stock": [
+      {
+        "type": "info",
+        "text": "If the printer's screen offers a firmware update, tap Cancel: the installer works with the firmware the printer has."
+      },
       {
         "type": "ask",
         "fact": "k1_root_menu",
@@ -1004,7 +1008,7 @@
       },
       {
         "type": "user_action",
-        "text": "Turn on root access: on the printer's screen open Settings, then Root account information. Read the notice, wait for the countdown, then press OK. Then press Next here.",
+        "text": "Turn on root access: on the printer's screen open Settings, then Root account information. Read the notice, wait for the countdown, then press OK. Then press I've done this.",
         "image": "k1/root-account.png",
         "verify": {
           "tcp_port": 22,
@@ -1045,7 +1049,7 @@
       },
       {
         "type": "probe",
-        "ssh": "sed -n 's/^ota_version=6\\.//p' /etc/ota_info",
+        "ssh": "sed -n 's/^ota_version=\\(6\\.\\)\\{0,1\\}//p' /etc/ota_info",
         "fact": "k1_firmware_version"
       },
       {
@@ -1305,7 +1309,7 @@
       },
       {
         "type": "user_action",
-        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs ZMOD by itself, which can take up to 40 minutes. Press Next once the printer is on.",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs ZMOD by itself, which can take up to 40 minutes. Press I've done this once the printer is on.",
         "image": "ad5x/usb-port.png",
         "commits": true
       },
@@ -1479,13 +1483,13 @@
       },
       {
         "type": "user_action",
-        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press Next once the printer is on.",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press I've done this once the printer is on.",
         "image": "ad5m/usb-port.png",
         "commits": true
       },
       {
         "type": "user_action",
-        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press Next."
+        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press I've done this."
       },
       {
         "type": "wait_for",
@@ -1598,13 +1602,13 @@
       },
       {
         "type": "user_action",
-        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press Next once the printer is on.",
+        "text": "Turn the printer off, put the USB stick in the printer's USB port, then turn the printer on. It installs Forge-X by itself and shows a message on its screen when it has finished. Press I've done this once the printer is on.",
         "image": "ad5m/usb-port.png",
         "commits": true
       },
       {
         "type": "user_action",
-        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press Next."
+        "text": "When the printer's screen says the installation has finished, remove the USB stick and turn the printer off and on again. Then press I've done this."
       },
       {
         "type": "wait_for",
