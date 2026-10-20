@@ -176,7 +176,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       button: "Continue anyway",
       doc: "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware",
     },
-    run: run({ printer_name: "FlashForge Adventurer 5M", address: "", step: 3, total_steps: 17, step_kind: "require" }),
+    run: run({ printer_name: "FlashForge Adventurer 5M", address: "192.168.1.62", host_name: "ad5m", step: 3, total_steps: 17, step_kind: "require" }),
   },
   info: {
     event: {
