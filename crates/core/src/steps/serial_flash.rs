@@ -2,9 +2,9 @@
 
 //! `serial_flash`: writes the HelixScreen release's build to an ESP32 panel on USB. It picks the
 //! release as `helix_install` does (same channels, an update never older), downloads the build's
-//! zip checked against the release list's hash for it (GitHub's digest for a release the list predates), then opens the panel's port once: it checks the
-//! chip, its flash and that it is the board the run started on, writes only the parts the build's
-//! `flash_args` lists, checks each by the MD5 the chip reads back, and resets the panel to read the
+//! zip checked against the release list's hash for it (GitHub's digest for a release the list
+//! predates), then opens the panel's port once: it checks the chip, its flash and that it is the
+//! board the run started on, writes only the parts the build's `flash_args` lists, checks each by the MD5 the chip reads back, and resets the panel to read the
 //! version it boots. It never erases the chip and never writes the merged factory image, so the
 //! panel's WiFi and settings survive.
 

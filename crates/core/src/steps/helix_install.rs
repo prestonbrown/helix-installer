@@ -542,18 +542,14 @@ fn release_tarball(release: &ReleaseManifest, platform: &str) -> Result<Artifact
             release.tag
         )));
     };
-    let name = asset.url.rsplit('/').next().unwrap_or_default().to_string();
+    let name = asset.file_name().to_string();
     if !safe_name(&name) {
         return Err(StepOutcome::failed(format!(
             "the release list names an unusable file: {}",
             asset.url
         )));
     }
-    Ok(Artifact {
-        url: asset.url.clone(),
-        sha256: asset.sha256.clone(),
-        filename: Some(name),
-    })
+    Ok(asset.artifact(&name))
 }
 
 /// Whether `install.sh` has a case arm for `--progress`.

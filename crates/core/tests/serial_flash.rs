@@ -698,7 +698,10 @@ async fn a_zip_that_does_not_match_its_release_list_hash_is_not_written() {
     let mut r = rig.runner();
     let (committed, reason, _) = failure(&drive(&mut r).await.end);
     assert!(!committed, "nothing was written");
-    assert!(reason.contains("hash"), "{reason}");
+    assert!(
+        reason.contains("hash") && reason.contains(&"0".repeat(64)),
+        "{reason}"
+    );
     assert!(rig.serial.writes().is_empty());
 }
 

@@ -47,6 +47,22 @@ pub(crate) struct ReleaseAsset {
     pub(crate) sha256: String,
 }
 
+impl ReleaseAsset {
+    /// The file name the URL ends in.
+    pub(crate) fn file_name(&self) -> &str {
+        self.url.rsplit('/').next().unwrap_or_default()
+    }
+
+    /// The download, named `name`.
+    pub(crate) fn artifact(&self, name: &str) -> Artifact {
+        Artifact {
+            url: self.url.clone(),
+            sha256: self.sha256.clone(),
+            filename: Some(name.into()),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct GithubRelease {
     assets: Vec<GithubAsset>,
@@ -204,12 +220,8 @@ pub(crate) fn listed_asset(release: &ReleaseManifest, name: &str) -> Option<Arti
     release
         .assets
         .values()
-        .find(|a| a.url.rsplit('/').next() == Some(name))
-        .map(|a| Artifact {
-            url: a.url.clone(),
-            sha256: a.sha256.clone(),
-            filename: Some(name.into()),
-        })
+        .find(|a| a.file_name() == name)
+        .map(|a| a.artifact(name))
 }
 
 /// The asset `name` of the GitHub release `tag`, checked against the asset's `digest`.
