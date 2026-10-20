@@ -115,6 +115,10 @@ pub enum Cond {
     Contains {
         contains: String,
     },
+    /// Matches a list fact that has every one of these elements.
+    ContainsAll {
+        contains_all: Vec<String>,
+    },
     Range(VersionRange),
     /// Matches a text fact that starts with this text (case-sensitive).
     Prefix {
@@ -135,6 +139,12 @@ struct ContainsRepr {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ContainsAllRepr {
+    contains_all: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PrefixRepr {
     prefix: String,
 }
@@ -150,6 +160,7 @@ struct NotRepr {
 enum CondRepr {
     Text(String),
     Contains(ContainsRepr),
+    ContainsAll(ContainsAllRepr),
     Prefix(PrefixRepr),
     Not(NotRepr),
 }
@@ -164,6 +175,9 @@ impl Cond {
             CondRepr::Contains(c) => Ok(Cond::Contains {
                 contains: c.contains,
             }),
+            CondRepr::ContainsAll(c) => Ok(Cond::ContainsAll {
+                contains_all: c.contains_all,
+            }),
             CondRepr::Prefix(p) => Ok(Cond::Prefix { prefix: p.prefix }),
             CondRepr::Not(n) => Ok(Cond::Not { not: n.not }),
         }
@@ -177,6 +191,10 @@ impl Serialize for Cond {
             Cond::Range(r) => s.serialize_str(r.as_str()),
             Cond::Contains { contains } => ContainsRepr {
                 contains: contains.clone(),
+            }
+            .serialize(s),
+            Cond::ContainsAll { contains_all } => ContainsAllRepr {
+                contains_all: contains_all.clone(),
             }
             .serialize(s),
             Cond::Prefix { prefix } => PrefixRepr {

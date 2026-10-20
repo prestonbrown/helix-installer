@@ -265,18 +265,19 @@
       "identify": [
         {
           "cpu_arch": "mips",
+          "flashforge_udp.model": "AD5X",
           "klipper_objects": {
             "contains": "gcode_macro SUPPORT_FORGE_X"
           }
         },
         {
           "klipper_objects": {
-            "contains": "ifs_materials"
-          }
-        },
-        {
-          "klipper_objects": {
-            "contains": "ifs_toolhead_sensor toolhead"
+            "contains_all": [
+              "gcode_macro SUPPORT_FORGE_X",
+              "ifs",
+              "ifs_materials",
+              "ifs_toolhead_sensor toolhead"
+            ]
           }
         }
       ],

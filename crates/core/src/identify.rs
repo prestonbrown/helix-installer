@@ -79,6 +79,11 @@ pub(crate) fn cond_matches(cond: &Cond, fact: Option<&Value>) -> bool {
         Cond::Contains { contains } => fact
             .as_array()
             .is_some_and(|items| items.iter().any(|i| i.as_str() == Some(contains))),
+        Cond::ContainsAll { contains_all } => fact.as_array().is_some_and(|items| {
+            contains_all
+                .iter()
+                .all(|want| items.iter().any(|i| i.as_str() == Some(want)))
+        }),
         Cond::Range(range) => fact
             .as_str()
             .and_then(FwVersion::parse)
@@ -131,9 +136,13 @@ fn uncontradicted(rule: &IdentifyRule, f: &Facts) -> bool {
             .all(|(k, c)| f.get(k).is_none_or(|v| cond_matches(c, Some(v))))
 }
 
-/// The facts back some of `rule` and contradict none of it.
+/// Klipper's object list names the software a printer runs. The facts that tell one model from
+/// another (the cpu, the FlashForge reply) come from other queries and can go unreported.
+const SOFTWARE_FACT: &str = "klipper_objects";
+
+/// The printer's objects match `rule` and no other fact contradicts it.
 fn partly_matches(rule: &IdentifyRule, f: &Facts) -> bool {
-    uncontradicted(rule, f) && rule.keys().any(|k| f.contains_key(k))
+    rule.contains_key(SOFTWARE_FACT) && f.contains_key(SOFTWARE_FACT) && uncontradicted(rule, f)
 }
 
 /// What identification makes of the facts for the manifest's printer `printer_id`: a recipe,
@@ -167,8 +176,9 @@ fn matching<'a>(m: &'a Manifest, f: &Facts) -> Vec<&'a Printer> {
 }
 
 /// The first refused printer the facts match, else the first one they partly match: either
-/// wins over every other match. A printer that left unsaid the facts telling it apart from a
-/// refused one is refused too, since installing on it could put the wrong recipe on that one.
+/// wins over every other match. A printer running a refused printer's software that left unsaid
+/// the facts telling it apart from that printer is refused too, since installing on it could put
+/// the wrong recipe on that one.
 fn refused_match(m: &Manifest, f: &Facts) -> Option<Identified> {
     let refused = || m.printers.iter().filter(|p| p.refused);
     if let Some(p) = refused().find(|p| printer_matches(p, f)) {

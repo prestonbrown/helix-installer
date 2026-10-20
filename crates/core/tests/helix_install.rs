@@ -1880,12 +1880,20 @@ struct ProbeRun {
     stdout: String,
     ran_binary: bool,
     took: Duration,
+    /// Every `sleep` the probe started, and whether it still ran once the probe returned.
+    sleeps_alive: Vec<bool>,
 }
+
+/// Bytes laid out as in a real `helix-screen`'s read-only data: the `--version` handler's format
+/// string sits between other NUL-terminated strings, never at the start of a line.
+#[cfg(unix)]
+const VERSION_HANDLER_BYTES: &str =
+    "\0-V\0\0--version\0\0\0helix-screen %s\n\0\0Usage: %s [options]\0";
 
 /// The `helix-screen` a release from 0.9.1 on carries: `--version` prints its version line.
 #[cfg(unix)]
 fn binary_printing(line: &str) -> String {
-    format!("# printf(\"helix-screen %s\\n\")\nprintf '%s' '{line}'")
+    format!("printf '%s' '{line}'\nexit 0\n{VERSION_HANDLER_BYTES}")
 }
 
 /// Runs the version probe against a printer faked in a temporary directory: `pidof` finds one
@@ -1893,11 +1901,22 @@ fn binary_printing(line: &str) -> String {
 /// as its body, and `<tree>/release_info.json` names `release_info_says`.
 #[cfg(unix)]
 fn run_version_probe_on(binary: &str, release_info_says: &str) -> ProbeRun {
+    run_version_probe_with(binary, release_info_says, &[])
+}
+
+/// As `run_version_probe_on`, with each of `busybox_applets` run by BusyBox instead of the host.
+#[cfg(unix)]
+fn run_version_probe_with(
+    binary: &str,
+    release_info_says: &str,
+    busybox_applets: &[&str],
+) -> ProbeRun {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let stubs = dir.path().join("stubs");
     let tree = dir.path().join("helixscreen");
     let ran = dir.path().join("ran");
+    let sleeps = dir.path().join("sleeps");
     std::fs::create_dir_all(&stubs).unwrap();
     std::fs::create_dir_all(tree.join("bin")).unwrap();
     let exe = tree.join("bin/helix-screen");
@@ -1907,6 +1926,13 @@ fn run_version_probe_on(binary: &str, release_info_says: &str) -> ProbeRun {
     };
     script(&stubs.join("pidof"), "echo 4242".into());
     script(&stubs.join("readlink"), format!("echo '{}'", exe.display()));
+    script(
+        &stubs.join("sleep"),
+        format!("echo $$ >> '{}'\nexec /bin/sleep \"$@\"", sleeps.display()),
+    );
+    for applet in busybox_applets {
+        std::os::unix::fs::symlink(busybox().unwrap(), stubs.join(applet)).unwrap();
+    }
     script(&exe, format!(": > '{}'\n{binary}", ran.display()));
     std::fs::write(
         tree.join("release_info.json"),
@@ -1924,10 +1950,23 @@ fn run_version_probe_on(binary: &str, release_info_says: &str) -> ProbeRun {
         .env("PATH", path)
         .output()
         .unwrap();
+    let took = started.elapsed();
+    let sleeps_alive = std::fs::read_to_string(&sleeps)
+        .unwrap_or_default()
+        .lines()
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .args(["-0", pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .collect();
     ProbeRun {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         ran_binary: ran.exists(),
-        took: started.elapsed(),
+        took,
+        sleeps_alive,
     }
 }
 
@@ -1968,7 +2007,10 @@ fn a_line_that_is_not_a_version_does_not_count_as_one() {
 #[test]
 fn a_binary_older_than_its_version_flag_is_never_run() {
     // Before 0.9.1 `--version` was an unknown argument, and the binary started the UI.
-    let run = run_version_probe_on("printf 'helix-screen 0.9.0 (abc)\\n'", "v0.9.0");
+    let run = run_version_probe_on(
+        "printf 'helix-screen 0.9.0 (abc)\\n'\nexit 0\n\0-V\0\0Usage: %s [options]\0",
+        "v0.9.0",
+    );
     assert!(!run.ran_binary, "{}", run.stdout);
     assert_eq!(run.stdout, "running v0.9.0\n");
 }
@@ -1977,10 +2019,64 @@ fn a_binary_older_than_its_version_flag_is_never_run() {
 #[test]
 fn a_binary_that_hangs_is_stopped_and_release_info_answers() {
     let run = run_version_probe_on(
-        &format!("{}\nexec sleep 60", binary_printing("")),
+        &format!("exec sleep 60\n{VERSION_HANDLER_BYTES}"),
         "v1.1.0-beta.1",
     );
     assert!(run.ran_binary);
+    assert_eq!(run.stdout, "running v1.1.0-beta.1\n");
+    assert!(run.took < Duration::from_secs(20), "{:?}", run.took);
+}
+
+#[cfg(unix)]
+fn busybox() -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH")?
+        .to_str()?
+        .split(':')
+        .map(|d| std::path::Path::new(d).join("busybox"))
+        .find(|p| p.is_file())
+}
+
+/// The fleet's printers run BusyBox `grep` and `tr`, whose matching stops at a NUL byte.
+#[cfg(unix)]
+#[test]
+fn busybox_finds_the_version_handler_in_a_binary() {
+    if busybox().is_none() {
+        eprintln!("busybox not installed: skipped");
+        return;
+    }
+    let run = run_version_probe_with(
+        &binary_printing("helix-screen 1.1.0-beta.10 (917215c35c)\n"),
+        "v1.0.0",
+        &["grep", "tr"],
+    );
+    assert_eq!(
+        run.stdout,
+        "running helix-screen 1.1.0-beta.10 (917215c35c)\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_binary_that_exits_before_the_watchdog_leaves_no_watchdog_behind() {
+    let run = run_version_probe_on(
+        &format!(
+            "/bin/sleep 1\n{}",
+            binary_printing("helix-screen 1.1.0 (abc)\n")
+        ),
+        "v1.0.0",
+    );
+    assert_eq!(run.stdout, "running helix-screen 1.1.0 (abc)\n");
+    assert!(!run.sleeps_alive.is_empty(), "the watchdog never slept");
+    assert!(!run.sleeps_alive.contains(&true), "{:?}", run.sleeps_alive);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_binary_that_ignores_term_is_killed() {
+    let run = run_version_probe_on(
+        &format!("trap '' TERM\nwhile :; do sleep 1; done\n{VERSION_HANDLER_BYTES}"),
+        "v1.1.0-beta.1",
+    );
     assert_eq!(run.stdout, "running v1.1.0-beta.1\n");
     assert!(run.took < Duration::from_secs(20), "{:?}", run.took);
 }

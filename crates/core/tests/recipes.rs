@@ -2364,22 +2364,77 @@ fn a_forgex_printer_that_does_not_report_its_cpu_is_refused_not_offered_an_ad5m_
 }
 
 #[test]
-fn the_ad5x_ifs_objects_alone_refuse_it() {
+fn forgex_with_the_ad5x_ifs_objects_is_refused_whatever_else_it_reports() {
+    // The FlashForge reply names an AD5M, which rules out the cpu-and-model rule.
     let m = staging();
-    for kept in AD5X_IFS_OBJECTS.iter().skip(1) {
-        let mut drop: Vec<&str> = AD5X_IFS_OBJECTS
-            .iter()
-            .copied()
-            .filter(|o| o != kept)
-            .collect();
-        drop.push("gcode_macro SUPPORT_FORGE_X");
-        let f = ad5x_forgex_without(&drop);
-        assert!(
-            matches!(identify_as(&m, "ad5m", &f), Identified::Refuse { printer_id: Some(ref p), .. } if p == "ad5x_forgex"),
-            "{kept}: {:?}",
-            identify_as(&m, "ad5m", &f)
-        );
+    let mut f = fleet("ad5x_forgex");
+    f.remove("cpu_arch");
+    f.insert("flashforge_udp.model".into(), json!("Adventurer5M"));
+    assert!(
+        matches!(identify_as(&m, "ad5m", &f), Identified::Refuse { printer_id: Some(ref p), ref reason, .. } if p == "ad5x_forgex" && reason.starts_with("this installer cannot")),
+        "{:?}",
+        identify_as(&m, "ad5m", &f)
+    );
+}
+
+#[test]
+fn a_zmod_ad5x_with_the_ifs_module_is_not_refused() {
+    let m = staging();
+    let mut f = fleet("ad5x_forgex");
+    f.insert("helix_installed".into(), json!(false));
+    f.insert("os_distribution".into(), json!("Buildroot 2020.02.1"));
+    let mut objects = zmod_ad5x_objects()["objects"].as_array().unwrap().clone();
+    objects.extend(AD5X_IFS_OBJECTS.iter().map(|o| json!(o)));
+    f.insert("klipper_objects".into(), json!(objects));
+    assert_eq!(
+        identify(&m, &f),
+        recipe("ad5x", modded(), "ad5x_enable_helix")
+    );
+    f.remove("cpu_arch");
+    assert_eq!(
+        identify(&m, &f),
+        recipe("ad5x", modded(), "ad5x_enable_helix")
+    );
+}
+
+#[test]
+fn an_ad5m_whose_flashforge_reply_names_it_is_not_refused_without_its_cpu() {
+    let m = staging();
+    let mut f = fleet("ad5m_forgex");
+    f.remove("cpu_arch");
+    f.insert("flashforge_udp.model".into(), json!("Adventurer5M"));
+    assert_eq!(
+        identify_as(&m, "ad5m", &f),
+        recipe("ad5m", modded(), "ad5m_forgex_install")
+    );
+}
+
+fn not_recognised() -> Identified {
+    Identified::Refuse {
+        printer_id: None,
+        doc: GENERIC_REFUSE_DOC.into(),
+        reason: "printer not recognised".into(),
     }
+}
+
+#[test]
+fn a_k1_whose_object_list_is_lost_is_not_called_an_ad5x() {
+    let mut f = fleet("k1c_helper_script");
+    f.remove("klipper_objects");
+    assert!(
+        matches!(identify(&staging(), &f), Identified::Refuse { printer_id: Some(ref p), .. } if p == "generic_klipper"),
+        "{:?}",
+        identify(&staging(), &f)
+    );
+}
+
+#[test]
+fn facts_that_name_nothing_a_refused_rule_needs_refuse_nothing() {
+    let m = staging();
+    assert_eq!(identify(&m, &Facts::new()), not_recognised());
+    let mut f = Facts::new();
+    f.insert("has_moonraker".into(), json!(true));
+    assert_eq!(identify(&m, &f), not_recognised());
 }
 
 #[test]

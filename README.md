@@ -62,7 +62,7 @@ A manifest has:
 - `recipes`: a name to a list of steps.
 - `artifacts`: named downloads with an https `url` and a `sha256`. A file is never written whose hash is not in the signed manifest, or for a HelixScreen release in its release list.
 
-**Identification.** Each `identify` rule is a set of facts that must all match; a printer matches when any rule does. A condition is an exact value, `{"contains": x}` for a list fact, `{"prefix": x}`, `{"not": x}` or a version range. A missing fact never matches. Facts come from discovery (mDNS, the FlashForge UDP reply, a USB id, Moonraker's `printer_info`, `objects_list`) and from `probe` steps.
+**Identification.** Each `identify` rule is a set of facts that must all match; a printer matches when any rule does. A condition is an exact value, `{"contains": x}` or `{"contains_all": [x, y]}` for a list fact, `{"prefix": x}`, `{"not": x}` or a version range. A missing fact never matches. Facts come from discovery (mDNS, the FlashForge UDP reply, a USB id, Moonraker's `printer_info`, `objects_list`) and from `probe` steps.
 
 **Starting state.** Identification adds a `state` fact: `helix` (HelixScreen is installed), `modded:moonraker` (Moonraker answers), or `stock`. A printer's `recipes` list is walked in order and the first entry whose `when` matches wins, so put the narrow ones first.
 

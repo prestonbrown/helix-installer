@@ -158,7 +158,8 @@ fn choices_overlap(a: &RecipeChoice, b: &RecipeChoice) -> bool {
 /// overlap is reported rather than missed.
 fn jointly_satisfiable(a: &Cond, b: &Cond) -> bool {
     match (a, b) {
-        (Cond::Contains { .. }, _) | (_, Cond::Contains { .. }) => true,
+        (Cond::Contains { .. } | Cond::ContainsAll { .. }, _)
+        | (_, Cond::Contains { .. } | Cond::ContainsAll { .. }) => true,
         (Cond::Exact(x), Cond::Exact(y)) => x == y,
         (Cond::Prefix { prefix }, Cond::Exact(x)) | (Cond::Exact(x), Cond::Prefix { prefix }) => {
             x.starts_with(prefix.as_str())
