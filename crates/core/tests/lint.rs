@@ -711,6 +711,44 @@ fn a_release_check_is_neither_an_update_nor_a_dry_run_nor_a_commit() {
             "{extra}: {errs:?}"
         );
     }
+
+#[test]
+fn a_published_image_must_not_be_an_empty_placeholder() {
+    let d = assets();
+    std::fs::write(d.path().join("blank.png"), b"").unwrap();
+    let m: Manifest = serde_json::from_value(install_with(
+        json!({"type": "info", "text": "t", "image": "blank.png"}),
+    ))
+    .unwrap();
+    let errs = lint_with(&m, d.path(), false);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("blank.png"), "{errs:?}");
+    assert!(errs[0].message.contains("empty"), "{errs:?}");
+    // Staging keeps placeholders until the pictures are drawn.
+    assert_eq!(lint_with(&m, d.path(), true), vec![]);
+
+    let mut v = base();
+    v["printers"][0]["photo"] = json!("blank.png");
+    let m: Manifest = serde_json::from_value(v).unwrap();
+    assert_eq!(lint_with(&m, d.path(), false).len(), 1);
+}
+
+#[test]
+fn a_verified_run_names_a_recipe_the_printer_offers() {
+    let run = |recipe: &str| {
+        json!({"date": "2026-10-19", "printer": "K1C", "firmware": "1.3.3.46",
+               "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10", "recipe": recipe})
+    };
+    let mut v = base();
+    v["printers"][0]["verified"]["runs"] = json!([run("install")]);
+    let m: Manifest = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(lint(&m, assets().path()), vec![]);
+    assert_eq!(
+        m.printers[0].verified.as_ref().unwrap().runs[0].printer,
+        "K1C"
+    );
+    v["printers"][0]["verified"]["runs"] = json!([run("restore")]);
+    only(v, "\"restore\"");
 }
 
 #[test]

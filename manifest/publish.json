@@ -1,0 +1,160 @@
+{
+  "printers": {
+    "generic_klipper": {
+      "recipes": [
+        "generic_update_board",
+        "generic_update"
+      ],
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-20",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Raspberry Pi 3 Model B, password login and sudo password",
+            "firmware": "MainsailOS (Debian 13 trixie)",
+            "helixscreen": "v1.0.0 -> v1.1.0-beta.10",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-19",
+            "printer": "Raspberry Pi 5, key login, passwordless sudo",
+            "firmware": "not recorded",
+            "helixscreen": "v1.1.0-beta.10 reinstalled (Moonraker reported v1.0.0)",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-19",
+            "printer": "Voron V0 on a Raspberry Pi 4, key login",
+            "firmware": "Kalico",
+            "helixscreen": "v1.1.0-beta.10, up to date, nothing written",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "Voron 2.4 on a BTT CB1, key login",
+            "firmware": "Armbian 26.8.1 trixie",
+            "helixscreen": "dev build reporting v1.0.0 -> v1.1.0-beta.10",
+            "recipe": "generic_update_board"
+          }
+        ]
+      }
+    },
+    "qidi": {
+      "recipes": [
+        "qidi_update"
+      ],
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "01.01.02.01",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "QIDI Q2, mks login and sudo password",
+            "firmware": "QD_Q2_01.01.02.01",
+            "helixscreen": "unreadable over Moonraker -> v1.1.0-beta.10",
+            "recipe": "qidi_update"
+          }
+        ]
+      }
+    },
+    "k2": {
+      "recipes": [
+        "k2_update"
+      ],
+      "route": {
+        "k2_install": "k2_update"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Creality K2 Plus, root login",
+            "firmware": "Creality stock (OpenWrt 21.02), version not recorded",
+            "helixscreen": "dev build not seen by Moonraker -> v1.1.0-beta.10",
+            "recipe": "k2_update"
+          }
+        ]
+      }
+    },
+    "k1": {
+      "recipes": [
+        "k1_update"
+      ],
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "1.3.3.46",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Creality K1C, root login",
+            "firmware": "1.3.3.46 with Guilouz Helper Script",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10",
+            "recipe": "k1_update"
+          }
+        ]
+      }
+    },
+    "ad5x": {
+      "refuse": true
+    },
+    "ad5x_forgex": {},
+    "ad5m": {
+      "recipes": [
+        "ad5m_forgex_update"
+      ],
+      "route": {
+        "ad5m_forgex_install": "ad5m_forgex_update"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "Forge-X 1.4.2",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "FlashForge Adventurer 5M, root login",
+            "firmware": "Forge-X 1.4.2",
+            "helixscreen": "v1.1.0-beta.10 reinstalled, then the reboot that starts it",
+            "recipe": "ad5m_forgex_update"
+          }
+        ]
+      }
+    },
+    "snapmaker_u1": {},
+    "qidi_tjc": {},
+    "sovol": {},
+    "elegoo_neptune4": {},
+    "elegoo_cc1": {},
+    "flashforge_creator5": {},
+    "anycubic_kobra": {},
+    "ktouch": {
+      "recipes": [
+        "ktouch_update"
+      ],
+      "route": {
+        "ktouch_install": "ktouch_update"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-20",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-20",
+            "printer": "BTT K-Touch on USB",
+            "firmware": "HelixScreen ESP32-S3 image",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10, no erase, WiFi and settings kept",
+            "recipe": "ktouch_update"
+          }
+        ]
+      }
+    }
+  }
+}

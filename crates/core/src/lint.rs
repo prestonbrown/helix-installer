@@ -20,7 +20,8 @@ impl fmt::Display for LintError {
     }
 }
 
-/// Strict lint: every printer must carry a `verified` record.
+/// Strict lint, for the published list: every printer carries a `verified` record and no image
+/// is an empty placeholder.
 pub fn lint(m: &Manifest, asset_root: &Path) -> Vec<LintError> {
     lint_with(m, asset_root, false)
 }
@@ -66,6 +67,7 @@ pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec
             steps,
             restores.contains(id.as_str()),
             asset_root,
+            !allow_unverified,
             &mut err,
         );
     }
@@ -86,7 +88,7 @@ fn lint_printer(
         err(&p.id, "fallback.doc is empty".into());
     }
     if let Some(photo) = &p.photo {
-        check_image(&p.id, photo, asset_root, err);
+        check_image(&p.id, photo, asset_root, !allow_unverified, err);
     }
     // A refused printer only turns printers away: nothing installs, so nothing to restore
     // or verify.
@@ -109,8 +111,22 @@ fn lint_printer(
             }
         }
     }
-    if p.verified.is_none() && !allow_unverified {
-        err(&p.id, "printer has no verified record".into());
+    match &p.verified {
+        None if !allow_unverified => err(&p.id, "printer has no verified record".into()),
+        Some(v) => {
+            for run in &v.runs {
+                if !p.recipes.iter().any(|c| c.recipe == run.recipe) {
+                    err(
+                        &p.id,
+                        format!(
+                            "verified run on {:?} names {:?}, which no choice offers",
+                            run.printer, run.recipe
+                        ),
+                    );
+                }
+            }
+        }
+        None => {}
     }
     for c in &p.recipes {
         if c.when.is_empty() {
@@ -179,7 +195,15 @@ fn jointly_satisfiable(a: &Cond, b: &Cond) -> bool {
     }
 }
 
-fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str, String)) {
+/// `published` also refuses an empty file: staging keeps 0-byte placeholders for pictures not
+/// drawn yet, and a published list must not show one as a broken image.
+fn check_image(
+    subject: &str,
+    rel: &str,
+    root: &Path,
+    published: bool,
+    err: &mut impl FnMut(&str, String),
+) {
     let path = Path::new(rel);
     let escapes = path.is_absolute()
         || path.components().any(|c| {
@@ -198,6 +222,8 @@ fn check_image(subject: &str, rel: &str, root: &Path, err: &mut impl FnMut(&str,
             subject,
             format!("image {rel:?} not found under the asset root"),
         );
+    } else if published && root.join(path).metadata().is_ok_and(|m| m.len() == 0) {
+        err(subject, format!("image {rel:?} is an empty placeholder"));
     }
 }
 
@@ -345,6 +371,7 @@ fn lint_recipe(
     steps: &[Step],
     is_restore: bool,
     asset_root: &Path,
+    published: bool,
     err: &mut impl FnMut(&str, String),
 ) {
     match steps.last() {
@@ -404,10 +431,10 @@ fn lint_recipe(
             }
             | Step::UserAction {
                 image: Some(img), ..
-            } => check_image(id, img, asset_root, err),
+            } => check_image(id, img, asset_root, published, err),
             Step::Ask { choices, .. } => {
                 for img in choices.iter().filter_map(|c| c.image.as_deref()) {
-                    check_image(id, img, asset_root, err);
+                    check_image(id, img, asset_root, published, err);
                 }
             }
             Step::SshLogin { logins, .. }

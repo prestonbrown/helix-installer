@@ -1,7 +1,1058 @@
 {
   "manifest_version": 1,
   "min_app_version": "0.1.0",
-  "printers": [],
+  "printers": [
+    {
+      "id": "generic_klipper",
+      "name": "Klipper host (Voron, MainsailOS, FluiddPi, KIAUH)",
+      "identify": [
+        {
+          "cpu_model": {
+            "prefix": "Raspberry Pi"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "BigTreeTech"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "BTT"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "Xunlong Orange Pi"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "OrangePi"
+          }
+        },
+        {
+          "cpu_model": {
+            "prefix": "Radxa"
+          }
+        },
+        {
+          "cpu_model": ""
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "aarch64",
+            "cpu_model": ""
+          },
+          "recipe": "generic_update_board"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "armv7l",
+            "cpu_model": ""
+          },
+          "recipe": "generic_update_board"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "aarch64"
+          },
+          "recipe": "generic_update"
+        },
+        {
+          "when": {
+            "state": "helix",
+            "cpu_arch": "armv7l"
+          },
+          "recipe": "generic_update"
+        }
+      ],
+      "restore": "generic_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-generic/"
+      },
+      "last_resort": true,
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-20",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Raspberry Pi 3 Model B, password login and sudo password",
+            "firmware": "MainsailOS (Debian 13 trixie)",
+            "helixscreen": "v1.0.0 -> v1.1.0-beta.10",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-19",
+            "printer": "Raspberry Pi 5, key login, passwordless sudo",
+            "firmware": "not recorded",
+            "helixscreen": "v1.1.0-beta.10 reinstalled (Moonraker reported v1.0.0)",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-19",
+            "printer": "Voron V0 on a Raspberry Pi 4, key login",
+            "firmware": "Kalico",
+            "helixscreen": "v1.1.0-beta.10, up to date, nothing written",
+            "recipe": "generic_update"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "Voron 2.4 on a BTT CB1, key login",
+            "firmware": "Armbian 26.8.1 trixie",
+            "helixscreen": "dev build reporting v1.0.0 -> v1.1.0-beta.10",
+            "recipe": "generic_update_board"
+          }
+        ]
+      }
+    },
+    {
+      "id": "qidi",
+      "name": "QIDI Q2 / Max 4 / Plus 5",
+      "identify": [
+        {
+          "cpu_arch": "aarch64",
+          "klipper_objects": {
+            "contains": "temperature_sensor Chamber_Thermal_Protection_Sensor"
+          }
+        },
+        {
+          "klipper_hostname": "linaro-alip",
+          "cpu_arch": "aarch64"
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "qidi_update"
+        }
+      ],
+      "restore": "qidi_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-qidi/"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "01.01.02.01",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "QIDI Q2, mks login and sudo password",
+            "firmware": "QD_Q2_01.01.02.01",
+            "helixscreen": "unreadable over Moonraker -> v1.1.0-beta.10",
+            "recipe": "qidi_update"
+          }
+        ]
+      }
+    },
+    {
+      "id": "k2",
+      "name": "Creality K2 / K2 Plus / K2 Pro",
+      "identify": [
+        {
+          "cpu_arch": "armv7l",
+          "klipper_objects": {
+            "contains": "motor_control"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "k2_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker"
+          },
+          "recipe": "k2_update"
+        }
+      ],
+      "restore": "k2_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-k2/"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Creality K2 Plus, root login",
+            "firmware": "Creality stock (OpenWrt 21.02), version not recorded",
+            "helixscreen": "dev build not seen by Moonraker -> v1.1.0-beta.10",
+            "recipe": "k2_update"
+          }
+        ]
+      }
+    },
+    {
+      "id": "k1",
+      "name": "Creality K1 / K1C / K1 Max",
+      "identify": [
+        {
+          "cpu_arch": "mips",
+          "klipper_objects": {
+            "contains": "mcu nozzle_mcu"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "k1_update"
+        }
+      ],
+      "restore": "k1_restore",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-k1/"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "1.3.3.46",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "Creality K1C, root login",
+            "firmware": "1.3.3.46 with Guilouz Helper Script",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10",
+            "recipe": "k1_update"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ad5x",
+      "name": "FlashForge Adventurer 5X",
+      "identify": [
+        {
+          "flashforge_udp.model": "AD5X"
+        },
+        {
+          "klipper_objects": {
+            "contains": "zmod_ifs"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-ad5x/"
+      },
+      "refused": true
+    },
+    {
+      "id": "ad5x_forgex",
+      "name": "FlashForge Adventurer 5X with Forge-X",
+      "refused": true,
+      "identify": [
+        {
+          "cpu_arch": "mips",
+          "flashforge_udp.model": "AD5X",
+          "klipper_objects": {
+            "contains": "gcode_macro SUPPORT_FORGE_X"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains_all": [
+              "gcode_macro SUPPORT_FORGE_X",
+              "ifs",
+              "ifs_materials",
+              "ifs_toolhead_sensor toolhead"
+            ]
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-ad5x/"
+      }
+    },
+    {
+      "id": "ad5m",
+      "name": "FlashForge Adventurer 5M",
+      "identify": [
+        {
+          "flashforge_udp.model": "Adventurer5M"
+        },
+        {
+          "klipper_objects": {
+            "contains": "gcode_macro SUPPORT_FORGE_X"
+          }
+        },
+        {
+          "os_distribution": {
+            "prefix": "Forge-X"
+          }
+        },
+        {
+          "cpu_arch": "armv7l",
+          "klipper_objects": {
+            "contains": "zmod"
+          }
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "helix",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_update"
+        },
+        {
+          "when": {
+            "state": "modded:moonraker",
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_forgex_update"
+        }
+      ],
+      "restore": [
+        {
+          "when": {
+            "os_distribution": {
+              "prefix": "Forge-X"
+            }
+          },
+          "recipe": "ad5m_restore"
+        },
+        {
+          "when": {
+            "klipper_objects": {
+              "contains": "zmod"
+            }
+          },
+          "recipe": "ad5m_zmod_restore"
+        }
+      ],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-19",
+        "firmware": "Forge-X 1.4.2",
+        "runs": [
+          {
+            "date": "2026-10-19",
+            "printer": "FlashForge Adventurer 5M, root login",
+            "firmware": "Forge-X 1.4.2",
+            "helixscreen": "v1.1.0-beta.10 reinstalled, then the reboot that starts it",
+            "recipe": "ad5m_forgex_update"
+          }
+        ]
+      }
+    },
+    {
+      "id": "snapmaker_u1",
+      "name": "Snapmaker U1",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "machine_state_manager"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains": "homing_precise_corexy"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#snapmaker-u1"
+      }
+    },
+    {
+      "id": "qidi_tjc",
+      "name": "QIDI X-Smart 3 / X-Plus 3 / X-Max 3 / Q1 Pro / Plus 4",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_hostname": "mkspi"
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#qidi-with-a-tjc-screen"
+      }
+    },
+    {
+      "id": "sovol",
+      "name": "Sovol SV08",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "probe_pressure"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#sovol"
+      }
+    },
+    {
+      "id": "elegoo_neptune4",
+      "name": "Elegoo Neptune 4",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_hostname": {
+            "prefix": "neptune"
+          }
+        },
+        {
+          "klipper_hostname": {
+            "prefix": "Neptune"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#elegoo-neptune-4"
+      }
+    },
+    {
+      "id": "elegoo_cc1",
+      "name": "Elegoo Centauri Carbon",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "gcode_macro _COSMOS_SETTINGS"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#elegoo-centauri-carbon"
+      }
+    },
+    {
+      "id": "flashforge_creator5",
+      "name": "FlashForge Creator 5 / 5 Pro",
+      "refused": true,
+      "identify": [
+        {
+          "flashforge_udp.model": "Creator5"
+        },
+        {
+          "flashforge_udp.model": "Creator5Pro"
+        },
+        {
+          "klipper_objects": {
+            "contains": "ff_toolchange"
+          }
+        },
+        {
+          "klipper_objects": {
+            "contains": "gcode_button extruder_grab1"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#flashforge-creator-5"
+      }
+    },
+    {
+      "id": "anycubic_kobra",
+      "name": "Anycubic Kobra",
+      "refused": true,
+      "identify": [
+        {
+          "klipper_objects": {
+            "contains": "filament_hub"
+          }
+        }
+      ],
+      "recipes": [],
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/guide/easy-installer-unsupported/#anycubic-kobra"
+      }
+    },
+    {
+      "id": "ktouch",
+      "name": "BTT K-Touch",
+      "identify": [
+        {
+          "usb": "1a86:7522"
+        }
+      ],
+      "recipes": [
+        {
+          "when": {
+            "state": "stock"
+          },
+          "recipe": "ktouch_update"
+        },
+        {
+          "when": {
+            "state": "helix"
+          },
+          "recipe": "ktouch_update"
+        }
+      ],
+      "restore": "ktouch_reflash",
+      "fallback": {
+        "refuse": true,
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      "verified": {
+        "by": "helixscreen",
+        "date": "2026-10-20",
+        "firmware": "",
+        "runs": [
+          {
+            "date": "2026-10-20",
+            "printer": "BTT K-Touch on USB",
+            "firmware": "HelixScreen ESP32-S3 image",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10, no erase, WiFi and settings kept",
+            "recipe": "ktouch_update"
+          }
+        ]
+      }
+    }
+  ],
   "artifacts": {},
-  "recipes": {}
+  "recipes": {
+    "generic_update": [
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
+      }
+    ],
+    "generic_restore": [
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "uninstall": true,
+        "commits": true
+      }
+    ],
+    "qidi_update": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "qidi",
+            "password": "qiditech"
+          },
+          {
+            "user": "mks",
+            "password": "makerbase"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "update": true,
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "update": true,
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-qidi/"
+      }
+    ],
+    "qidi_restore": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "qidi",
+            "password": "qiditech"
+          },
+          {
+            "user": "mks",
+            "password": "makerbase"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "pi",
+        "uninstall": true,
+        "commits": true
+      }
+    ],
+    "k2_update": [
+      {
+        "type": "user_action",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2024"
+          }
+        ],
+        "ask_if_failed": true,
+        "password_hint": "the password shown on the printer's root screen"
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this printer, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/guide/install-k2/"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "update": true,
+        "dir": "/mnt/UDISK",
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "update": true,
+        "dir": "/mnt/UDISK",
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k2/"
+      }
+    ],
+    "k2_restore": [
+      {
+        "type": "user_action",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
+        "verify": {
+          "tcp_port": 22,
+          "fact": "ssh_open"
+        }
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2024"
+          }
+        ],
+        "ask_if_failed": true,
+        "password_hint": "the password shown on the printer's root screen"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k2",
+        "uninstall": true,
+        "dir": "/mnt/UDISK",
+        "commits": true
+      }
+    ],
+    "k1_update": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "case \"$(/usr/bin/get_sn_mac.sh model 2>/dev/null)\" in CR-K1|K1C|\"CR-K1 Max\") echo yes;; *) echo no;; esac",
+        "fact": "k1_model_ok"
+      },
+      {
+        "type": "require",
+        "fact": "k1_model_ok",
+        "equals": "true",
+        "reason": "This installer supports the Creality K1, K1C and K1 Max only, and this printer says it is another model.",
+        "doc": "https://helixscreen.org/guide/install-k1/"
+      },
+      {
+        "type": "probe",
+        "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "update": true,
+        "dir": "/usr/data",
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "update": true,
+        "dir": "/usr/data",
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-k1/"
+      }
+    ],
+    "k1_restore": [
+      {
+        "type": "info",
+        "text": "This removes HelixScreen and puts back the screen the printer had before it (GrumpyScreen on Simple AF, or the one your Helper Script setup used). Creality's own screen and software come back only with a factory reset or Creality's recovery firmware; the K1 guide explains both: https://helixscreen.org/guide/install-k1/"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "creality_2023"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "k1",
+        "uninstall": true,
+        "dir": "/usr/data",
+        "commits": true
+      }
+    ],
+    "ad5m_forgex_update": [
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          },
+          {
+            "user": "root",
+            "password": "klipper"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "for f in /etc/init.d/S80helixscreen /etc/init.d/S90helixscreen /etc/init.d/S99helixscreen /etc/init.d/helixscreen /opt/config/mod_data/helixscreen_payload_root; do [ -e \"$f\" ] && { echo yes; exit 0; }; done; echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this printer, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "update": true,
+        "dir": "/data",
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "update": true,
+        "commits": true,
+        "dir": "/data"
+      },
+      {
+        "type": "probe",
+        "moonraker": "objects_list"
+      },
+      {
+        "type": "ssh_run",
+        "command": "[ -x /sbin/reboot ] || { echo 'FATAL: /sbin/reboot is missing on this printer' ; exit 1 ; } ; ( sleep 5 ; /sbin/reboot ) > /dev/null 2>&1 &",
+        "timeout_s": 60
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_restart",
+        "timeout_s": 900,
+        "message": "Forge-X starts HelixScreen when the printer boots, so the printer is restarting now. Do not power off the printer.",
+        "help": "If the printer does not come back, follow the AD5M guide: https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-ad5m/"
+      }
+    ],
+    "ad5m_restore": [
+      {
+        "type": "info",
+        "text": "This removes HelixScreen from Forge-X and brings back Forge-X's own screen. To make the printer fully stock, flash Forge-X's uninstall image from a USB stick afterwards; the AD5M guide links it: https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "ssh_login",
+        "logins": [
+          {
+            "user": "root",
+            "password": "root"
+          },
+          {
+            "user": "root",
+            "password": "klipper"
+          }
+        ],
+        "ask_if_failed": true
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "uninstall": true,
+        "commits": true,
+        "dir": "/data"
+      }
+    ],
+    "ad5m_zmod_restore": [
+      {
+        "type": "info",
+        "text": "This switches the printer's screen back to FlashForge's own screen and keeps ZMOD. To make the printer fully stock, run REMOVE_ZMOD from the console of its web page (Fluidd or Mainsail) afterwards; the AD5M guide explains it: https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "wait_for",
+        "target": "klipper_ready",
+        "timeout_s": 300,
+        "message": "Waiting for Klipper on the printer to be ready.",
+        "help": "If the printer's screen shows an error, follow the guide: https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "moonraker_gcode",
+        "script": "DISPLAY_ON",
+        "commits": true
+      }
+    ],
+    "generic_update_board": [
+      {
+        "type": "ssh_login",
+        "logins": [],
+        "ask_if_failed": true
+      },
+      {
+        "type": "probe",
+        "ssh": "b=$(. /etc/armbian-release 2>/dev/null; echo \"$BOARD\"); [ -n \"$b\" ] || b=$(timeout 5 tr -d '\\0' < /proc/device-tree/model 2>/dev/null); case \"$b\" in bigtreetech-cb1|bigtreetech-cb2|orangepi*|rock*|radxa*|\"Raspberry Pi\"*|BigTreeTech*|\"Xunlong Orange Pi\"*|Radxa*) echo yes;; *) echo no;; esac",
+        "fact": "board_ok"
+      },
+      {
+        "type": "require",
+        "fact": "board_ok",
+        "equals": "true",
+        "reason": "The installer does not recognise this computer's board, so it will not guess which HelixScreen build it needs. The manual install guide covers other boards.",
+        "doc": "https://helixscreen.org/installation/"
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
+        "dry_run": true
+      },
+      {
+        "type": "helix_install",
+        "platform": {
+          "from_arch": {
+            "aarch64": "pi",
+            "armv7l": "pi32"
+          }
+        },
+        "update": true,
+        "commits": true
+      },
+      {
+        "type": "wait_for",
+        "target": "helix_service",
+        "timeout_s": 300,
+        "message": "Waiting for HelixScreen to start on the printer.",
+        "help": "If HelixScreen does not appear on the printer's screen, follow the guide: https://helixscreen.org/guide/install-generic/"
+      }
+    ],
+    "ktouch_update": [
+      {
+        "type": "probe",
+        "serial": "esp32"
+      },
+      {
+        "type": "require",
+        "fact": "esp_chip",
+        "equals": "esp32s3",
+        "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "require",
+        "fact": "flash_mb",
+        "equals": "16",
+        "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this K-Touch, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "serial_flash",
+        "asset": "helixscreen-esp32-ktouch-{tag}.zip",
+        "chip": "esp32s3",
+        "flash_mb": 16,
+        "keep": [
+          "nvs",
+          "cfg"
+        ],
+        "channel": "beta",
+        "update": true,
+        "commits": true
+      }
+    ],
+    "ktouch_reflash": [
+      {
+        "type": "probe",
+        "serial": "esp32"
+      },
+      {
+        "type": "require",
+        "fact": "esp_chip",
+        "equals": "esp32s3",
+        "reason": "This USB device is not a K-Touch: its chip is not an ESP32-S3, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "require",
+        "fact": "flash_mb",
+        "equals": "16",
+        "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "info",
+        "text": "The installer will write HelixScreen to the K-Touch again. If the K-Touch does not run HelixScreen now, everything on it is removed first, including its WiFi and settings. Keep it plugged into this computer until the installer says it is done."
+      },
+      {
+        "type": "serial_flash",
+        "asset": "helixscreen-esp32-ktouch-{tag}.zip",
+        "chip": "esp32s3",
+        "flash_mb": 16,
+        "keep": [
+          "nvs",
+          "cfg"
+        ],
+        "channel": "beta",
+        "commits": true
+      }
+    ]
+  }
 }

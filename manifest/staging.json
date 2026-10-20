@@ -924,6 +924,13 @@
         "fact": "helix_installed"
       },
       {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this printer, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/guide/install-k2/"
+      },
+      {
         "type": "helix_install",
         "platform": "k2",
         "update": true,
@@ -1778,6 +1785,13 @@
         "fact": "helix_installed"
       },
       {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this printer, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
         "type": "helix_install",
         "platform": "ad5m",
         "update": true,
@@ -2130,6 +2144,13 @@
         "fact": "flash_mb",
         "equals": "16",
         "reason": "This board does not have the K-Touch's 16 MB of flash, so the installer will not write to it.",
+        "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
+      },
+      {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this K-Touch, so there is nothing to update. The guide shows how to install it.",
         "doc": "https://helixscreen.org/1.1/guide/install-esp32/"
       },
       {

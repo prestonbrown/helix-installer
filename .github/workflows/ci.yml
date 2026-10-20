@@ -49,6 +49,9 @@ jobs:
       - name: Test the updater manifest script
         if: runner.os == 'Linux'
         run: python3 scripts/test_updater_manifest.py
+      - name: Test the published manifest builder
+        if: runner.os == 'Linux'
+        run: python3 scripts/test_publish_manifest.py
       - name: Check help links against the site's address scheme
         if: runner.os == 'Linux'
         run: |

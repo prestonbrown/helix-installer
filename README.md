@@ -54,7 +54,7 @@ A test must fail when the feature is removed: break the line it pins once and wa
 
 ## Recipes and the manifest
 
-`manifest/manifest.json` is the signed list the app ships against. `manifest/staging.json` holds recipes not yet run on hardware: CI lints it like the published list but never signs or uploads it. A recipe moves to `manifest.json` once someone has run it on a real printer and added the printer's `verified` record. `manifest/img` holds the pictures recipe steps show.
+`manifest/manifest.json` is the signed list the app ships against. `manifest/staging.json` holds every printer and recipe, run on hardware or not: CI lints it like the published list but never signs or uploads it. `manifest.json` is never edited by hand: `scripts/publish_manifest.py` builds it from staging and `manifest/publish.json`, which names each published printer, the recipes it offers (a starting state whose recipe is not published refuses with the printer's guide, or `route` sends it to a published recipe that probes first), and its `verified` record with one entry per hardware run. Recipe text is copied from staging unchanged except that a step picture still a 0-byte placeholder is left out. CI fails when `manifest.json` is not what the script builds (`--check`), and the strict lint refuses an empty picture. `manifest/img` holds the pictures recipe steps show.
 
 A manifest has:
 
@@ -96,7 +96,7 @@ target/release/manifest-lint manifest/staging.json manifest/img --allow-unverifi
 3. Write the recipe steps. Take every command, path and version from the vendor's own instructions or the printer, and keep `ssh_run` commands idempotent. Put a `require` before anything destructive, and `commits: true` on the first step that cannot be undone.
 4. Add tests first: an identification test in `tests/identify.rs` for the new fixture, and a run in `tests/recipes.rs` (the fakes need the printer's command answers). Run `manifest-lint` on `staging.json`.
 5. Write or update the user guide in the main repository (`docs/user/guide/`), and list the page in the website's sync script and sidebar. Every help link must exist, see below.
-6. Run the recipe on the real printer, then move it to `manifest/manifest.json` with a `verified` record.
+6. Run the recipe on the real printer, then add it to `manifest/publish.json` with a `verified` run and run `scripts/publish_manifest.py`. After any later change to staging, run it again and commit both files.
 
 ## Help links
 

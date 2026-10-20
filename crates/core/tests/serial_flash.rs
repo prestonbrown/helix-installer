@@ -861,3 +861,46 @@ async fn a_failed_save_of_the_point_of_no_return_restarts_the_panel_unwritten() 
         "the panel was left in its bootloader"
     );
 }
+
+fn published() -> Manifest {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../manifest/manifest.json");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn published_runner(rig: &Rig) -> Runner {
+    let m = published();
+    let Identified::Recipe { recipe_id, .. } = identify(&m, &usb_facts()) else {
+        panic!("the K-Touch did not identify on the published list");
+    };
+    let state = RunState::new("run", "ktouch", &recipe_id, Host::new(PORT), usb_facts());
+    Runner::new(rig.env(), Arc::new(m), state).with_cache_dir(rig.cache.path().to_path_buf())
+}
+
+#[tokio::test]
+async fn the_published_list_updates_a_k_touch_that_runs_helixscreen() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    let mut r = published_runner(&rig);
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    assert_eq!(r.state().recipe_id, "ktouch_update");
+    assert_eq!(rig.serial.erases(), 0);
+    assert_eq!(rig.written_offsets(), PART_OFFSETS.to_vec());
+}
+
+#[tokio::test]
+async fn the_published_list_refuses_a_k_touch_on_btt_firmware_without_writing() {
+    let rig = Rig::new();
+    let mut r = published_runner(&rig);
+    let t = drive(&mut r).await;
+    match &t.end {
+        Event::Refused { reason, doc, .. } => {
+            assert!(reason.contains("not installed"), "{reason}");
+            assert_eq!(doc, DOC);
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(rig.serial.writes().is_empty());
+    assert_eq!(rig.serial.erases(), 0);
+    assert!(!r.state().committed);
+}

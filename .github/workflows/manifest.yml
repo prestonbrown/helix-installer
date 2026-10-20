@@ -17,6 +17,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build manifest-lint
         run: cargo build --release -p helix_installer_core --bin manifest-lint
+      # The published list is built from staging by publish.json, never edited by hand.
+      - name: The published manifest is what staging builds
+        run: python3 scripts/publish_manifest.py --check
       - name: Lint the manifest
         run: target/release/manifest-lint manifest/manifest.json manifest/img
       # Recipes not yet run on hardware: linted like the published list, never signed or uploaded.
