@@ -2041,6 +2041,11 @@ fn busybox() -> Option<std::path::PathBuf> {
 #[test]
 fn busybox_finds_the_version_handler_in_a_binary() {
     if busybox().is_none() {
+        // CI installs it on Linux, so a missing one there is a broken setup, not a skip.
+        assert!(
+            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+            "busybox is not installed on the Linux CI runner"
+        );
         eprintln!("busybox not installed: skipped");
         return;
     }
