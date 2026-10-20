@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { cardSubtitle, cardTitle, nameLines, readyLine, startLabel, whereLine } from "./candidates";
-import type { CandidateView } from "./types";
+import { cardSubtitle, cardTitle, manualModels, nameLines, readyLine, startLabel, unsupportedLines, whereLine } from "./candidates";
+import type { CandidateView, PrinterView } from "./types";
 
 const candidate = (over: Partial<CandidateView>): CandidateView => ({
   key: "k",
@@ -58,7 +58,7 @@ describe("startLabel", () => {
 const klipperHost = (host: string | null) =>
   candidate({ name: "Klipper host (Voron, MainsailOS, FluiddPi, KIAUH)", host_name: host, helix_version: "v1.1.0" });
 
-const model = (id: string, name: string) => ({ id, name, photo: null, verified: null });
+const model = (id: string, name: string) => ({ id, name, photo: null, verified: null, usb_only: false });
 
 describe("the card's title and subtitle", () => {
   it("titles a printer by its own host name, with what the installer takes it for underneath", () => {
@@ -120,5 +120,32 @@ describe("a run's header", () => {
   });
   it("uses the printer's display name alone when it gave no name of its own", () => {
     expect(nameLines("Creality K1", null)).toEqual({ title: "Creality K1", subtitle: null });
+  });
+});
+
+describe("a printer the installer turns away", () => {
+  it("says so without promising it later, and gives the reason", () => {
+    const c = candidate({
+      status: "unsupported",
+      reason: "this installer cannot put HelixScreen on a FlashForge Adventurer 5X with Forge-X",
+    });
+    expect(unsupportedLines(c)).toEqual([
+      "The installer can't set up this printer. Its guide shows how to install by hand.",
+      "This installer cannot put HelixScreen on a FlashForge Adventurer 5X with Forge-X.",
+    ]);
+  });
+  it("leaves the reason out when there is none", () => {
+    expect(unsupportedLines(candidate({ status: "unsupported" }))).toEqual([
+      "The installer can't set up this printer. Its guide shows how to install by hand.",
+    ]);
+  });
+});
+
+describe("the models to type an address for", () => {
+  const p = (id: string, name: string, usb_only = false): PrinterView => ({ id, name, photo: null, verified: null, usb_only });
+  it("keeps every printer reached by network, refused ones too, and points USB ones at the cable", () => {
+    const m = manualModels([p("k1", "Creality K1"), p("forgex", "AD5X with Forge-X"), p("ktouch", "BTT K-Touch", true)]);
+    expect(m.models.map((x) => x.id)).toEqual(["k1", "forgex"]);
+    expect(m.usbLines).toEqual(["BTT K-Touch? Plug it in by USB instead."]);
   });
 });

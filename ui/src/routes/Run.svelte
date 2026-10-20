@@ -134,7 +134,7 @@
     <section class="card body">
       <Picture src={ev.image} class="shot" />
       {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>Next</button>
         {@render stopLink()}
       </div>
@@ -142,7 +142,7 @@
   {:else if ev.event === "need_input" && ev.prompt === "confirm"}
     <section class="card body">
       {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>{ev.button}</button>
         {#if ev.doc}<button onclick={() => openGuide(ev.doc ?? "")}>Open the guide</button>{/if}
         {@render stopLink()}
@@ -153,7 +153,7 @@
       <p class="eyebrow">On your printer</p>
       <Picture src={ev.image} class="shot" />
       {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>I've done this</button>
         {@render stopLink()}
       </div>
@@ -169,7 +169,7 @@
           </button>
         {/each}
       </div>
-      <div class="actions">{@render stopLink()}</div>
+      <div class="actions sticky">{@render stopLink()}</div>
     </section>
   {:else if ev.event === "need_input" && ev.prompt === "ambiguous"}
     <section class="card body">
@@ -186,7 +186,7 @@
           </button>
         {/each}
       </div>
-      <div class="actions">{@render stopLink()}</div>
+      <div class="actions sticky">{@render stopLink()}</div>
     </section>
   {:else if ev.event === "need_input" && ev.prompt === "login"}
     <section class="card body narrow">
@@ -245,7 +245,7 @@
             {useKey ? "Show the passphrase" : "Show the password"}
           </label>
         {/if}
-        <div class="actions">
+        <div class="actions sticky">
           <button class="primary" type="submit" disabled={busy || !user.trim()}>Sign in</button>
           {@render stopLink()}
         </div>
@@ -274,7 +274,7 @@
         <label class="check">
           <input type="checkbox" bind:checked={showPassword} /> Show the password
         </label>
-        <div class="actions">
+        <div class="actions sticky">
           <button class="primary" type="submit" disabled={busy || !sudoPassword}>Continue</button>
           {@render stopLink()}
         </div>
@@ -289,7 +289,7 @@
       </p>
       {#if ev.drives.length === 0}
         <div class="notice warn" role="status">{ev.message ?? "No USB stick found. Plug one in."}</div>
-        <div class="actions">
+        <div class="actions sticky">
           <button class="primary" disabled={busy} onclick={() => send()}>Check again</button>
           {@render stopLink()}
         </div>
@@ -311,7 +311,7 @@
             </button>
           {/each}
         </div>
-        <div class="actions">
+        <div class="actions sticky">
           <button
             class="primary"
             disabled={busy || !drive}
@@ -337,7 +337,12 @@
       {/if}
     </section>
   {:else if ev.event === "done"}
-    {@const finish = finishScreen(run?.done_kind ?? null, run?.done_note ?? null, run?.printer_name ?? "printer")}
+    {@const finish = finishScreen(
+      run?.done_kind ?? null,
+      run?.done_note ?? null,
+      run?.printer_name ?? "printer",
+      run?.updated_to ?? null,
+    )}
     <section class="card body done">
       <div class="badge ok" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
@@ -346,7 +351,7 @@
       {#each finish.lines as line, i}
         <p class:lead={i === 0}>{line}</p>
       {/each}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" onclick={onexit}>Finish</button>
       </div>
     </section>
@@ -364,7 +369,7 @@
         </p>
         <p class="muted">Why it stopped: {sentence(ev.reason)}</p>
       {/if}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" onclick={() => openGuide(ev.doc)}>Open the install guide</button>
         <button onclick={onexit}>Back to printers</button>
       </div>
@@ -375,7 +380,7 @@
       <p class="lead">Nothing on your printer was changed.</p>
       <p class="muted">What happened: {sentence(ev.reason)}</p>
       {#if ev.help && !isUrl(ev.help)}<p class="help-text">{ev.help}</p>{/if}
-      <div class="actions">
+      <div class="actions sticky">
         <button class="primary" disabled={busy} onclick={() => send()}>Try again</button>
         <button onclick={() => openGuide(isUrl(ev.help) ? ev.help : (run?.guide ?? ""))}>
           Open the install guide

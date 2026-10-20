@@ -70,11 +70,13 @@ export function sentence(s: string): string {
 }
 
 /** The finish screen. A run that found HelixScreen current is a success that changed
- * nothing; one that ended with a note says what to check. */
+ * nothing; one that ended with a note says what to check. An update names the version it
+ * installed (`updatedTo`); only a first install says HelixScreen is installed. */
 export function finishScreen(
   kind: DoneKind | null,
   note: string | null,
   printerName: string,
+  updatedTo: string | null = null,
 ): { heading: string; lines: string[] } {
   if (kind === "up_to_date") {
     return {
@@ -83,7 +85,7 @@ export function finishScreen(
     };
   }
   return {
-    heading: "HelixScreen is installed",
+    heading: updatedTo ? `HelixScreen updated to ${updatedTo}` : "HelixScreen is installed",
     lines: [
       note
         ? sentence(note)

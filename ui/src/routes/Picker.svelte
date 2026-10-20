@@ -4,7 +4,7 @@
   import { onMount } from "svelte";
   import * as api from "../lib/api";
   import { ApiError } from "../lib/api";
-  import { cardSubtitle, cardTitle, readyLine, startLabel, whereLine } from "../lib/candidates";
+  import { cardSubtitle, cardTitle, manualModels, readyLine, startLabel, unsupportedLines, whereLine } from "../lib/candidates";
   import Copyable from "../lib/Copyable.svelte";
   import PrinterTile from "../lib/PrinterTile.svelte";
   import { openGuide } from "../lib/open";
@@ -21,6 +21,7 @@
   let recording = $state<{ name: string; json: string } | null>(null);
 
   let model = $state<string | null>(null);
+  const manual = $derived(manualModels(session.printers));
   let address = $state("");
   let addressError = $state<string | null>(null);
 
@@ -142,7 +143,9 @@
                 {/each}
               </div>
             {:else if c.status === "unsupported"}
-              <p class="status warn">The installer can't set up this printer yet.</p>
+              {@const [status, why] = unsupportedLines(c)}
+              <p class="status warn">{status}</p>
+              {#if why}<p class="muted small">{why}</p>{/if}
             {:else}
               <p class="status warn">This printer didn't answer.</p>
             {/if}
@@ -187,7 +190,7 @@
 
   <h2>1. Your printer's model</h2>
   <div class="models" role="radiogroup" aria-label="Printer model">
-    {#each session.printers as p (p.id)}
+    {#each manual.models as p (p.id)}
       <button
         class="card model"
         class:selected={model === p.id}
@@ -201,6 +204,7 @@
       </button>
     {/each}
   </div>
+  {#each manual.usbLines as line}<p class="muted small usb-hint">{line}</p>{/each}
 
   <h2 class="second">2. Your printer's address</h2>
   <label class="field address-field">
@@ -342,16 +346,8 @@
     color: var(--danger);
     font-weight: 600;
   }
-  /* The model grid can be taller than the window; Continue stays in view below it. */
-  .sticky {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
-    /* Wide enough to cover a focus outline scrolling under it. */
-    margin: 1rem -0.5rem 0;
-    padding: 0.75rem 0.5rem;
-    background: var(--bg);
-    border-top: 1px solid var(--border);
+  .usb-hint {
+    margin-top: 0.75rem;
   }
   .visually-hidden {
     position: absolute;

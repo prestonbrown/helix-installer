@@ -64,3 +64,14 @@ describe("the finish screen", () => {
     expect(s.lines[0]).toMatch(/^HelixScreen 1\.1\.0 was written/);
   });
 });
+
+describe("the finish screen of an update", () => {
+  it("names the version an update installed", () => {
+    const s = finishScreen("note", "the BTT K-Touch restarted running HelixScreen v1.1.0-beta.10", "BTT K-Touch", "v1.1.0-beta.10");
+    expect(s.heading).toBe("HelixScreen updated to v1.1.0-beta.10");
+  });
+  it("says installed only for a first install", () => {
+    expect(finishScreen(null, null, "Creality K1", null).heading).toBe("HelixScreen is installed");
+    expect(finishScreen(null, null, "Creality K1", "v1.0.5").heading).toBe("HelixScreen updated to v1.0.5");
+  });
+});

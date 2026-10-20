@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // What the picker says about each printer it found, by how it is reached and what it runs.
+import { sentence } from "./text";
 import type { CandidateView, PrinterView } from "./types";
 
 /** Where the candidate is: its network address, or the USB port a screen is plugged into. */
@@ -69,4 +70,21 @@ export function cardSubtitle(c: CandidateView): string | null {
 export function nameLines(displayName: string, hostName: string | null): { title: string; subtitle: string | null } {
   const own = hostTitle(hostName);
   return own === null ? { title: displayName, subtitle: null } : { title: own, subtitle: displayName };
+}
+
+/** What a card says about a printer the installer turns away: that it can't, and why. */
+export function unsupportedLines(c: CandidateView): string[] {
+  const lines = ["The installer can't set up this printer. Its guide shows how to install by hand."];
+  if (c.reason) lines.push(sentence(c.reason));
+  return lines;
+}
+
+/** The models the user can type an address for: every printer reached over the network,
+ * refused ones included, since picking one shows its refusal and guide. A printer found only
+ * by USB is pointed at the cable instead. */
+export function manualModels(printers: PrinterView[]): { models: PrinterView[]; usbLines: string[] } {
+  return {
+    models: printers.filter((p) => !p.usb_only),
+    usbLines: printers.filter((p) => p.usb_only).map((p) => `${p.name}? Plug it in by USB instead.`),
+  };
 }

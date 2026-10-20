@@ -6,7 +6,7 @@
   import { ApiError } from "../lib/api";
   import Copyable from "../lib/Copyable.svelte";
   import { openGuide } from "../lib/open";
-  import { isUrl, keepOnLabel, retryAdvice, stepLabel, stoppedState } from "../lib/text";
+  import { isUrl, keepOnLabel, retryAdvice, sentence, stepLabel, stoppedState } from "../lib/text";
   import type { RunEvent, RunInfo } from "../lib/types";
 
   let {
@@ -56,13 +56,14 @@
       run.committed,
     )}. {stoppedState(run.step_kind)}
   </p>
+  <p class="muted">Why it stopped: {sentence(event.reason)}</p>
   <p>
     {retryAdvice(run.step_kind)}, then choose <strong>Try this step again</strong>.
     If it stops again, follow the recovery guide for your printer.
   </p>
   {#if event.help && !isUrl(event.help)}<p class="muted help-text">{event.help}</p>{/if}
 
-  <div class="actions">
+  <div class="actions sticky">
     <button class="primary" disabled={busy} onclick={onretry}>Try this step again</button>
     <button onclick={() => openGuide(guide)}>Open the recovery guide</button>
     <button class="link" onclick={onexit}>Back to printers</button>

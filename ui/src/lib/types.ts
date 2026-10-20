@@ -12,6 +12,8 @@ export interface PrinterView {
   name: string;
   photo: string | null;
   verified: Verified | null;
+  /** Found only by its USB id: it cannot be reached by typing an address. */
+  usb_only: boolean;
 }
 
 export type CandidateStatus = "ready" | "choose" | "unsupported" | "no_answer";
@@ -108,6 +110,8 @@ export interface RunInfo {
   done_kind: DoneKind | null;
   /** The name the printer's own system goes by, as on its picker card. */
   host_name: string | null;
+  /** The version a finished update installed; null for a first install. */
+  updated_to: string | null;
 }
 
 export interface AdvanceView {

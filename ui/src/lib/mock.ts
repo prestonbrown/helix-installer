@@ -30,22 +30,25 @@ const printers: PrinterView[] = [
     name: "Creality K1",
     photo: picture("K1", 200, 200, 200),
     verified: { by: "helixscreen", date: "2026-10-01", firmware: "1.3.3.46" },
+    usb_only: false,
   },
-  { id: "k2", name: "Creality K2", photo: picture("K2", 200, 200, 20), verified: null },
+  { id: "k2", name: "Creality K2", photo: picture("K2", 200, 200, 20), verified: null, usb_only: false },
   {
     id: "ad5m",
     name: "FlashForge Adventurer 5M",
     photo: picture("AD5M", 200, 200, 150),
     verified: { by: "community", date: "", firmware: "" },
+    usb_only: false,
   },
-  { id: "ad5x", name: "FlashForge Adventurer 5X", photo: "img/missing-ad5x.jpg", verified: null },
+  { id: "ad5x", name: "FlashForge Adventurer 5X", photo: "img/missing-ad5x.jpg", verified: null, usb_only: false },
   {
     id: "q2",
     name: "QIDI Q2",
     photo: picture("Q2", 200, 200, 280),
     verified: { by: "helixscreen", date: "", firmware: "1.0.4" },
+    usb_only: false,
   },
-  { id: "pi", name: "Raspberry Pi with Klipper", photo: null, verified: null },
+  { id: "pi", name: "Raspberry Pi with Klipper", photo: null, verified: null, usb_only: false },
 ];
 
 const found: CandidateView[] = [
@@ -153,6 +156,7 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   done_note: null,
   done_kind: null,
   host_name: "k1-printer",
+  updated_to: null,
   ...over,
 });
 
@@ -252,7 +256,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       step: 4,
       reason:
         "the BTT K-Touch disconnected while it was being written; the BTT K-Touch was erased for the install and is blank until a flash completes",
-      help: "The BTT K-Touch is blank until a flash completes: it shows nothing and will not start. This cannot damage it: its chip always accepts a new write over USB. Keep it plugged in (plug it back in if it came loose) and choose Try this step again to write it.",
+      help: "The BTT K-Touch shows nothing and will not start until a flash completes. Keep it plugged in (plug it back in if it came loose) and choose Try this step again to write it.",
     },
     run: run({ ...ktouchRun, step: 4, total_steps: 6, step_kind: "serial_flash", committed: true }),
   },
@@ -266,6 +270,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       committed: true,
       done_note: "the BTT K-Touch restarted running HelixScreen v1.1.0-beta.10, and its WiFi and settings were kept",
       done_kind: "note",
+      updated_to: "v1.1.0-beta.10",
     }),
   },
   drive: {
@@ -418,11 +423,13 @@ log:
 /** The printer list in `manifest/staging.json`, as the app's `printers` command gives it. */
 async function stagingPrinters(): Promise<PrinterView[]> {
   const m = await (await fetch("/staging.json")).json();
-  return m.printers.map((p: PrinterView) => ({
+  type Entry = Omit<PrinterView, "usb_only"> & { identify: Record<string, unknown>[] };
+  return m.printers.map((p: Entry) => ({
     id: p.id,
     name: p.name,
     photo: p.photo ?? null,
     verified: p.verified ?? null,
+    usb_only: p.identify.length > 0 && p.identify.every((r) => "usb" in r),
   }));
 }
 

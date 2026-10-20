@@ -177,6 +177,38 @@ label.field > span {
   margin-top: 1.5rem;
 }
 
+/* An action row that stays in view at the bottom of the window when what is above it is taller
+   than the window, so the main button never needs a scroll to reach. */
+.actions.sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  /* Wide enough to cover a focus outline scrolling under it. */
+  margin: 1rem -0.5rem 0;
+  padding: 0.75rem 0.5rem;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+/* Inside a card it takes the card's colour and no rule, so a screen that fits looks unchanged. */
+.card .actions.sticky {
+  margin-top: 0.75rem;
+  background: var(--surface);
+  border-top: none;
+}
+
+/* Text scrolling under it fades out instead of being cut, within the gap it keeps above itself. */
+.card .actions.sticky::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -0.75rem;
+  height: 0.75rem;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+}
+
 .notice {
   border-radius: var(--radius-sm);
   padding: 0.75rem 1rem;
