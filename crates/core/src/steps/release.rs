@@ -80,6 +80,32 @@ pub(crate) fn update_channels(pinned: Option<Channel>, installed: &ReleaseVersio
     }
 }
 
+/// The first stable release a new install takes. Until it is the stable release, new installs
+/// take the beta: the stable releases before it ship an `install.sh` this installer cannot drive.
+const FIRST_STABLE_FOR_NEW_INSTALLS: &str = "1.1.0";
+
+/// The channel a new install (or a removal, which has no installed version to follow) reads
+/// when nothing pins one, given the newest stable release.
+pub fn new_install_channel(stable: &ReleaseVersion) -> Channel {
+    match ReleaseVersion::parse(FIRST_STABLE_FOR_NEW_INSTALLS) {
+        Some(first) if *stable >= first => Channel::Stable,
+        _ => Channel::Beta,
+    }
+}
+
+/// The channels a new install or a removal reads: the pin, if any, else `new_install_channel`
+/// of the stable release list as it is now.
+pub(crate) async fn new_install_channels(
+    env: &Env,
+    pinned: Option<Channel>,
+) -> Result<Vec<Channel>, StepOutcome> {
+    if let Some(c) = pinned {
+        return Ok(vec![c]);
+    }
+    let (_, stable) = newest(env, &[Channel::Stable]).await?;
+    Ok(vec![new_install_channel(&stable)])
+}
+
 /// What a run that found nothing newer to install says on its finish screen. A development build
 /// can be newer than every release.
 pub(crate) fn up_to_date_note(

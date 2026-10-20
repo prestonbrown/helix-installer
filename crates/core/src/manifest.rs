@@ -553,6 +553,12 @@ pub enum Step {
         /// stops at install.sh's confirm point, to check its platform and result first.
         #[serde(default)]
         dry_run: bool,
+        /// Resolves the release this run would install and runs every check on it (channel,
+        /// the platform's build, install.sh's capabilities) without the printer: for a recipe
+        /// whose install comes after an earlier point of no return, so a release it cannot
+        /// install stops the run before anything changes.
+        #[serde(default)]
+        check: bool,
         #[serde(default)]
         dir: Option<String>,
         #[serde(default)]
@@ -608,7 +614,11 @@ impl Step {
             self,
             Step::MoonrakerGcode { .. }
                 | Step::SshRun { .. }
-                | Step::HelixInstall { dry_run: false, .. }
+                | Step::HelixInstall {
+                    dry_run: false,
+                    check: false,
+                    ..
+                }
         )
     }
 
@@ -619,7 +629,7 @@ impl Step {
         matches!(
             self,
             Step::SshRun { .. }
-                | Step::HelixInstall { .. }
+                | Step::HelixInstall { check: false, .. }
                 | Step::MoonrakerGcode { .. }
                 | Step::MoonrakerUpdate { .. }
                 | Step::SerialFlash { .. }
@@ -657,6 +667,17 @@ impl Step {
                 uninstall: true,
                 ..
             } => Some("helix_install cannot be a dry run of an uninstall"),
+            Step::HelixInstall {
+                check: true,
+                update,
+                uninstall,
+                dry_run,
+                commits,
+                ..
+            } if *update || *uninstall || *dry_run || *commits => Some(
+                "a helix_install check resolves a new install's release before the point of no \
+                 return: it cannot update, uninstall, dry-run or commit",
+            ),
             Step::SerialFlash { chip, flash_mb, .. } if chip.is_empty() || *flash_mb == 0 => {
                 Some("serial_flash needs a chip and a flash_mb")
             }

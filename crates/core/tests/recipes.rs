@@ -115,9 +115,19 @@ impl Rig {
     /// Makes `version` the newest release on `channel`, with a build for every platform and
     /// its `install.sh` on GitHub.
     fn publish(&self, channel: Channel, version: &str) {
+        self.publish_with(
+            channel,
+            version,
+            INSTALL_SH,
+            &["pi", "pi32", "k1", "k2", "ad5m", "ad5x"],
+        );
+    }
+
+    /// As `publish`, with `script` as the release's `install.sh` and builds for `platforms` only.
+    fn publish_with(&self, channel: Channel, version: &str, script: &[u8], platforms: &[&str]) {
         let tag = format!("v{version}");
         let mut assets = serde_json::Map::new();
-        for p in ["pi", "pi32", "k1", "k2", "ad5m", "ad5x"] {
+        for &p in platforms {
             let url = format!(
                 "https://releases.helixscreen.org/releases/{tag}/helixscreen-{p}-{tag}.tar.gz"
             );
@@ -137,13 +147,13 @@ impl Rig {
         );
         let gh = json!({ "tag_name": tag, "assets": [{
             "name": "install.sh", "browser_download_url": script_url,
-            "digest": format!("sha256:{}", sha(INSTALL_SH)),
+            "digest": format!("sha256:{}", sha(script)),
         }]});
         self.fetch.add(
             &format!("{GITHUB_RELEASE_API}/{tag}"),
             gh.to_string().into_bytes(),
         );
-        self.fetch.add(&script_url, INSTALL_SH.to_vec());
+        self.fetch.add(&script_url, script.to_vec());
     }
 
     fn env(&self) -> Env {
@@ -890,11 +900,12 @@ async fn a_stock_k1_picked_from_the_grid_gets_simple_af_then_helixscreen() {
     let trace = drive(&mut r, stock_k1_answers).await;
     assert!(trace.done(), "{:?}", trace.end);
     let texts = trace.texts();
-    assert_eq!(texts.len(), 4, "{texts:?}");
+    assert_eq!(texts.len(), 5, "{texts:?}");
     assert!(texts[0].contains("tap Cancel"), "{texts:?}");
     assert!(texts[1].contains("Root account information"), "{texts:?}");
     assert!(texts[2].contains("factory reset"), "{texts:?}");
     assert!(texts[3].contains("Root account information"), "{texts:?}");
+    assert!(texts[4].contains("wait 10 seconds"), "{texts:?}");
     assert!(ran(&rig, SIMPLE_AF), "{:?}", rig.ssh.commands());
     assert!(r.state().committed);
     assert!(
@@ -903,6 +914,104 @@ async fn a_stock_k1_picked_from_the_grid_gets_simple_af_then_helixscreen() {
             .starts_with("sh '/usr/data/install.sh' --local"),
         "{:?}",
         rig.installs()
+    );
+}
+
+/// An `install.sh` from before `--progress`, as stable 1.0.5 ships it.
+const INSTALL_SH_WITHOUT_PROGRESS: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --local) ;;\nesac\n";
+
+/// A stock K1 whose stable release is 1.0.5 (an `install.sh` without `--progress`) and whose
+/// beta is 1.1.0-beta.10.
+fn stock_k1_with_an_old_stable() -> Rig {
+    let rig = k1_rig(STOCK_K1);
+    rig.publish_with(
+        Channel::Stable,
+        "1.0.5",
+        INSTALL_SH_WITHOUT_PROGRESS,
+        &["k1"],
+    );
+    rig.publish(Channel::Beta, "1.1.0-beta.10");
+    rig
+}
+
+#[tokio::test]
+async fn a_stock_k1_installs_the_beta_while_stable_is_older_than_1_1() {
+    let rig = stock_k1_with_an_old_stable();
+    rig.ssh.script_job(vec![("Simple AF installed\n", Some(0))]);
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(
+        rig.installs()[0]
+            .0
+            .contains("helixscreen-k1-v1.1.0-beta.10.tar.gz"),
+        "{:?}",
+        rig.installs()
+    );
+}
+
+#[tokio::test]
+async fn a_stock_k1_whose_release_cannot_be_installed_is_refused_before_simple_af() {
+    // The beta has no K1 build: the release check must stop the run before the commit.
+    let rig = k1_rig(STOCK_K1);
+    rig.publish_with(
+        Channel::Stable,
+        "1.0.5",
+        INSTALL_SH_WITHOUT_PROGRESS,
+        &["k1"],
+    );
+    rig.publish_with(Channel::Beta, "1.1.0-beta.10", INSTALL_SH, &["pi"]);
+    rig.ssh.script_job(vec![("Simple AF installed\n", Some(0))]);
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(
+        matches!(
+            trace.end,
+            Event::Failed {
+                committed: false,
+                ..
+            } | Event::Refused { .. }
+        ),
+        "{:?}",
+        trace.end
+    );
+    assert!(!r.state().committed);
+    assert!(!ran(&rig, SIMPLE_AF), "{:?}", rig.ssh.commands());
+}
+
+#[tokio::test]
+async fn simple_af_is_followed_by_a_power_cycle_and_klipper_ready() {
+    let m = staging();
+    let steps = &m.recipes["k1_stock"];
+    let simple_af = steps
+        .iter()
+        .position(|s| matches!(s, Step::SshRun { command, .. } if command == SIMPLE_AF))
+        .unwrap();
+    match &steps[simple_af + 1] {
+        Step::UserAction { text, .. } => {
+            assert!(text.contains("off"), "{text}");
+            assert!(text.contains("10 seconds"), "{text}");
+            assert!(text.contains("I've done this"), "{text}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        matches!(
+            steps[simple_af + 2],
+            Step::WaitFor {
+                target: WaitTarget::KlipperReady,
+                ..
+            }
+        ),
+        "{:?}",
+        steps[simple_af + 2]
     );
 }
 
@@ -1795,6 +1904,7 @@ fn every_install_is_preceded_by_its_dry_run() {
                 update,
                 uninstall: false,
                 dry_run: false,
+                check: false,
                 dir,
                 ..
             } = s

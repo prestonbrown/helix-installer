@@ -770,12 +770,12 @@ fn rerun_prompt() -> Prompt {
 }
 
 /// When a committing step passes the point of no return: a step that only asks the user
-/// commits on the answer that tells the installer to act; `serial_flash` commits itself just
-/// before its first erase or write (`StepCtx::commit_before_acting`); every other step as it
-/// starts.
+/// commits on the answer that tells the installer to act; `serial_flash` and `helix_install`
+/// commit themselves once their checks pass, just before they first change the printer
+/// (`StepCtx::commit_before_acting`); every other step as it starts.
 fn commits_on(step: &Step, input: Option<&Input>) -> bool {
     match step {
-        Step::SerialFlash { .. } => false,
+        Step::SerialFlash { .. } | Step::HelixInstall { .. } => false,
         Step::Info { .. } | Step::UserAction { .. } => matches!(input, Some(Input::Next)),
         Step::Ask { choices, .. } => {
             matches!(input, Some(Input::Choice(c)) if choices.iter().any(|x| x.value == *c))

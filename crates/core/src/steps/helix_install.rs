@@ -21,7 +21,7 @@ use crate::version::ReleaseVersion;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use super::release::{releases_manifest_url, GITHUB_RELEASE_API};
+pub use super::release::{new_install_channel, releases_manifest_url, GITHUB_RELEASE_API};
 
 /// How long install.sh may print nothing before the install counts as hung. Extracting the
 /// release onto a MIPS printer's slow flash takes minutes without a line of output.
@@ -74,11 +74,13 @@ pub enum Mode {
     Uninstall,
 }
 
-/// What install.sh is asked to do, and whether only as a `--dry-run`.
+/// What install.sh is asked to do, and whether only as a `--dry-run`, or not at all: a `check`
+/// resolves the release and checks it without the printer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
     pub mode: Mode,
     pub dry_run: bool,
+    pub check: bool,
 }
 
 impl Run {
@@ -101,6 +103,9 @@ pub async fn run(
     dir: Option<&str>,
     input: Option<Input>,
 ) -> StepOutcome {
+    if run.check {
+        return check(ctx, platform, channel).await;
+    }
     if let Some(ask) = ctx.need_login(input).await {
         return ask;
     }
@@ -138,7 +143,12 @@ pub async fn run(
             Ok(v) => (release::update_channels(pinned, &v), Some(v)),
             Err(stop) => return stop,
         },
-        Mode::Install | Mode::Uninstall => (vec![pinned.unwrap_or_default()], None),
+        Mode::Install | Mode::Uninstall => {
+            match release::new_install_channels(ctx.env, pinned).await {
+                Ok(channels) => (channels, None),
+                Err(stop) => return stop,
+            }
+        }
     };
     let target = Target {
         platform: &platform,
@@ -149,6 +159,11 @@ pub async fn run(
         Ok(prepared) => {
             let title = prepared.title(run.mode);
             ctx.session.prepared_install = Some(prepared);
+            // Everything above refused or failed with the printer unchanged; the launch is
+            // where a committing step starts to change it.
+            if ctx.recipe.get(ctx.step).is_some_and(Step::commits) {
+                ctx.commit_before_acting();
+            }
             progress(title.into(), None)
         }
         // Waiting on the user keeps a dry run's files for the launch that follows; any other
@@ -158,6 +173,40 @@ pub async fn run(
             remove_uploaded(ctx).await;
             stop
         }
+    }
+}
+
+/// A `check` step: the release a new install would take, checked as the install will check it.
+/// It needs no login and sends nothing to the printer.
+async fn check(
+    ctx: &mut StepCtx<'_>,
+    platform: &PlatformSel,
+    channel: Option<Channel>,
+) -> StepOutcome {
+    let platform = match resolve_platform(ctx, platform) {
+        Ok(p) => p,
+        Err(stop) => return stop,
+    };
+    let pinned = ctx.channel_override.or(channel);
+    let resolved = async {
+        let channels = release::new_install_channels(ctx.env, pinned).await?;
+        let target = Target {
+            platform: &platform,
+            channels: &channels,
+            installed: None,
+        };
+        resolve(ctx, target, Mode::Install).await
+    }
+    .await;
+    match resolved {
+        Ok(r) => {
+            ctx.log(format!(
+                "HelixScreen {} for {platform} can be installed here",
+                r.offered
+            ));
+            StepOutcome::Done
+        }
+        Err(stop) => stop,
     }
 }
 
@@ -324,14 +373,21 @@ async fn transport_stop(ctx: &mut StepCtx<'_>, e: TransportError) -> StepOutcome
     }
 }
 
-async fn prepare(
+/// The release a launch installs, checked before anything goes to the printer: newer than
+/// `installed` for an update, a build for the platform, and an `install.sh` (fetched and
+/// verified) this installer can drive.
+struct Resolved {
+    offered: ReleaseVersion,
+    tarball: Option<Artifact>,
+    script: Artifact,
+    script_local: PathBuf,
+}
+
+async fn resolve(
     ctx: &mut StepCtx<'_>,
     target: Target<'_>,
-    run: Run,
-    dir: &str,
-) -> Result<PreparedLaunch, StepOutcome> {
-    let platform = target.platform;
-    let mode = run.mode;
+    mode: Mode,
+) -> Result<Resolved, StepOutcome> {
     let (release, offered) = release::newest(ctx.env, target.channels).await?;
     if let Some(installed) = target.installed {
         if offered <= *installed {
@@ -341,17 +397,51 @@ async fn prepare(
             });
         }
     }
-    let sudo_password = sudo_password(ctx).await?;
-    let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
-        return Err(StepOutcome::failed("no download cache directory is set"));
-    };
     // Uninstalling needs only the installer, so a release without this platform's build still
     // serves.
     let tarball = match mode {
         Mode::Uninstall => None,
-        Mode::Install | Mode::Update => Some(release_tarball(&release, platform)?),
+        Mode::Install | Mode::Update => Some(release_tarball(&release, target.platform)?),
+    };
+    let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
+        return Err(StepOutcome::failed("no download cache directory is set"));
     };
     let script = release::github_asset(ctx.env, &release.tag, "install.sh").await?;
+    let script_local = fetch_artifact(ctx.env, &script, &cache, &|_, _| {})
+        .await
+        .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
+    // install.sh only understands --progress in newer releases; an older one prints its usage
+    // and exits, after the upload has already filled the printer's /tmp.
+    let script_text = std::fs::read(&script_local)
+        .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
+    if !handles_progress(&String::from_utf8_lossy(&script_text)) {
+        return Err(StepOutcome::failed(TOO_OLD));
+    }
+    Ok(Resolved {
+        offered,
+        tarball,
+        script,
+        script_local,
+    })
+}
+
+async fn prepare(
+    ctx: &mut StepCtx<'_>,
+    target: Target<'_>,
+    run: Run,
+    dir: &str,
+) -> Result<PreparedLaunch, StepOutcome> {
+    let mode = run.mode;
+    let Resolved {
+        tarball,
+        script,
+        script_local,
+        ..
+    } = resolve(ctx, target, mode).await?;
+    let sudo_password = sudo_password(ctx).await?;
+    let Some(cache) = ctx.cache_dir.map(PathBuf::from) else {
+        return Err(StepOutcome::failed("no download cache directory is set"));
+    };
 
     let tarball_local = match &tarball {
         Some(t) => {
@@ -363,9 +453,6 @@ async fn prepare(
         }
         None => None,
     };
-    let script_local = fetch_artifact(ctx.env, &script, &cache, &|_, _| {})
-        .await
-        .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
 
     let dir = dir.trim_end_matches('/');
     let script_remote = format!("{dir}/install.sh");
@@ -387,13 +474,6 @@ async fn prepare(
         ),
         None => format!("sh {} --uninstall --progress", sh_quote(&script_remote)),
     };
-    // install.sh only understands --progress in newer releases; an older one prints its usage
-    // and exits, after the upload has already filled the printer's /tmp.
-    let script_text = std::fs::read(&script_local)
-        .map_err(|e| StepOutcome::failed(format!("install.sh: {e}")))?;
-    if !handles_progress(&String::from_utf8_lossy(&script_text)) {
-        return Err(StepOutcome::failed(TOO_OLD));
-    }
     // Files an earlier step of this run (the dry run) uploaded are sent again only if they no
     // longer read back as the verified ones.
     let earlier = uploaded_files(ctx);
@@ -583,6 +663,7 @@ fn install_follows(ctx: &StepCtx<'_>) -> bool {
             Step::HelixInstall {
                 dry_run: false,
                 uninstall: false,
+                check: false,
                 ..
             }
         )

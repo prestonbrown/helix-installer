@@ -103,7 +103,13 @@ impl Rig {
     }
 
     /// Makes `tag` the newest beta, its K-Touch zip on GitHub with `digest` (else the zip's own).
+    /// The stable list stays at 1.0.5, a release before the K-Touch builds.
     fn publish(&self, tag: &str, zip: &[u8], digest: Option<&str>) {
+        let stable = json!({ "version": "1.0.5", "tag": "v1.0.5", "assets": {} });
+        self.fetch.add(
+            &releases_manifest_url(Channel::Stable),
+            stable.to_string().into_bytes(),
+        );
         let release = json!({ "version": tag.trim_start_matches('v'), "tag": tag, "assets": {} });
         self.fetch.add(
             &releases_manifest_url(Channel::Beta),

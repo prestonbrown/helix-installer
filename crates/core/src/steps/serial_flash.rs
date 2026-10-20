@@ -178,7 +178,7 @@ async fn start(
         let v = installed_version(ctx)?;
         (release::update_channels(pinned, &v), Some(v))
     } else {
-        (vec![pinned.unwrap_or_default()], None)
+        (release::new_install_channels(ctx.env, pinned).await?, None)
     };
     let (rel, offered) = release::newest(ctx.env, &channels).await?;
     if let Some(installed) = &installed {

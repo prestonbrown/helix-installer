@@ -7,7 +7,8 @@ use helix_installer_core::manifest::{Channel, Login, Manifest, Secret, Step};
 use helix_installer_core::run_state::{DoneKind, RunState};
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
-    releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE, INSTALLED_VERSION_PROBE,
+    new_install_channel, releases_manifest_url, GITHUB_RELEASE_API, HELIX_INSTALL_SILENCE,
+    INSTALLED_VERSION_PROBE,
 };
 use helix_installer_core::steps::progress::{parse_progress_line, ProgressEvent, StepStatus};
 use helix_installer_core::steps::{StepCtx, StepHandler, StepOutcome};
@@ -16,6 +17,7 @@ use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
 };
 use helix_installer_core::transport::{Clock, Env, ExecOutput, Host, Ssh};
+use helix_installer_core::version::ReleaseVersion;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -1266,13 +1268,17 @@ fn an_unknown_channel_fails_manifest_parsing() {
 }
 
 #[tokio::test]
-async fn a_recipe_without_a_channel_reads_the_stable_list() {
+async fn a_new_install_without_a_channel_reads_the_beta_while_stable_is_older_than_1_1_0() {
+    // The stable list holds 1.0.5.
     let f = Fakes::standard(&["pi"]);
     let r = f.runner("root", channel_step(None), json!({}));
     install_with(&f, r).await;
     assert_eq!(
         release_list_requests(&f),
-        vec![releases_manifest_url(Channel::Stable)]
+        vec![
+            releases_manifest_url(Channel::Stable),
+            releases_manifest_url(Channel::Beta)
+        ]
     );
 }
 
@@ -1344,6 +1350,71 @@ async fn an_install_sh_without_progress_support_is_refused_before_any_upload() {
         reason,
         "This HelixScreen release is older than this installer supports. Choose a newer release or update the installer."
     );
+}
+
+#[tokio::test]
+async fn a_committing_install_whose_release_fails_its_checks_stops_before_the_commit() {
+    let old = json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL, "digest": format!("sha256:{}", sha(OLD_INSTALL_SH)) });
+    let f = Fakes::new(&["pi"], old);
+    f.fetch.add(INSTALL_SH_URL, OLD_INSTALL_SH.to_vec());
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "commits": true }]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(
+        matches!(
+            ev,
+            Event::Failed {
+                committed: false,
+                ..
+            } | Event::Refused { .. }
+        ),
+        "{ev:?}"
+    );
+    assert!(!r.state().committed);
+}
+
+#[tokio::test]
+async fn a_release_check_step_runs_every_check_and_touches_nothing() {
+    let f = Fakes::standard(&["pi"]);
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "check": true }]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert!(f.ssh.uploads().is_empty(), "{:?}", f.ssh.uploads());
+    assert!(spawned(&f).is_empty());
+    assert!(!r.state().committed);
+
+    let old = json!({ "name": "install.sh", "browser_download_url": INSTALL_SH_URL, "digest": format!("sha256:{}", sha(OLD_INSTALL_SH)) });
+    let f = Fakes::new(&["pi"], old);
+    f.fetch.add(INSTALL_SH_URL, OLD_INSTALL_SH.to_vec());
+    let steps = json!([{ "type": "helix_install", "platform": "pi", "check": true }]);
+    let mut r = f.runner("root", steps, json!({}));
+    let (ev, _) = settle(&mut r).await;
+    match ev {
+        Event::Failed {
+            committed: false,
+            reason,
+            ..
+        } => assert!(
+            reason.contains("older than this installer supports"),
+            "{reason}"
+        ),
+        e => panic!("{e:?}"),
+    }
+}
+
+#[test]
+fn a_new_install_takes_the_beta_until_stable_reaches_1_1_0() {
+    let v = |s: &str| ReleaseVersion::parse(s).unwrap();
+    for (stable, channel) in [
+        ("1.0.5", Channel::Beta),
+        ("v1.0.9", Channel::Beta),
+        ("1.1.0-beta.10", Channel::Beta),
+        ("1.1.0", Channel::Stable),
+        ("1.2.3", Channel::Stable),
+    ] {
+        assert_eq!(new_install_channel(&v(stable)), channel, "{stable}");
+    }
 }
 
 #[tokio::test]
@@ -1947,7 +2018,9 @@ fn run_version_probe_with(
     let pid = if running.name == "helix-screen" && running.exe_readable {
         4242
     } else {
-        std::fs::copy("/bin/sleep", &exe).unwrap();
+        // A link, not a copy: a file this process just wrote can still be open for writing in
+        // a child another test is forking, and exec refuses it (ETXTBSY).
+        std::os::unix::fs::symlink("/bin/sleep", &exe).unwrap();
         let child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
         let pid = child.id();
         process = Some(child);

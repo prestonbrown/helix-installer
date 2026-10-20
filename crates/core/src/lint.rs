@@ -242,7 +242,11 @@ fn first_change(steps: &[Step]) -> Option<usize> {
         Step::SshRun { .. }
         | Step::MoonrakerGcode { .. }
         | Step::MoonrakerUpdate { .. }
-        | Step::HelixInstall { dry_run: false, .. }
+        | Step::HelixInstall {
+            dry_run: false,
+            check: false,
+            ..
+        }
         | Step::SerialFlash { .. } => true,
         Step::WriteStick { .. } => {
             stick_written = true;
@@ -251,6 +255,34 @@ fn first_change(steps: &[Step]) -> Option<usize> {
         Step::UserAction { .. } => stick_written,
         _ => false,
     })
+}
+
+/// A `helix_install` resolves its release, and refuses one it cannot install, before it acts. One
+/// after the point of no return would refuse a half-changed printer, so a `helix_install` before
+/// the commit (a check or a dry run) must have resolved it first.
+fn release_checked_before(
+    id: &str,
+    steps: &[Step],
+    commit: usize,
+    err: &mut impl FnMut(&str, String),
+) {
+    let checked = steps[..commit]
+        .iter()
+        .any(|s| matches!(s, Step::HelixInstall { .. }));
+    if checked {
+        return;
+    }
+    if let Some(i) =
+        (commit + 1..steps.len()).find(|&i| matches!(steps[i], Step::HelixInstall { .. }))
+    {
+        err(
+            id,
+            format!(
+                "step {i} installs HelixScreen after the point of no return (step {commit}), but no \
+                 helix_install before it checks the release; add one with check: true"
+            ),
+        );
+    }
 }
 
 /// After the commit the runner only lets a step act on the printer once probes since the
@@ -318,6 +350,7 @@ fn lint_recipe(
     }
     if let Some(&c) = commits.first() {
         stale_after_commit(id, steps, c, err);
+        release_checked_before(id, steps, c, err);
     }
     let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {
         if !m.artifacts.contains_key(name) {

@@ -505,6 +505,7 @@ pub(crate) async fn run_builtin(
             update,
             uninstall,
             dry_run,
+            check,
             dir,
             ..
         } => {
@@ -516,6 +517,7 @@ pub(crate) async fn run_builtin(
             let run = helix_install::Run {
                 mode,
                 dry_run: *dry_run,
+                check: *check,
             };
             helix_install::run(ctx, platform, *channel, run, dir.as_deref(), input).await
         }

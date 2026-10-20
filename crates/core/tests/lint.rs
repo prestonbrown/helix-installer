@@ -467,6 +467,7 @@ fn a_restore_recipe_needs_a_commit_too() {
 #[test]
 fn a_commit_before_the_first_change_is_accepted() {
     let v = install(json!([
+        step(r#"{"type": "helix_install", "platform": "armv7", "check": true}"#),
         committed(r#"{"type": "info", "text": "Do not turn the printer off"}"#),
         step(PROBE),
         step(r#"{"type": "ssh_run", "command": "true", "timeout_s": 5}"#),
@@ -661,4 +662,53 @@ fn a_usb_flash_needs_a_chip_and_its_flash_size() {
         with_install(json!([flash_step(json!({"flash_mb": 0, "update": true}))])),
         "chip and a flash_mb",
     );
+}
+
+/// An install whose HelixScreen step comes after another step's point of no return.
+fn install_after_commit(before: Value) -> Value {
+    let mut v = base();
+    let mut steps = vec![];
+    if !before.is_null() {
+        steps.push(before);
+    }
+    steps.push(json!({"type": "ssh_run", "command": "true", "timeout_s": 5, "commits": true}));
+    steps.push(json!({"type": "probe", "moonraker": "objects_list"}));
+    steps.push(json!({"type": "helix_install", "platform": "armv7"}));
+    steps.push(helix_running());
+    v["recipes"]["install"] = json!(steps);
+    v
+}
+
+#[test]
+fn a_helix_install_after_the_commit_needs_its_release_checked_before_it() {
+    only(install_after_commit(Value::Null), "release");
+    assert_eq!(
+        run(
+            install_after_commit(
+                json!({"type": "helix_install", "platform": "armv7", "check": true})
+            ),
+            false
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn a_release_check_is_neither_an_update_nor_a_dry_run_nor_a_commit() {
+    for extra in [
+        json!({"update": true}),
+        json!({"dry_run": true}),
+        json!({"uninstall": true}),
+        json!({"commits": true}),
+    ] {
+        let mut step = json!({"type": "helix_install", "platform": "armv7", "check": true});
+        for (k, v) in extra.as_object().unwrap() {
+            step[k] = v.clone();
+        }
+        let errs = run(install_after_commit(step), false);
+        assert!(
+            errs.iter().any(|e| e.message.contains("check")),
+            "{extra}: {errs:?}"
+        );
+    }
 }

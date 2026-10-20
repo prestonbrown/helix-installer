@@ -1072,17 +1072,26 @@
         "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
+        "type": "helix_install",
+        "platform": "k1",
+        "check": true
+      },
+      {
         "type": "ssh_run",
         "command": "git config --global http.sslVerify false; if [ -d /usr/data/pellcorp/.git ]; then git -C /usr/data/pellcorp remote get-url origin | grep -q 'github.com/pellcorp/creality' || { echo 'FATAL: /usr/data/pellcorp is not a copy of pellcorp/creality; factory reset the printer and start again'; exit 1; }; git -C /usr/data/pellcorp pull || { echo 'FATAL: could not update /usr/data/pellcorp (git pull failed); check the printer can reach github.com, then retry'; exit 1; }; elif [ -e /usr/data/pellcorp ]; then echo 'FATAL: /usr/data/pellcorp is in the way; factory reset the printer and start again'; exit 1; else git clone https://github.com/pellcorp/creality.git /usr/data/pellcorp; fi && sh /usr/data/pellcorp/k1/installer.sh --install loadcells",
         "timeout_s": 1800,
         "commits": true
       },
       {
+        "type": "user_action",
+        "text": "Simple AF has finished installing. Turn the printer off with its power switch, wait 10 seconds, then turn it back on: this updates the firmware on the printer's boards. Then press I've done this."
+      },
+      {
         "type": "wait_for",
-        "target": "moonraker",
+        "target": "klipper_ready",
         "timeout_s": 900,
-        "message": "Simple AF is starting the printer's new services. Do not power off the printer.",
-        "help": "If the printer's screen shows an error, follow the recovery steps in the K1 guide: https://helixscreen.org/guide/install-k1/"
+        "message": "Waiting for the printer to start again with Simple AF. Do not power off the printer.",
+        "help": "If the printer's screen shows an error, power it off, wait 10 seconds and power it on again, then follow the recovery steps in the K1 guide: https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "probe",
@@ -1480,6 +1489,11 @@
         "doc": "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware"
       },
       {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "check": true
+      },
+      {
         "type": "download",
         "artifact": "forgex_1.4.1"
       },
@@ -1602,6 +1616,11 @@
         "warn": true,
         "reason": "Firmware 3.1.5 can be missing the printer's configuration files: FlashForge's own 3.1.5 image does not include them, so a printer that was reset or wiped and then given that image has none, and Forge-X will not work on it. If this printer prints normally now, it has them and you can continue. If you are not sure, stop and flash FlashForge's Factory image first, then run the installer again.",
         "doc": "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware"
+      },
+      {
+        "type": "helix_install",
+        "platform": "ad5m",
+        "check": true
       },
       {
         "type": "download",
@@ -2087,7 +2106,6 @@
           "nvs",
           "cfg"
         ],
-        "channel": "beta",
         "commits": true
       },
       {
@@ -2123,7 +2141,6 @@
           "nvs",
           "cfg"
         ],
-        "channel": "beta",
         "update": true,
         "commits": true
       }
@@ -2160,7 +2177,6 @@
           "nvs",
           "cfg"
         ],
-        "channel": "beta",
         "commits": true
       }
     ]
