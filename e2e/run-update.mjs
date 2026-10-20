@@ -119,6 +119,10 @@ async function pickPrinter() {
   const text = await waitFor("the printer search to finish", (t) => !t.includes("Looking for printers"), 90_000);
   if (text.includes(HOST)) {
     await shot("picker-found");
+    // The cards below the fold, so every printer found is on a screenshot.
+    await exec("document.querySelector('li.candidate:last-of-type')?.scrollIntoView({ block: 'end' });");
+    await shot("picker-found-rest");
+    await exec("window.scrollTo(0, 0);");
     const cards = await find(`//li[contains(@class,'candidate')][.//*[contains(text(),'${HOST}')]]`);
     if (cards.length !== 1) fail(`expected one card for ${HOST}, found ${cards.length}`);
     const buttons = await find(
