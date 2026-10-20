@@ -116,7 +116,8 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct AppInfo {
     pub version: String,
-    /// What relative image paths in the printer list are relative to, when it came from a URL.
+    /// What relative image paths in the printer list are relative to, when it came from a URL:
+    /// the `img/` directory published beside it.
     pub image_base: Option<String>,
 }
 
@@ -437,7 +438,7 @@ impl AppCore {
             .manifest_location
             .as_deref()
             .filter(|l| is_url(l))
-            .and_then(|l| l.rfind('/').map(|i| l[..=i].to_string()));
+            .and_then(|l| l.rfind('/').map(|i| format!("{}img/", &l[..=i])));
         AppInfo {
             version: self.cfg.app_version.clone(),
             image_base,

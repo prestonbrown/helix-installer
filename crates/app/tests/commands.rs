@@ -480,7 +480,7 @@ fn errors_cross_to_the_ui_as_a_kind_and_a_message() {
 }
 
 #[test]
-fn pictures_are_relative_to_where_the_printer_list_came_from() {
+fn pictures_are_relative_to_the_img_directory_beside_the_printer_list() {
     let f = Fakes::new();
     let data = tempfile::tempdir().unwrap();
     let remote = core(
@@ -490,7 +490,7 @@ fn pictures_are_relative_to_where_the_printer_list_came_from() {
     );
     assert_eq!(
         remote.app_info().image_base.as_deref(),
-        Some("https://helixscreen.org/installer/v1/")
+        Some("https://helixscreen.org/installer/v1/img/")
     );
     assert_eq!(remote.app_info().version, "0.1.0");
     let local = core(&f, data.path(), Some("/tmp/manifest.json".into()));
