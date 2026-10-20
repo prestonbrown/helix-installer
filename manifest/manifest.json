@@ -89,7 +89,7 @@
             "firmware": "MainsailOS (Debian 13 trixie)",
             "helixscreen": "v1.0.0 -> v1.1.0-beta.10",
             "recipe": "generic_update",
-            "behavior_sha256": "7a2abb100b497048416f461d03769a4855cf4571a39a9ffbe5d51b2cf2271ca4"
+            "behavior_sha256": "31792660d90a5d3c5395d697fc9146cc25d64589cc3086f2637a411b8e058209"
           },
           {
             "date": "2026-10-19",
@@ -97,7 +97,7 @@
             "firmware": "not recorded",
             "helixscreen": "v1.1.0-beta.10 reinstalled (Moonraker reported v1.0.0)",
             "recipe": "generic_update",
-            "behavior_sha256": "c40c3eef9cd956a716523e4ee470dbb3a1af309ec5e151c81493b56ad7a1f6ff"
+            "behavior_sha256": "1ca0e222a657e432a351a25f0d56d0582a87ee8bdd03575f161313ee4bcdb555"
           },
           {
             "date": "2026-10-19",
@@ -105,7 +105,7 @@
             "firmware": "Kalico",
             "helixscreen": "v1.1.0-beta.10, up to date, nothing written",
             "recipe": "generic_update",
-            "behavior_sha256": "c40c3eef9cd956a716523e4ee470dbb3a1af309ec5e151c81493b56ad7a1f6ff"
+            "behavior_sha256": "1ca0e222a657e432a351a25f0d56d0582a87ee8bdd03575f161313ee4bcdb555"
           },
           {
             "date": "2026-10-20",
@@ -113,7 +113,7 @@
             "firmware": "Armbian 26.8.1 trixie",
             "helixscreen": "dev build reporting v1.0.0 -> v1.1.0-beta.10",
             "recipe": "generic_update_board",
-            "behavior_sha256": "2f88ef03da68449754d7dc60515b95d39e7967bf30ccf7efae7139464602707b"
+            "behavior_sha256": "ed54c7dce086cdcb3533d6e233955c87487895dce9785553e2e1ed2bba91fd4b"
           }
         ]
       }
@@ -163,7 +163,7 @@
             "firmware": "QD_Q2_01.01.02.01",
             "helixscreen": "unreadable over Moonraker -> v1.1.0-beta.10",
             "recipe": "qidi_update",
-            "behavior_sha256": "269e8001e925740fa7289537a632d462aad7c1cb475344adf384b0f2051db9fe"
+            "behavior_sha256": "fd92d81be26e16d1393094357296f796456eefbf4b5d0e10a6f9e309e1dea1eb"
           }
         ],
         "awaiting_rerun": [
@@ -212,7 +212,7 @@
             "firmware": "Creality stock (OpenWrt 21.02), version not recorded",
             "helixscreen": "dev build not seen by Moonraker -> v1.1.0-beta.10",
             "recipe": "k2_update",
-            "behavior_sha256": "e9e8d06f9b1f95a10629aba1719604bbf741a632701c6a9db48ec320c8cf3f49"
+            "behavior_sha256": "802d40c53766d6e6a9bd3cb5689aa4ee6962468768f76643a69f9071a677d02c"
           }
         ],
         "awaiting_rerun": [
@@ -255,7 +255,7 @@
             "firmware": "1.3.3.46 with Guilouz Helper Script",
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10",
             "recipe": "k1_update",
-            "behavior_sha256": "c135b391b09ee46857083d0e496cb6f14026deab4445ac34244186bd38b07956"
+            "behavior_sha256": "f3faeb0f4a8c36f6bb76485d4d2f01cd418b227adae60074dd0c9aaef7600925"
           }
         ],
         "awaiting_rerun": [
@@ -389,7 +389,7 @@
             "firmware": "Forge-X 1.4.2",
             "helixscreen": "v1.1.0-beta.10 reinstalled, then the reboot that starts it",
             "recipe": "ad5m_forgex_update",
-            "behavior_sha256": "7b9588051e49b7df0c3f9eec8bc6cc0d8f4fffa41e5d7351e942a09eeaa7d10f"
+            "behavior_sha256": "8e411464620ba945f16ea4e080205941e8651e3757b22567a5f763229aaab056"
           }
         ],
         "awaiting_rerun": [
@@ -573,7 +573,7 @@
             "firmware": "HelixScreen ESP32-S3 image",
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10, no erase, WiFi and settings kept",
             "recipe": "ktouch_update",
-            "behavior_sha256": "3033f656ed23eb87fe2c1cb93dbbd0669c6b53d2bdb3f4db7ed4cd5e26cc0475"
+            "behavior_sha256": "8c73c539c917d7f92c04f6d6aeb8bf51a3d90e6fab7c96ee25ae680716ab212e"
           }
         ],
         "awaiting_rerun": [
@@ -1055,7 +1055,6 @@
           "nvs",
           "cfg"
         ],
-        "channel": "beta",
         "update": true,
         "commits": true
       }
@@ -1092,7 +1091,6 @@
           "nvs",
           "cfg"
         ],
-        "channel": "beta",
         "commits": true
       }
     ]

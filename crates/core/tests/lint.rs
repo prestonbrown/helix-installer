@@ -740,6 +740,7 @@ fn a_release_check_is_neither_an_update_nor_a_dry_run_nor_a_commit() {
             "{extra}: {errs:?}"
         );
     }
+}
 
 #[test]
 fn a_published_image_must_not_be_an_empty_placeholder() {
@@ -956,4 +957,23 @@ fn every_install_after_the_commit_needs_its_own_check() {
         errs.iter().any(|e| e.message.contains("release")),
         "{errs:?}"
     );
+}
+
+#[test]
+fn a_field_left_at_its_default_does_not_change_the_behavior_digest() {
+    let steps = |extra: Value| {
+        let mut step = json!({"type": "helix_install", "platform": "armv7"});
+        step.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        behavior_sha256(&serde_json::from_value::<Vec<_>>(json!([step])).unwrap())
+    };
+    // The struct serializes every defaulted field, so a field added later with its default
+    // would otherwise change the digest of every recipe a run already covered.
+    assert_eq!(
+        steps(json!({})),
+        steps(json!({"commits": false, "dry_run": false}))
+    );
+    assert_ne!(steps(json!({})), steps(json!({"commits": true})));
+    assert_ne!(steps(json!({})), steps(json!({"channel": "beta"})));
 }

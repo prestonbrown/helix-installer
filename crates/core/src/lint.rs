@@ -204,14 +204,25 @@ const PROSE: &[&str] = &[
     "label",
 ];
 
-/// The sha256 of what a recipe does: its steps with the user-facing words left out. A verified
-/// run records it; any other change to the steps makes the recipe unrun again.
+/// The sha256 of what a recipe does: its steps with the user-facing words left out, and with
+/// every field at its serde default (false, absent, empty) left out, so a field added to the
+/// schema later does not change it. A verified run records it; any other change to the steps
+/// makes the recipe unrun again.
 pub fn behavior_sha256(steps: &[Step]) -> String {
+    fn is_default(v: &Value) -> bool {
+        match v {
+            Value::Null | Value::Bool(false) => true,
+            Value::Array(a) => a.is_empty(),
+            Value::Object(o) => o.is_empty(),
+            _ => false,
+        }
+    }
     fn strip(v: &mut Value) {
         match v {
             Value::Object(map) => {
                 map.retain(|k, _| !PROSE.contains(&k.as_str()));
                 map.values_mut().for_each(strip);
+                map.retain(|_, v| !is_default(v));
             }
             Value::Array(items) => items.iter_mut().for_each(strip),
             _ => {}
@@ -223,8 +234,8 @@ pub fn behavior_sha256(steps: &[Step]) -> String {
 }
 
 /// Each recipe the printer offers, as it does now, must be one a verified run ran: a recipe
-/// whose behavior changed after its run counts as never run. One named in `awaiting_rerun` passes until the
-/// list is signed.
+/// whose behavior changed after its run counts as never run. One named in `awaiting_rerun`
+/// passes until the list is signed.
 fn lint_runs_cover_recipes(
     m: &Manifest,
     p: &Printer,

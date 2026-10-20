@@ -403,9 +403,6 @@ async fn resolve(
     mode: Mode,
 ) -> Result<Resolved, StepOutcome> {
     let (release, offered) = release::newest(ctx.env, target.channels).await?;
-    if mode != Mode::Uninstall {
-        release::require_supported(&offered)?;
-    }
     if let Some(installed) = target.installed {
         if offered <= *installed {
             return Err(StepOutcome::Complete {
@@ -413,6 +410,11 @@ async fn resolve(
                 kind: DoneKind::UpToDate,
             });
         }
+    }
+    // Only a release that would be written is held to the installer's floor: a printer already
+    // on it, or on something newer, is up to date.
+    if mode != Mode::Uninstall {
+        release::require_supported(&offered)?;
     }
     // Uninstalling needs only the installer, so a release without this platform's build still
     // serves.

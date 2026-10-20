@@ -1269,8 +1269,14 @@ fn an_unknown_channel_fails_manifest_parsing() {
 
 #[tokio::test]
 async fn a_new_install_without_a_channel_reads_the_beta_while_stable_is_older_than_1_1_0() {
-    // The stable list holds 1.0.5.
+    // The stable list holds 1.0.5; the beta list holds TAG.
     let f = Fakes::standard(&["pi"]);
+    f.fetch.add(
+        &releases_manifest_url(Channel::Stable),
+        json!({ "version": "1.0.5", "tag": "v1.0.5", "assets": {} })
+            .to_string()
+            .into_bytes(),
+    );
     let r = f.runner("root", channel_step(None), json!({}));
     install_with(&f, r).await;
     assert_eq!(
