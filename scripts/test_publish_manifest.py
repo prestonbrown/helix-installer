@@ -104,11 +104,22 @@ class Build(unittest.TestCase):
         )
         self.assertNotIn("k1_install", m["recipes"])
 
-    def test_an_empty_or_missing_image_is_dropped_and_the_text_kept(self):
+    def test_an_empty_placeholder_image_is_dropped_and_the_text_kept(self):
         m = self.build(spec(k1={"recipes": ["k1_update"], "verified": VERIFIED}))
         steps = m["recipes"]["k1_update"]
         self.assertEqual(steps[0], {"type": "user_action", "text": "Turn on root"})
         self.assertEqual(steps[1]["image"], "k1/real.png")
+
+    def test_a_missing_image_is_an_error_not_dropped(self):
+        img = images()
+        (img / "k1" / "real.png").unlink()
+        with self.assertRaises(pm.SpecError):
+            pm.build(staging(), spec(k1={"recipes": ["k1_update"], "verified": VERIFIED}), img)
+
+    def test_notes_are_allowed_and_not_published(self):
+        s = spec(k1={"recipes": ["k1_update"], "verified": VERIFIED})
+        s["notes"] = ["restores are published unverified"]
+        self.assertNotIn("notes", self.build(s))
 
     def test_staging_is_left_as_it_was(self):
         st = staging()
@@ -143,6 +154,7 @@ class Build(unittest.TestCase):
             spec(k1={"recipes": ["k1_update"]}),
             spec(sovol={"recipes": ["x"]}),
             spec(k1={"recipes": ["k1_update"], "verified": VERIFIED, "typo": 1}),
+            {"printers": {}, "typo": 1},
         ]:
             with self.subTest(bad=bad), self.assertRaises(pm.SpecError):
                 pm.build(staging(), bad, images())
@@ -153,6 +165,7 @@ class Check(unittest.TestCase):
         d = Path(tempfile.mkdtemp())
         (d / "img" / "k1").mkdir(parents=True)
         (d / "img" / "k1" / "real.png").write_bytes(b"\x89PNG")
+        (d / "img" / "k1" / "root.png").write_bytes(b"")
         (d / "staging.json").write_text(json.dumps(staging()))
         (d / "publish.json").write_text(json.dumps(spec(k1={"recipes": ["k1_update"], "verified": VERIFIED})))
         return d

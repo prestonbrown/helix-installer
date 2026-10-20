@@ -105,7 +105,7 @@ impl Rig {
             cache: tempfile::tempdir().unwrap(),
         };
         for channel in [Channel::Stable, Channel::Beta] {
-            rig.publish(channel, "1.0.5");
+            rig.publish(channel, "1.1.0");
         }
         // ZMOD restarts the printer to load its plugin list.
         rig.moonraker.restart_on_gcode("ENABLE_EXTRA_PLUGINS", 3);
@@ -364,7 +364,7 @@ async fn generic_install_asks_for_the_login_and_installs_for_the_cpu() {
     assert_eq!(
         rig.installs(),
         vec![(
-            "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.0.5.tar.gz' --progress".into(),
+            "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.1.0.tar.gz' --progress".into(),
             Some(b"raspberry".to_vec())
         )],
         "a login without passwordless sudo runs the installer through sudo -S"
@@ -411,7 +411,7 @@ async fn generic_update_on_the_voron_passes_update_and_stays_on_stable() {
         "{installs:?}"
     );
     assert!(
-        installs[0].0.contains("helixscreen-pi-v1.0.5.tar.gz"),
+        installs[0].0.contains("helixscreen-pi-v1.1.0.tar.gz"),
         "{installs:?}"
     );
     assert_eq!(
@@ -597,7 +597,7 @@ async fn k2_install_has_root_turned_on_then_installs_with_the_fixed_password() {
     }
     assert_eq!(
         rig.installs()[0].0,
-        "sh '/mnt/UDISK/install.sh' --local '/mnt/UDISK/helixscreen-k2-v1.0.5.tar.gz' --progress"
+        "sh '/mnt/UDISK/install.sh' --local '/mnt/UDISK/helixscreen-k2-v1.1.0.tar.gz' --progress"
     );
 }
 
@@ -796,6 +796,7 @@ fn k1c_update_rig(beta: &str) -> Rig {
         ..STOCK_K1
     });
     rig.installer_succeeds("k1");
+    rig.publish(Channel::Stable, "1.0.5");
     rig.publish(Channel::Beta, beta);
     rig
 }
@@ -875,7 +876,10 @@ async fn an_install_without_release_info_is_read_from_its_binarys_version_line()
 
 #[tokio::test]
 async fn a_recipe_pinned_to_stable_still_never_installs_below_the_installed_beta() {
-    let rig = k1c_update_rig("1.1.0-beta.10");
+    let rig = k1c_update_rig("1.2.0-beta.1");
+    rig.publish(Channel::Stable, "1.1.0");
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.2.0-beta.1\n", 0));
     let mut m = staging();
     for step in m.recipes.get_mut("k1_update").unwrap() {
         if let helix_installer_core::manifest::Step::HelixInstall { channel, .. } = step {
@@ -1716,7 +1720,7 @@ async fn a_stock_ad5m_gets_forgex_under_its_own_name_then_helixscreen_in_data() 
         );
         assert_eq!(
             rig.installs()[0].0,
-            "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.0.5.tar.gz' --progress"
+            "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.1.0.tar.gz' --progress"
         );
     }
 }
@@ -1982,7 +1986,7 @@ async fn a_dry_run_naming_another_platform_stops_the_install_before_the_commit()
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!(
         runs[0].0,
-        "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.0.5.tar.gz' --progress --dry-run"
+        "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.1.0.tar.gz' --progress --dry-run"
     );
 }
 
@@ -2678,32 +2682,87 @@ fn k1_stock_ota_probe() -> String {
         .expect("k1_stock reads the firmware version")
 }
 
-/// The K1's firmware version probe run against an `/etc/ota_info` holding `ota_info`.
 #[cfg(unix)]
-fn firmware_version_from(ota_info: &str) -> String {
+fn busybox() -> Option<PathBuf> {
+    std::env::var_os("PATH")?
+        .to_str()?
+        .split(':')
+        .map(|d| std::path::Path::new(d).join("busybox"))
+        .find(|p| p.is_file())
+}
+
+/// The K1's firmware version probe run against an `/etc/ota_info` holding `ota_info`, by the
+/// host's `sh` and `sed`, or with `busybox` by BusyBox's, as the K1 runs it.
+#[cfg(unix)]
+fn firmware_version_from(ota_info: &str, busybox: Option<&std::path::Path>) -> String {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("ota_info");
     std::fs::write(&file, ota_info).unwrap();
     let probe = k1_stock_ota_probe();
     assert!(probe.contains("/etc/ota_info"), "{probe}");
     let probe = probe.replace("/etc/ota_info", &file.display().to_string());
-    let out = std::process::Command::new("sh")
-        .args(["-c", &probe])
-        .output()
-        .unwrap();
+    let out = match busybox {
+        None => std::process::Command::new("sh")
+            .args(["-c", &probe])
+            .output()
+            .unwrap(),
+        Some(bb) => {
+            let bin = dir.path().join("bin");
+            std::fs::create_dir(&bin).unwrap();
+            std::os::unix::fs::symlink(bb, bin.join("sed")).unwrap();
+            let path = format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            );
+            std::process::Command::new(bb)
+                .args(["sh", "-c", &probe])
+                .env("PATH", path)
+                .output()
+                .unwrap()
+        }
+    };
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 #[cfg(unix)]
 #[test]
 fn the_k1_firmware_version_is_read_with_or_without_the_6_prefix() {
+    let bb = busybox();
+    if bb.is_none() {
+        // CI installs it on Linux, so a missing one there is a broken setup, not a skip.
+        assert!(
+            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+            "busybox is not installed on the Linux CI runner"
+        );
+    }
     // A stock K1C on 1.3.3.46 writes it without the prefix; other units write `6.1.3.3.46`.
     for ota_info in [
         "ota_version=1.3.3.46\nota_board_name=K1C\n",
         "ota_version=6.1.3.3.46\nota_board_name=K1C\n",
     ] {
-        assert_eq!(firmware_version_from(ota_info), "1.3.3.46\n", "{ota_info}");
+        assert_eq!(
+            firmware_version_from(ota_info, None),
+            "1.3.3.46\n",
+            "{ota_info}"
+        );
+        if let Some(bb) = &bb {
+            assert_eq!(
+                firmware_version_from(ota_info, Some(bb)),
+                "1.3.3.46\n",
+                "busybox: {ota_info}"
+            );
+        }
     }
+}
+
+#[test]
+fn signing_lints_the_published_list_for_signing() {
+    let wf = std::fs::read_to_string(repo().join(".github/workflows/manifest.yml")).unwrap();
+    assert!(
+        wf.contains("manifest-lint manifest/manifest.json manifest/img --signing"),
+        "the publish job must refuse a recipe awaiting its hardware run"
+    );
 }
 
 #[test]
@@ -2772,17 +2831,6 @@ fn published() -> Manifest {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// The recipes a real printer ran end to end before the list was published.
-const RUN_ON_HARDWARE: &[&str] = &[
-    "generic_update",
-    "generic_update_board",
-    "k1_update",
-    "k2_update",
-    "qidi_update",
-    "ad5m_forgex_update",
-    "ktouch_update",
-];
-
 fn refused_with(id: &Identified, printer: &str, doc: &str) {
     match id {
         Identified::Refuse {
@@ -2802,19 +2850,12 @@ fn the_published_list_passes_the_strict_lint() {
 }
 
 #[test]
-fn every_published_choice_names_a_recipe_run_on_hardware() {
+fn every_published_printer_that_installs_carries_its_hardware_runs() {
     let m = published();
     for p in m.printers.iter().filter(|p| !p.refused) {
-        assert!(p.verified.is_some(), "{}", p.id);
+        let v = p.verified.as_ref().unwrap_or_else(|| panic!("{}", p.id));
+        assert!(!v.runs.is_empty(), "{}", p.id);
         assert!(!p.recipes.is_empty(), "{}", p.id);
-        for c in &p.recipes {
-            assert!(
-                RUN_ON_HARDWARE.contains(&c.recipe.as_str()),
-                "{} offers {}",
-                p.id,
-                c.recipe
-            );
-        }
     }
 }
 
@@ -2835,21 +2876,17 @@ fn every_fleet_printer_gets_its_verified_route_or_its_refusal_from_the_published
             "cb1_voron",
             recipe("generic_klipper", helix("v1.0.0"), "generic_update_board"),
         ),
-        // Moonraker does not see HelixScreen on the K2 or the Forge-X AD5M: the update recipe
-        // finds it over SSH, or refuses.
+        // Moonraker does not always see HelixScreen on the K2, the Forge-X AD5M or a QIDI: the
+        // update recipe finds it over SSH, or refuses.
         ("k2_plus", recipe("k2", modded(), "k2_update")),
         (
             "ad5m_forgex",
             recipe("ad5m", modded(), "ad5m_forgex_update"),
         ),
+        ("qidi_box", recipe("qidi", modded(), "qidi_update")),
     ] {
         assert_eq!(identify(&m, &fleet(host)), want, "{host}");
     }
-    refused_with(
-        &identify(&m, &fleet("qidi_box")),
-        "qidi",
-        "https://helixscreen.org/guide/install-qidi/",
-    );
     refused_with(
         &identify(&m, &fleet("ad5x_forgex")),
         "ad5x_forgex",
@@ -2883,6 +2920,18 @@ fn first_installs_and_zmod_are_refused_with_their_guides_on_the_published_list()
         &identify(&m, &f),
         "generic_klipper",
         "https://helixscreen.org/guide/install-generic/",
+    );
+    // ZMOD declares [zmod_ifs] only in its AD5X configs (ad5x_generic.cfg, ad5x_display_off.cfg),
+    // so a ZMOD AD5M lists zmod and no zmod_ifs.
+    let zmod_ad5m = Facts::from([
+        ("has_moonraker".to_string(), json!(true)),
+        ("cpu_arch".to_string(), json!("armv7l")),
+        ("klipper_objects".to_string(), json!(["zmod", "mcu"])),
+    ]);
+    refused_with(
+        &identify(&m, &zmod_ad5m),
+        "ad5m",
+        "https://helixscreen.org/guide/install-ad5m/",
     );
     let zmod_ad5x = Facts::from([("flashforge_udp.model".to_string(), json!("AD5X"))]);
     refused_with(
@@ -2962,4 +3011,90 @@ async fn a_published_forgex_update_finds_helixscreen_over_ssh_or_refuses_before_
     }
     assert!(rig.installer_runs().is_empty());
     assert!(!r.state().committed);
+}
+
+const QIDI_HELIX_PROBE: &str =
+    "test -e /etc/systemd/system/helixscreen.service && echo yes || echo no";
+
+/// The fleet Q2 on mks/makerbase (sudo with its password), HelixScreen there or not.
+fn qidi_rig(helix_there: bool) -> Rig {
+    let rig = Rig::new();
+    rig.ssh.accept(ADDR, "mks", "makerbase");
+    rig.ssh.set_fallback(move |cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
+        "id -u" => out("1000\n", 0),
+        "sudo -n true" => out("", 1),
+        QIDI_HELIX_PROBE => out(if helix_there { "yes\n" } else { "no\n" }, 0),
+        _ => out("", 127),
+    });
+    rig.installer_succeeds("pi");
+    rig
+}
+
+#[tokio::test]
+async fn a_published_qidi_update_finds_helixscreen_over_ssh_or_refuses_before_any_change() {
+    let m = published();
+    let picked = identify(&m, &fleet("qidi_box"));
+
+    let rig = qidi_rig(true);
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.1.0-beta.9\n", 0));
+    let mut r = rig.runner(&m, &picked, fleet("qidi_box"));
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(rig.installs()[0].0.ends_with("--progress --update"));
+
+    let rig = qidi_rig(false);
+    let mut r = rig.runner(&m, &picked, fleet("qidi_box"));
+    let trace = drive(&mut r, next_only).await;
+    match &trace.end {
+        Event::Refused { reason, doc, .. } => {
+            assert!(reason.contains("not installed"), "{reason}");
+            assert_eq!(doc, "https://helixscreen.org/guide/install-qidi/");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(rig.installer_runs().is_empty());
+    assert!(!r.state().committed);
+}
+
+#[tokio::test]
+async fn a_stable_install_is_refused_before_any_change_until_helixscreen_1_1() {
+    let rig = Rig::new();
+    rig.publish(Channel::Stable, "1.0.5");
+    rig.ssh.accept(ADDR, "pi", "raspberry");
+    rig.ssh.set_fallback(|cmd| match cmd {
+        "pidof helix-screen" => out("1234\n", 0),
+        "id -u" => out("1000\n", 0),
+        "sudo -n true" => out("", 1),
+        _ => out("", 127),
+    });
+    rig.ssh
+        .on_command(INSTALLED_VERSION_PROBE, out("v1.0.0\n", 0));
+    rig.installer_succeeds("pi");
+    let m = published();
+    let picked = identify(&m, &fleet("pi3_mainsailos"));
+    let mut r = rig.runner(&m, &picked, fleet("pi3_mainsailos"));
+    let trace = drive(&mut r, |p, _| match p {
+        Prompt::Login { .. } => login("pi", "raspberry"),
+        other => panic!("unexpected prompt {other:?}"),
+    })
+    .await;
+    match &trace.end {
+        Event::Refused { reason, doc, .. } => {
+            assert!(reason.contains("HelixScreen 1.1 and newer"), "{reason}");
+            assert!(reason.contains("the usual way"), "{reason}");
+            assert!(reason.contains("1.0.5"), "{reason}");
+            assert_eq!(doc, "https://helixscreen.org/upgrading/");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(
+        rig.installer_runs().is_empty(),
+        "{:?}",
+        rig.installer_runs()
+    );
+    assert!(rig.ssh.uploads().is_empty());
+    assert!(!r.state().committed);
+    assert_eq!(r.state().recipe_id, "generic_update");
 }

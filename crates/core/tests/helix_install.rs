@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 const ADDR: &str = "192.168.1.50";
 const PASSWORD: &str = "s3cret-pw";
 const SUDO_PW: &str = "typed-sudo-pw";
-const TAG: &str = "v1.0.5";
+const TAG: &str = "v1.1.5";
 const TARBALL: &[u8] = b"helixscreen tarball bytes";
 const INSTALL_SH: &[u8] =
     b"#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --progress) P=1 ;;\n  esac\n  shift\ndone\necho install\n";
@@ -148,7 +148,7 @@ fn tarball_url(platform: &str) -> String {
 }
 
 const INSTALL_SH_URL: &str =
-    "https://github.com/prestonbrown/helixscreen/releases/download/v1.0.5/install.sh";
+    "https://github.com/prestonbrown/helixscreen/releases/download/v1.1.5/install.sh";
 
 impl Fakes {
     /// A releases manifest with `platforms`, each serving `TARBALL`, and a GitHub release
@@ -164,7 +164,7 @@ impl Fakes {
             fetch.add(&tarball_url(p), TARBALL.to_vec());
         }
         let release = json!({
-            "version": "1.0.5",
+            "version": "1.1.5",
             "tag": TAG,
             "notes": "notes",
             "published_at": "2026-10-01T00:00:00Z",
@@ -179,7 +179,7 @@ impl Fakes {
         let gh = json!({
             "tag_name": TAG,
             "assets": [
-                { "name": "helixscreen-pi-v1.0.5.tar.gz", "browser_download_url": "https://example.invalid/x", "digest": "sha256:00" },
+                { "name": "helixscreen-pi-v1.1.5.tar.gz", "browser_download_url": "https://example.invalid/x", "digest": "sha256:00" },
                 install_sh_asset,
             ]
         });
@@ -347,11 +347,11 @@ async fn installs_the_platform_for_the_cpu_and_reports_its_steps() {
 
     let uploads = f.ssh.uploads();
     assert!(uploads.contains(&("/tmp/install.sh".into(), INSTALL_SH.to_vec())));
-    assert!(uploads.contains(&("/tmp/helixscreen-pi-v1.0.5.tar.gz".into(), TARBALL.to_vec())));
+    assert!(uploads.contains(&("/tmp/helixscreen-pi-v1.1.5.tar.gz".into(), TARBALL.to_vec())));
     assert_eq!(
         spawned(&f),
         vec![(
-            "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.0.5.tar.gz' --progress".into(),
+            "sh '/tmp/install.sh' --local '/tmp/helixscreen-pi-v1.1.5.tar.gz' --progress".into(),
             None
         )]
     );
@@ -369,16 +369,16 @@ async fn a_fixed_platform_installs_into_the_recipe_dir_as_an_update() {
     ]);
     let steps =
         json!([{ "type": "helix_install", "platform": "ad5m", "update": true, "dir": "/data" }]);
-    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.1.4" }));
 
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
     let paths: Vec<String> = f.ssh.uploads().into_iter().map(|(p, _)| p).collect();
     assert!(paths.contains(&"/data/install.sh".into()), "{paths:?}");
-    assert!(paths.contains(&"/data/helixscreen-ad5m-v1.0.5.tar.gz".into()));
+    assert!(paths.contains(&"/data/helixscreen-ad5m-v1.1.5.tar.gz".into()));
     assert_eq!(
         spawned(&f)[0].0,
-        "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.0.5.tar.gz' --progress --update"
+        "sh '/data/install.sh' --local '/data/helixscreen-ad5m-v1.1.5.tar.gz' --progress --update"
     );
 }
 
@@ -480,14 +480,14 @@ async fn a_dry_run_uploads_runs_dry_run_and_removes_its_files() {
         (&pl(&["result", "ok"]), Some(0)),
     ]);
     let steps = json!([{ "type": "helix_install", "platform": "k1", "update": true, "dry_run": true, "dir": "/usr/data" }]);
-    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.1.4" }));
 
     let (ev, titles) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
     assert!(titles.iter().any(|t| t.contains("Checking")), "{titles:?}");
     assert_eq!(
         spawned(&f)[0].0,
-        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.0.5.tar.gz' --progress --update --dry-run"
+        "sh '/usr/data/install.sh' --local '/usr/data/helixscreen-k1-v1.1.5.tar.gz' --progress --update --dry-run"
     );
     assert!(
         f.ssh
@@ -1206,10 +1206,10 @@ async fn a_recipe_dir_with_a_space_and_a_quote_is_shell_quoted() {
         paths.contains(&"/data/my dir's/install.sh".into()),
         "{paths:?}"
     );
-    assert!(paths.contains(&"/data/my dir's/helixscreen-pi-v1.0.5.tar.gz".into()));
+    assert!(paths.contains(&"/data/my dir's/helixscreen-pi-v1.1.5.tar.gz".into()));
     assert_eq!(
         spawned(&f)[0].0,
-        r"sh '/data/my dir'\''s/install.sh' --local '/data/my dir'\''s/helixscreen-pi-v1.0.5.tar.gz' --progress"
+        r"sh '/data/my dir'\''s/install.sh' --local '/data/my dir'\''s/helixscreen-pi-v1.1.5.tar.gz' --progress"
     );
 }
 
@@ -1338,7 +1338,7 @@ fn log_removals(f: &Fakes) -> Vec<String> {
         .collect()
 }
 
-const CLEANUP: &str = "rm -f '/tmp/helixscreen-pi-v1.0.5.tar.gz' '/tmp/install.sh'";
+const CLEANUP: &str = "rm -f '/tmp/helixscreen-pi-v1.1.5.tar.gz' '/tmp/install.sh'";
 
 #[tokio::test]
 async fn an_install_sh_without_progress_support_is_refused_before_any_upload() {
@@ -1699,7 +1699,7 @@ async fn the_install_after_a_dry_run_reuses_its_upload_when_the_files_still_matc
     let s = spawned(&f);
     assert_eq!(s.len(), 2);
     assert!(
-        s[1].0.contains("'/tmp/helixscreen-pi-v1.0.5.tar.gz'"),
+        s[1].0.contains("'/tmp/helixscreen-pi-v1.1.5.tar.gz'"),
         "{s:?}"
     );
     // The dry run leaves its files for the install, which removes them once.
@@ -1835,7 +1835,7 @@ async fn the_version_read_on_the_printer_wins_over_moonrakers() {
     f.ssh.on_command(
         INSTALLED_VERSION_PROBE,
         ExecOutput {
-            stdout: "v1.0.5\n".into(),
+            stdout: "v1.1.5\n".into(),
             stderr: String::new(),
             exit: 0,
         },
@@ -1847,7 +1847,7 @@ async fn the_version_read_on_the_printer_wins_over_moonrakers() {
     assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
     assert!(f.ssh.uploads().is_empty());
     let note = r.state().done_note.clone().unwrap_or_default();
-    assert!(note.contains("1.0.5 is installed"), "{note:?}");
+    assert!(note.contains("1.1.5 is installed"), "{note:?}");
     assert_eq!(r.state().done_kind, Some(DoneKind::UpToDate));
 }
 
@@ -1867,7 +1867,7 @@ async fn moonrakers_version_serves_when_the_printer_cannot_say() {
         (&pl(&["result", "ok"]), Some(0)),
     ]);
     let steps = json!([{ "type": "helix_install", "platform": "pi", "update": true }]);
-    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.0.4" }));
+    let mut r = f.runner("root", steps, json!({ "helix_version": "v1.1.4" }));
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
     assert_eq!(spawned(&f).len(), 1);
@@ -1892,21 +1892,21 @@ fn update_step() -> Value {
 async fn with_nothing_running_the_newest_install_found_counts_not_the_first() {
     // An old standalone /opt/helixscreen sits next to the Forge-X payload, which is current.
     let f = Fakes::standard(&["pi"]);
-    probe_says(&f, "found v1.0.0\nfound v1.0.5\n");
+    probe_says(&f, "found v1.0.0\nfound v1.1.5\n");
     let mut r = f.runner("root", update_step(), json!({}));
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
     assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
     let note = r.state().done_note.clone().unwrap_or_default();
-    assert!(note.contains("1.0.5 is installed"), "{note:?}");
+    assert!(note.contains("1.1.5 is installed"), "{note:?}");
     assert_eq!(r.state().done_kind, Some(DoneKind::UpToDate));
 }
 
 #[tokio::test]
 async fn with_nothing_running_moonrakers_version_counts_when_it_is_the_highest() {
     let f = Fakes::standard(&["pi"]);
-    probe_says(&f, "found v1.0.4\n");
-    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.0.5" }));
+    probe_says(&f, "found v1.1.4\n");
+    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.1.5" }));
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
     assert!(spawned(&f).is_empty(), "{:?}", spawned(&f));
@@ -1915,15 +1915,15 @@ async fn with_nothing_running_moonrakers_version_counts_when_it_is_the_highest()
 #[tokio::test]
 async fn the_running_helixscreen_decides_over_every_other_copy_and_moonraker() {
     let f = Fakes::standard(&["pi"]);
-    probe_says(&f, "running helix-screen 1.0.4 (9ed38c74d5)\n");
+    probe_says(&f, "running helix-screen 1.1.4 (9ed38c74d5)\n");
     f.ssh.script_job(vec![
         (&pl(&["platform", "pi"]), None),
         (&pl(&["result", "ok"]), Some(0)),
     ]);
-    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.0.5" }));
+    let mut r = f.runner("root", update_step(), json!({ "helix_version": "v1.1.5" }));
     let (ev, _) = settle(&mut r).await;
     assert!(matches!(ev, Event::Done), "{ev:?}");
-    assert_eq!(spawned(&f).len(), 1, "1.0.4 runs, so 1.0.5 installs");
+    assert_eq!(spawned(&f).len(), 1, "1.1.4 runs, so 1.1.5 installs");
 }
 
 #[test]

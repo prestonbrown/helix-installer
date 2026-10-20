@@ -2,7 +2,9 @@
 
 //! Static checks on a manifest, run in CI before it is signed and published.
 
-use crate::manifest::{Cond, Manifest, Printer, RecipeChoice, Step, WaitTarget};
+use crate::cache::sha256_hex;
+use crate::manifest::{Cond, Manifest, Printer, RecipeChoice, Step, Verified, WaitTarget};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Component, Path};
@@ -20,13 +22,40 @@ impl fmt::Display for LintError {
     }
 }
 
-/// Strict lint, for the published list: every printer carries a `verified` record and no image
-/// is an empty placeholder.
+/// How much hardware evidence a manifest must carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// Recipes not yet run on hardware.
+    Staging,
+    /// Every offered recipe has a verified run at its current digest, or awaits one.
+    Published,
+    /// As published, with nothing awaiting a run.
+    Signing,
+}
+
+/// Strict lint, for the published list: every printer carries a `verified` record whose runs
+/// cover each recipe it offers as that recipe now reads (or name it as awaiting a run), and no
+/// image is an empty placeholder.
 pub fn lint(m: &Manifest, asset_root: &Path) -> Vec<LintError> {
-    lint_with(m, asset_root, false)
+    lint_at(m, asset_root, Level::Published)
+}
+
+/// The published lint, with every recipe awaiting a hardware run an error: what is signed.
+pub fn lint_for_signing(m: &Manifest, asset_root: &Path) -> Vec<LintError> {
+    lint_at(m, asset_root, Level::Signing)
 }
 
 pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec<LintError> {
+    let level = if allow_unverified {
+        Level::Staging
+    } else {
+        Level::Published
+    };
+    lint_at(m, asset_root, level)
+}
+
+fn lint_at(m: &Manifest, asset_root: &Path, level: Level) -> Vec<LintError> {
+    let allow_unverified = level == Level::Staging;
     let mut errs = Vec::new();
     let mut err = |subject: &str, message: String| {
         errs.push(LintError {
@@ -57,7 +86,7 @@ pub fn lint_with(m: &Manifest, asset_root: &Path, allow_unverified: bool) -> Vec
     }
 
     for p in &m.printers {
-        lint_printer(m, p, asset_root, allow_unverified, &mut err);
+        lint_printer(m, p, asset_root, level, &mut err);
     }
 
     for (id, steps) in &m.recipes {
@@ -78,9 +107,10 @@ fn lint_printer(
     m: &Manifest,
     p: &Printer,
     asset_root: &Path,
-    allow_unverified: bool,
+    level: Level,
     err: &mut impl FnMut(&str, String),
 ) {
+    let allow_unverified = level == Level::Staging;
     if !p.fallback.refuse {
         err(&p.id, "fallback.refuse must be true".into());
     }
@@ -125,6 +155,9 @@ fn lint_printer(
                     );
                 }
             }
+            if !allow_unverified {
+                lint_runs_cover_recipes(m, p, v, level, err);
+            }
         }
         None => {}
     }
@@ -153,6 +186,96 @@ fn lint_printer(
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Step fields that only say something to the user: a hardware run cannot tell good words from
+/// bad, so changing them does not need another run.
+const PROSE: &[&str] = &[
+    "text",
+    "message",
+    "help",
+    "reason",
+    "doc",
+    "image",
+    "password_hint",
+    "question",
+    "label",
+];
+
+/// The sha256 of what a recipe does: its steps with the user-facing words left out. A verified
+/// run records it; any other change to the steps makes the recipe unrun again.
+pub fn behavior_sha256(steps: &[Step]) -> String {
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                map.retain(|k, _| !PROSE.contains(&k.as_str()));
+                map.values_mut().for_each(strip);
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut v = serde_json::to_value(steps).unwrap_or_default();
+    strip(&mut v);
+    sha256_hex(&serde_json::to_vec(&v).unwrap_or_default())
+}
+
+/// Each recipe the printer offers, as it does now, must be one a verified run ran: a recipe
+/// whose behavior changed after its run counts as never run. One named in `awaiting_rerun` passes until the
+/// list is signed.
+fn lint_runs_cover_recipes(
+    m: &Manifest,
+    p: &Printer,
+    v: &Verified,
+    level: Level,
+    err: &mut impl FnMut(&str, String),
+) {
+    let mut seen = BTreeSet::new();
+    for id in p
+        .recipes
+        .iter()
+        .map(|c| c.recipe.as_str())
+        .filter(|id| seen.insert(*id))
+    {
+        let Some(steps) = m.recipes.get(id) else {
+            continue;
+        };
+        let digest = behavior_sha256(steps);
+        let ran = v
+            .runs
+            .iter()
+            .any(|r| r.recipe == id && r.behavior_sha256 == digest);
+        let awaiting = v.awaiting_rerun.iter().any(|a| a == id);
+        match (ran, awaiting) {
+            (true, true) => err(
+                &p.id,
+                format!("{id:?} is marked awaiting_rerun but a verified run covers it ({digest})"),
+            ),
+            (false, true) if level == Level::Signing => err(
+                &p.id,
+                format!(
+                    "{id:?} is awaiting a hardware run at {digest}, so the list cannot be signed"
+                ),
+            ),
+            (false, false) if v.runs.iter().any(|r| r.recipe == id) => err(
+                &p.id,
+                format!("{id:?} changed since its verified run: no run has its digest {digest}"),
+            ),
+            (false, false) => err(
+                &p.id,
+                format!("{id:?} has no verified run at its digest {digest}"),
+            ),
+            _ => {}
+        }
+    }
+    for a in &v.awaiting_rerun {
+        if !p.recipes.iter().any(|c| &c.recipe == a) {
+            err(
+                &p.id,
+                format!("awaiting_rerun names {a:?}, which no choice offers"),
+            );
         }
     }
 }

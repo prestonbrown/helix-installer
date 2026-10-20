@@ -9,15 +9,19 @@ Staging holds every printer and recipe. manifest/publish.json names what is publ
           "recipes": ["<recipe>", ...],        staging choices naming these are kept
           "route": {"<recipe>": "<recipe>"},   a staging choice naming the key is kept with the
                                                value as its recipe; the value must be published
-          "verified": {...}                    the printer's verified record
+          "verified": {...}                    the printer's verified record: one run per
+                                               hardware run, each with the recipe_sha256 it ran
+                                               (manifest-lint --digests), and awaiting_rerun for
+                                               offered recipes changed since
       },
       "<printer id>": {"refuse": true},        published as refused: identified, installs nothing
       "<refused staging printer>": {}          copied as it is
-  }}
+  },
+  "notes": ["..."]}                            for the people editing it; not published
 
 Every other staging choice is dropped, so identification refuses that state with the printer's
-guide. Recipes are copied from staging unchanged, except that a step image which is missing or an
-empty placeholder under manifest/img is left out (the text stays). Only recipes and artifacts a
+guide. Recipes are copied from staging unchanged, except that a step image that is still an empty
+placeholder under manifest/img is left out (the text stays); a missing image is an error. Only recipes and artifacts a
 published printer reaches are kept; printers keep staging's order.
 
   publish_manifest.py           write manifest/manifest.json
@@ -31,6 +35,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_KEYS = {"recipes", "route", "verified", "refuse"}
+TOP_KEYS = {"printers", "notes"}
 
 
 class SpecError(Exception):
@@ -38,8 +43,11 @@ class SpecError(Exception):
 
 
 def usable_image(img_root, rel):
+    """False for an empty placeholder; a missing file is an error."""
     p = img_root / rel
-    return p.is_file() and p.stat().st_size > 0
+    if not p.is_file():
+        raise SpecError(f"image {rel} is not under {img_root}")
+    return p.stat().st_size > 0
 
 
 def strip_images(steps, img_root):
@@ -113,6 +121,9 @@ def publish_printer(p, sel):
 
 def build(staging, spec, img_root):
     """The published manifest for `spec`, built from `staging` (left unchanged)."""
+    unknown = set(spec) - TOP_KEYS
+    if unknown:
+        raise SpecError(f"unknown keys {sorted(unknown)}")
     sel = spec.get("printers", {})
     known = {p["id"] for p in staging["printers"]}
     for pid in sel:

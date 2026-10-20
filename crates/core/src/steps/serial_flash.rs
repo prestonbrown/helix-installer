@@ -181,6 +181,7 @@ async fn start(
         (release::new_install_channels(ctx.env, pinned).await?, None)
     };
     let (rel, offered) = release::newest(ctx.env, &channels).await?;
+    release::require_supported(&offered)?;
     if let Some(installed) = &installed {
         if offered <= *installed {
             return Err(StepOutcome::Complete {

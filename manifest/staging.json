@@ -810,6 +810,18 @@
         "ask_if_failed": true
       },
       {
+        "type": "probe",
+        "ssh": "test -e /etc/systemd/system/helixscreen.service && echo yes || echo no",
+        "fact": "helix_installed"
+      },
+      {
+        "type": "require",
+        "fact": "helix_installed",
+        "equals": "true",
+        "reason": "HelixScreen is not installed on this printer, so there is nothing to update. The guide shows how to install it.",
+        "doc": "https://helixscreen.org/guide/install-qidi/"
+      },
+      {
         "type": "helix_install",
         "platform": "pi",
         "update": true,
@@ -854,7 +866,7 @@
     "k2_install": [
       {
         "type": "user_action",
-        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. If HelixScreen is not on this printer yet and this installer cannot install it, it stops after this step and links the K2 guide. Then press I've done this.",
         "image": "k2/root-account.png",
         "verify": {
           "tcp_port": 22,
@@ -900,7 +912,7 @@
     "k2_update": [
       {
         "type": "user_action",
-        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. Then press I've done this.",
+        "text": "Turn on root access on the printer: on its screen open Settings, then Root account information. Read the notice, wait the 30 seconds it asks for, then press OK. Leave that screen open: it shows the root password, which the installer may ask for. If HelixScreen is not on this printer yet and this installer cannot install it, it stops after this step and links the K2 guide. Then press I've done this.",
         "image": "k2/root-account.png",
         "verify": {
           "tcp_port": 22,

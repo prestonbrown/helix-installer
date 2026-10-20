@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use helix_installer_core::lint::{lint, lint_with, LintError};
-use helix_installer_core::manifest::Manifest;
+use helix_installer_core::lint::{behavior_sha256, lint, lint_for_signing, lint_with, LintError};
+use helix_installer_core::manifest::{Manifest, VerifiedRun};
 use serde_json::{json, Value};
 use std::process::Command;
 
@@ -40,9 +40,38 @@ fn assets() -> tempfile::TempDir {
     d
 }
 
+/// Parses `v`, giving each verified printer without runs one run per recipe it offers, at the
+/// recipe's current digest, so a test changes only what it is about.
+fn parse(v: Value) -> Manifest {
+    let mut m: Manifest = serde_json::from_value(v).unwrap();
+    let recipes = m.recipes.clone();
+    for p in &mut m.printers {
+        let choices: Vec<String> = p.recipes.iter().map(|c| c.recipe.clone()).collect();
+        if let Some(verified) = p.verified.as_mut().filter(|v| v.runs.is_empty()) {
+            for r in choices {
+                if verified.runs.iter().any(|run| run.recipe == r) {
+                    continue;
+                }
+                let digest = recipes
+                    .get(&r)
+                    .map(|s| behavior_sha256(s))
+                    .unwrap_or_default();
+                verified.runs.push(VerifiedRun {
+                    date: "2026-10-01".into(),
+                    printer: "Printer One".into(),
+                    firmware: "1.0".into(),
+                    helixscreen: "v1.1.0".into(),
+                    recipe: r,
+                    behavior_sha256: digest,
+                });
+            }
+        }
+    }
+    m
+}
+
 fn run(v: Value, allow_unverified: bool) -> Vec<LintError> {
-    let m: Manifest = serde_json::from_value(v).unwrap();
-    lint_with(&m, assets().path(), allow_unverified)
+    lint_with(&parse(v), assets().path(), allow_unverified)
 }
 
 fn only(v: Value, needle: &str) {
@@ -53,8 +82,7 @@ fn only(v: Value, needle: &str) {
 
 #[test]
 fn valid_manifest_is_clean() {
-    let m: Manifest = serde_json::from_value(base()).unwrap();
-    assert_eq!(lint(&m, assets().path()), vec![]);
+    assert_eq!(lint(&parse(base()), assets().path()), vec![]);
 }
 
 #[test]
@@ -212,7 +240,8 @@ fn binary_prints_errors_and_exits_nonzero() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.starts_with("fw: "), "{stdout}");
 
-    std::fs::write(&path, base().to_string()).unwrap();
+    let pinned = with_run(base(), "install", &install_digest(&base()));
+    std::fs::write(&path, pinned.to_string()).unwrap();
     let out = Command::new(bin)
         .arg(&path)
         .arg(dir.path())
@@ -716,10 +745,9 @@ fn a_release_check_is_neither_an_update_nor_a_dry_run_nor_a_commit() {
 fn a_published_image_must_not_be_an_empty_placeholder() {
     let d = assets();
     std::fs::write(d.path().join("blank.png"), b"").unwrap();
-    let m: Manifest = serde_json::from_value(install_with(
+    let m = parse(install_with(
         json!({"type": "info", "text": "t", "image": "blank.png"}),
-    ))
-    .unwrap();
+    ));
     let errs = lint_with(&m, d.path(), false);
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert!(errs[0].message.contains("blank.png"), "{errs:?}");
@@ -729,26 +757,156 @@ fn a_published_image_must_not_be_an_empty_placeholder() {
 
     let mut v = base();
     v["printers"][0]["photo"] = json!("blank.png");
-    let m: Manifest = serde_json::from_value(v).unwrap();
+    let m = parse(v);
     assert_eq!(lint_with(&m, d.path(), false).len(), 1);
+}
+
+fn install_digest(v: &Value) -> String {
+    behavior_sha256(&serde_json::from_value::<Vec<_>>(v["recipes"]["install"].clone()).unwrap())
+}
+
+fn with_run(mut v: Value, recipe: &str, digest: &str) -> Value {
+    v["printers"][0]["verified"]["runs"] = json!([{
+        "date": "2026-10-19", "printer": "K1C", "firmware": "1.3.3.46",
+        "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10", "recipe": recipe,
+        "behavior_sha256": digest
+    }]);
+    v
 }
 
 #[test]
 fn a_verified_run_names_a_recipe_the_printer_offers() {
-    let run = |recipe: &str| {
-        json!({"date": "2026-10-19", "printer": "K1C", "firmware": "1.3.3.46",
-               "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10", "recipe": recipe})
-    };
-    let mut v = base();
-    v["printers"][0]["verified"]["runs"] = json!([run("install")]);
-    let m: Manifest = serde_json::from_value(v.clone()).unwrap();
+    let v = base();
+    let digest = install_digest(&v);
+    let m = parse(with_run(v.clone(), "install", &digest));
     assert_eq!(lint(&m, assets().path()), vec![]);
     assert_eq!(
         m.printers[0].verified.as_ref().unwrap().runs[0].printer,
         "K1C"
     );
-    v["printers"][0]["verified"]["runs"] = json!([run("restore")]);
-    only(v, "\"restore\"");
+    let m = parse(with_run(v, "restore", &digest));
+    let errs = lint(&m, assets().path());
+    assert!(
+        errs.iter().any(|e| e.message.contains("\"restore\"")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn a_published_recipe_changed_since_its_verified_run_fails_the_lint() {
+    let v = base();
+    let ran = install_digest(&v);
+    let mut changed = with_run(v, "install", &ran);
+    changed["recipes"]["install"][3]["timeout_s"] = json!(60);
+    let errs = lint(&parse(changed.clone()), assets().path());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("install"), "{errs:?}");
+    assert!(
+        errs[0].message.contains(&install_digest(&changed)),
+        "{errs:?}"
+    );
+    // Staging is not held to hardware runs.
+    assert_eq!(lint_with(&parse(changed), assets().path(), true), vec![]);
+}
+
+#[test]
+fn a_printer_whose_recipe_has_no_run_at_all_fails_the_lint() {
+    let v = base();
+    let digest = install_digest(&v);
+    let mut v = with_run(v, "install", &digest);
+    v["printers"][0]["recipes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"when": {"state": "helix"}, "recipe": "restore"}));
+    let errs = lint(&parse(v), assets().path());
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("\"restore\"") && e.message.contains("no verified run")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn a_recipe_awaiting_its_rerun_passes_ci_but_blocks_signing() {
+    let v = base();
+    let ran = install_digest(&v);
+    let mut v = with_run(v, "install", &ran);
+    v["recipes"]["install"][3]["timeout_s"] = json!(60);
+    v["printers"][0]["verified"]["awaiting_rerun"] = json!(["install"]);
+    let m = parse(v.clone());
+    assert_eq!(lint(&m, assets().path()), vec![]);
+    let errs = lint_for_signing(&m, assets().path());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("awaiting"), "{errs:?}");
+
+    // A marker on a recipe whose current digest has a run is stale.
+    let mut stale = with_run(base(), "install", &ran);
+    stale["printers"][0]["verified"]["awaiting_rerun"] = json!(["install"]);
+    let errs = lint(&parse(stale), assets().path());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("awaiting"), "{errs:?}");
+}
+
+#[test]
+fn the_binary_prints_recipe_digests_and_lints_for_signing() {
+    let dir = assets();
+    let v = base();
+    let digest = install_digest(&v);
+    let mut v = with_run(v, "install", &digest);
+    v["recipes"]["install"][3]["timeout_s"] = json!(60);
+    v["printers"][0]["verified"]["awaiting_rerun"] = json!(["install"]);
+    let path = dir.path().join("m.json");
+    std::fs::write(&path, v.to_string()).unwrap();
+    let bin = env!("CARGO_BIN_EXE_manifest-lint");
+
+    let out = Command::new(bin)
+        .arg("--digests")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == format!("install {}", install_digest(&v))),
+        "{stdout}"
+    );
+
+    let lint_out = |extra: &[&str]| {
+        Command::new(bin)
+            .arg(&path)
+            .arg(dir.path())
+            .args(extra)
+            .output()
+            .unwrap()
+            .status
+            .code()
+    };
+    assert_eq!(lint_out(&[]), Some(0));
+    assert_eq!(lint_out(&["--signing"]), Some(1));
+}
+
+#[test]
+fn rewording_a_step_keeps_its_verified_run_but_changing_what_it_does_does_not() {
+    let v = base();
+    let ran = install_digest(&v);
+    let mut reworded = with_run(v.clone(), "install", &ran);
+    reworded["recipes"]["install"][0]["text"] = json!("new words");
+    reworded["recipes"]["install"][3]["message"] = json!("new message");
+    reworded["recipes"]["install"][3]["help"] = json!("https://example.org/other-help/");
+    assert_eq!(install_digest(&reworded), ran);
+    assert_eq!(lint(&parse(reworded), assets().path()), vec![]);
+
+    for (step, key, value) in [
+        (1, "artifact", json!("fw2")),
+        (2, "platform", json!("arm64")),
+        (3, "target", json!("klipper_ready")),
+    ] {
+        let mut changed = v.clone();
+        changed["recipes"]["install"][step][key] = value;
+        assert_ne!(install_digest(&changed), ran, "{key}");
+    }
 }
 
 #[test]

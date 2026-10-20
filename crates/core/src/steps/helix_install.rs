@@ -403,6 +403,9 @@ async fn resolve(
     mode: Mode,
 ) -> Result<Resolved, StepOutcome> {
     let (release, offered) = release::newest(ctx.env, target.channels).await?;
+    if mode != Mode::Uninstall {
+        release::require_supported(&offered)?;
+    }
     if let Some(installed) = target.installed {
         if offered <= *installed {
             return Err(StepOutcome::Complete {

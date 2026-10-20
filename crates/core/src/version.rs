@@ -165,6 +165,14 @@ impl ReleaseVersion {
     pub fn is_prerelease(&self) -> bool {
         !self.pre.is_empty()
     }
+
+    /// Whether this release belongs to the `major.minor` series or a later one, its
+    /// prereleases included.
+    pub fn series_at_least(&self, major: u32, minor: u32) -> bool {
+        let c = &self.core.0;
+        let at = |i: usize| c.get(i).copied().unwrap_or(0);
+        (at(0), at(1)) >= (major, minor)
+    }
 }
 
 impl Ord for ReleaseVersion {

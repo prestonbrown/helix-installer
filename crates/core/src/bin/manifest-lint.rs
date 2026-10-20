@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `manifest-lint <manifest.json> <asset_root> [--allow-unverified]`: checks an unsigned manifest.
+//! `manifest-lint <manifest.json> <asset_root> [--allow-unverified | --signing]`: checks an
+//! unsigned manifest; `--signing` also refuses a recipe still awaiting its hardware run.
+//! `manifest-lint --digests <manifest.json>`: prints each recipe's id and the behavior digest a
+//! verified run records for it.
 //! `manifest-lint --verify <manifest.json> --sig <file> --pubkey <file or key>`: checks a
 //! signature the way the app does, so a signature the app would refuse never gets published.
 
-use helix_installer_core::lint::lint_with;
+use helix_installer_core::lint::{behavior_sha256, lint_for_signing, lint_with};
 use helix_installer_core::manifest::Manifest;
 use helix_installer_core::manifest_sig::verify_signature;
 use std::path::Path;
@@ -51,39 +54,60 @@ fn verify_mode(args: &[String]) -> ExitCode {
     }
 }
 
+fn read_manifest(path: &str) -> Result<Manifest, ExitCode> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        eprintln!("{path}: {e}");
+        ExitCode::from(2)
+    })?;
+    serde_json::from_slice(&bytes).map_err(|e| {
+        eprintln!("{path}: {e}");
+        ExitCode::from(2)
+    })
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--verify") {
         return verify_mode(&args);
     }
+    if let Some(path) = flag_value(&args, "--digests") {
+        return match read_manifest(path) {
+            Ok(m) => {
+                for (id, steps) in &m.recipes {
+                    println!("{id} {}", behavior_sha256(steps));
+                }
+                ExitCode::SUCCESS
+            }
+            Err(c) => c,
+        };
+    }
     let mut allow_unverified = false;
+    let mut signing = false;
     let mut paths = Vec::new();
-    for arg in std::env::args().skip(1) {
-        if arg == "--allow-unverified" {
-            allow_unverified = true;
-        } else {
-            paths.push(arg);
+    for arg in args {
+        match arg.as_str() {
+            "--allow-unverified" => allow_unverified = true,
+            "--signing" => signing = true,
+            _ => paths.push(arg),
         }
     }
-    let [manifest_path, asset_root] = paths.as_slice() else {
-        eprintln!("usage: manifest-lint <manifest.json> <asset_root> [--allow-unverified]");
+    let ([manifest_path, asset_root], false) = (paths.as_slice(), allow_unverified && signing)
+    else {
+        eprintln!(
+            "usage: manifest-lint <manifest.json> <asset_root> [--allow-unverified | --signing]"
+        );
         return ExitCode::from(2);
     };
-    let bytes = match std::fs::read(manifest_path) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("{manifest_path}: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let manifest: Manifest = match serde_json::from_slice(&bytes) {
+    let manifest = match read_manifest(manifest_path) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("{manifest_path}: {e}");
-            return ExitCode::from(2);
-        }
+        Err(c) => return c,
     };
-    let errors = lint_with(&manifest, Path::new(asset_root), allow_unverified);
+    let root = Path::new(asset_root);
+    let errors = if signing {
+        lint_for_signing(&manifest, root)
+    } else {
+        lint_with(&manifest, root, allow_unverified)
+    };
     for e in &errors {
         println!("{e}");
     }

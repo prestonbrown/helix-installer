@@ -904,3 +904,21 @@ async fn the_published_list_refuses_a_k_touch_on_btt_firmware_without_writing() 
     assert_eq!(rig.serial.erases(), 0);
     assert!(!r.state().committed);
 }
+
+#[tokio::test]
+async fn a_k_touch_offered_a_release_older_than_1_1_is_refused_without_writing() {
+    let rig = Rig::new();
+    rig.running("v1.0.4");
+    rig.publish("v1.0.5", &release_zip("v1.0.5"), None);
+    let mut r = published_runner(&rig);
+    let t = drive(&mut r).await;
+    match &t.end {
+        Event::Refused { reason, doc, .. } => {
+            assert!(reason.contains("HelixScreen 1.1 and newer"), "{reason}");
+            assert_eq!(doc, "https://helixscreen.org/upgrading/");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(rig.serial.writes().is_empty());
+    assert!(!r.state().committed);
+}

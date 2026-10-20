@@ -15,28 +15,32 @@
             "printer": "Raspberry Pi 3 Model B, password login and sudo password",
             "firmware": "MainsailOS (Debian 13 trixie)",
             "helixscreen": "v1.0.0 -> v1.1.0-beta.10",
-            "recipe": "generic_update"
+            "recipe": "generic_update",
+            "behavior_sha256": "7a2abb100b497048416f461d03769a4855cf4571a39a9ffbe5d51b2cf2271ca4"
           },
           {
             "date": "2026-10-19",
             "printer": "Raspberry Pi 5, key login, passwordless sudo",
             "firmware": "not recorded",
             "helixscreen": "v1.1.0-beta.10 reinstalled (Moonraker reported v1.0.0)",
-            "recipe": "generic_update"
+            "recipe": "generic_update",
+            "behavior_sha256": "c40c3eef9cd956a716523e4ee470dbb3a1af309ec5e151c81493b56ad7a1f6ff"
           },
           {
             "date": "2026-10-19",
             "printer": "Voron V0 on a Raspberry Pi 4, key login",
             "firmware": "Kalico",
             "helixscreen": "v1.1.0-beta.10, up to date, nothing written",
-            "recipe": "generic_update"
+            "recipe": "generic_update",
+            "behavior_sha256": "c40c3eef9cd956a716523e4ee470dbb3a1af309ec5e151c81493b56ad7a1f6ff"
           },
           {
             "date": "2026-10-20",
             "printer": "Voron 2.4 on a BTT CB1, key login",
             "firmware": "Armbian 26.8.1 trixie",
             "helixscreen": "dev build reporting v1.0.0 -> v1.1.0-beta.10",
-            "recipe": "generic_update_board"
+            "recipe": "generic_update_board",
+            "behavior_sha256": "2f88ef03da68449754d7dc60515b95d39e7967bf30ccf7efae7139464602707b"
           }
         ]
       }
@@ -55,9 +59,16 @@
             "printer": "QIDI Q2, mks login and sudo password",
             "firmware": "QD_Q2_01.01.02.01",
             "helixscreen": "unreadable over Moonraker -> v1.1.0-beta.10",
-            "recipe": "qidi_update"
+            "recipe": "qidi_update",
+            "behavior_sha256": "269e8001e925740fa7289537a632d462aad7c1cb475344adf384b0f2051db9fe"
           }
+        ],
+        "awaiting_rerun": [
+          "qidi_update"
         ]
+      },
+      "route": {
+        "qidi_install": "qidi_update"
       }
     },
     "k2": {
@@ -77,8 +88,12 @@
             "printer": "Creality K2 Plus, root login",
             "firmware": "Creality stock (OpenWrt 21.02), version not recorded",
             "helixscreen": "dev build not seen by Moonraker -> v1.1.0-beta.10",
-            "recipe": "k2_update"
+            "recipe": "k2_update",
+            "behavior_sha256": "e9e8d06f9b1f95a10629aba1719604bbf741a632701c6a9db48ec320c8cf3f49"
           }
+        ],
+        "awaiting_rerun": [
+          "k2_update"
         ]
       }
     },
@@ -96,8 +111,12 @@
             "printer": "Creality K1C, root login",
             "firmware": "1.3.3.46 with Guilouz Helper Script",
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10",
-            "recipe": "k1_update"
+            "recipe": "k1_update",
+            "behavior_sha256": "c135b391b09ee46857083d0e496cb6f14026deab4445ac34244186bd38b07956"
           }
+        ],
+        "awaiting_rerun": [
+          "k1_update"
         ]
       }
     },
@@ -119,11 +138,15 @@
         "runs": [
           {
             "date": "2026-10-19",
-            "printer": "FlashForge Adventurer 5M, root login",
+            "printer": "FlashForge Adventurer 5M Pro (stock firmware 3.1.5 under Forge-X), root login",
             "firmware": "Forge-X 1.4.2",
             "helixscreen": "v1.1.0-beta.10 reinstalled, then the reboot that starts it",
-            "recipe": "ad5m_forgex_update"
+            "recipe": "ad5m_forgex_update",
+            "behavior_sha256": "7b9588051e49b7df0c3f9eec8bc6cc0d8f4fffa41e5d7351e942a09eeaa7d10f"
           }
+        ],
+        "awaiting_rerun": [
+          "ad5m_forgex_update"
         ]
       }
     },
@@ -151,10 +174,19 @@
             "printer": "BTT K-Touch on USB",
             "firmware": "HelixScreen ESP32-S3 image",
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10, no erase, WiFi and settings kept",
-            "recipe": "ktouch_update"
+            "recipe": "ktouch_update",
+            "behavior_sha256": "3033f656ed23eb87fe2c1cb93dbbd0669c6b53d2bdb3f4db7ed4cd5e26cc0475"
           }
+        ],
+        "awaiting_rerun": [
+          "ktouch_update"
         ]
       }
     }
-  }
+  },
+  "notes": [
+    "Each verified run records the behavior_sha256 (manifest-lint --digests) of the recipe as it ran, at the installer commit the run used. A recipe whose behavior changed since is listed in awaiting_rerun: CI lints it, the signing lint refuses it.",
+    "Restore recipes are published unverified: the lint requires one per printer, and no app path reaches them yet.",
+    "An AD5M Pro identifies as ad5m: the identify rules and the update recipe are the same, so ad5m_pro is not published."
+  ]
 }

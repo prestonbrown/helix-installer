@@ -129,6 +129,25 @@ pub(crate) fn up_to_date_note(
     format!("{installed} is installed, and the newest {channels} release is {offered}")
 }
 
+/// The guide to updating HelixScreen without this installer.
+pub const UPGRADING_GUIDE: &str = "https://helixscreen.org/upgrading/";
+
+/// The installer drives `install.sh` and the K-Touch release zips as 1.1 ships them, so an
+/// older release is refused before anything is downloaded or sent to the printer.
+pub(crate) fn require_supported(offered: &ReleaseVersion) -> Result<(), StepOutcome> {
+    if offered.series_at_least(1, 1) {
+        return Ok(());
+    }
+    Err(StepOutcome::Refused {
+        doc: UPGRADING_GUIDE.into(),
+        reason: format!(
+            "The easy installer supports HelixScreen 1.1 and newer, and the newest release it \
+             would install here is {offered}. Update HelixScreen the usual way for now; the \
+             guide shows how."
+        ),
+    })
+}
+
 /// The newest release of `channels`, the first winning a tie.
 pub(crate) async fn newest(
     env: &Env,

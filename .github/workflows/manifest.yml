@@ -113,8 +113,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build manifest-lint
         run: cargo build --release -p helix_installer_core --bin manifest-lint
-      - name: Lint the manifest
-        run: target/release/manifest-lint manifest/manifest.json manifest/img
+      # Signing also refuses a recipe still awaiting its hardware run (manifest/publish.json).
+      - name: Lint the manifest for signing
+        run: target/release/manifest-lint manifest/manifest.json manifest/img --signing
       - name: Install minisign
         run: |
           sudo apt-get update

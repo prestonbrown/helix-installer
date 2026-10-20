@@ -274,6 +274,10 @@ pub struct Verified {
     /// The runs on real printers this record stands for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<VerifiedRun>,
+    /// Offered recipes whose current text no run covers yet, each waiting for a hardware run.
+    /// The list can be linted with them, but not signed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaiting_rerun: Vec<String>,
 }
 
 /// One run of a recipe on a real printer, recorded when the printer was published.
@@ -288,6 +292,9 @@ pub struct VerifiedRun {
     /// The HelixScreen version before and after the run.
     pub helixscreen: String,
     pub recipe: String,
+    /// `lint::behavior_sha256` of the recipe as it ran, so a later change to what it does
+    /// shows as unrun.
+    pub behavior_sha256: String,
 }
 
 /// Something the user typed that must never be shown or kept: it deserializes from a plain

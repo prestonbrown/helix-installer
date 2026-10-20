@@ -87,7 +87,11 @@ Any step that changes the printer needs a `commits: true` step at or before it, 
 cargo build --release -p helix_installer_core --bin manifest-lint
 target/release/manifest-lint manifest/manifest.json manifest/img
 target/release/manifest-lint manifest/staging.json manifest/img --allow-unverified
+target/release/manifest-lint manifest/manifest.json manifest/img --signing   # what the publish job runs
+target/release/manifest-lint --digests manifest/manifest.json               # each recipe's behavior digest
 ```
+
+On the published list every recipe a printer offers needs a verified run that recorded its `behavior_sha256`: the digest of its steps with the user-facing words (`text`, `message`, `help`, `reason`, `doc`, `image`, ...) left out. Rewording a step keeps the run; any change to what a recipe does makes it unrun again. Until the new hardware run is recorded, name the recipe in the printer's `awaiting_rerun`: CI's lint passes, and `--signing` refuses it, so the list is not published.
 
 ## Adding a printer
 
@@ -96,7 +100,7 @@ target/release/manifest-lint manifest/staging.json manifest/img --allow-unverifi
 3. Write the recipe steps. Take every command, path and version from the vendor's own instructions or the printer, and keep `ssh_run` commands idempotent. Put a `require` before anything destructive, and `commits: true` on the first step that cannot be undone.
 4. Add tests first: an identification test in `tests/identify.rs` for the new fixture, and a run in `tests/recipes.rs` (the fakes need the printer's command answers). Run `manifest-lint` on `staging.json`.
 5. Write or update the user guide in the main repository (`docs/user/guide/`), and list the page in the website's sync script and sidebar. Every help link must exist, see below.
-6. Run the recipe on the real printer, then add it to `manifest/publish.json` with a `verified` run and run `scripts/publish_manifest.py`. After any later change to staging, run it again and commit both files.
+6. Run the recipe on the real printer from the published list's recipe, then add a `verified` run to `manifest/publish.json` with the recipe's digest from `manifest-lint --digests`, drop it from `awaiting_rerun`, and run `scripts/publish_manifest.py`. After any later change to staging, run it again and commit both files.
 
 ## Help links
 
