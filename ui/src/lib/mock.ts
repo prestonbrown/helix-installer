@@ -136,6 +136,16 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     },
     run: run({ printer_name: "BTT K-Touch", address: "/dev/ttyUSB0", step: 0, total_steps: 7, step_kind: "probe" }),
   },
+  warn: {
+    event: {
+      event: "need_input",
+      prompt: "confirm",
+      text: "Firmware 3.1.5 can be missing the printer's configuration files: FlashForge's own 3.1.5 image does not include them, so a printer that was reset or wiped and then given that image has none, and Forge-X will not work on it. If this printer prints normally now, it has them and you can continue. If you are not sure, stop and flash FlashForge's Factory image first, then run the installer again.",
+      button: "Continue anyway",
+      doc: "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware",
+    },
+    run: run({ printer_name: "FlashForge Adventurer 5M", address: "", step: 3, total_steps: 17, step_kind: "require" }),
+  },
   info: {
     event: {
       event: "need_input",

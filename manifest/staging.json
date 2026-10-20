@@ -1467,9 +1467,17 @@
       {
         "type": "require",
         "fact": "stock_version",
-        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
-        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
+        "range": ">=2.6.5 <5.2",
+        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. The AD5M guide explains how to get the printer onto one of those versions.",
         "doc": "https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "require",
+        "fact": "stock_version",
+        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
+        "warn": true,
+        "reason": "Firmware 3.1.5 can be missing the printer's configuration files: FlashForge's own 3.1.5 image does not include them, so a printer that was reset or wiped and then given that image has none, and Forge-X will not work on it. If this printer prints normally now, it has them and you can continue. If you are not sure, stop and flash FlashForge's Factory image first, then run the installer again.",
+        "doc": "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware"
       },
       {
         "type": "download",
@@ -1583,9 +1591,17 @@
       {
         "type": "require",
         "fact": "stock_version",
-        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
-        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. Firmware 3.1.5 first needs FlashForge's Factory image, which this installer does not write. The AD5M guide explains both.",
+        "range": ">=2.6.5 <5.2",
+        "reason": "Forge-X installs over stock firmware 2.6.5 to 5.1.x. The AD5M guide explains how to get the printer onto one of those versions.",
         "doc": "https://helixscreen.org/guide/install-ad5m/"
+      },
+      {
+        "type": "require",
+        "fact": "stock_version",
+        "range": ">=2.6.5 <3.1.5 || >=3.1.6 <5.2",
+        "warn": true,
+        "reason": "Firmware 3.1.5 can be missing the printer's configuration files: FlashForge's own 3.1.5 image does not include them, so a printer that was reset or wiped and then given that image has none, and Forge-X will not work on it. If this printer prints normally now, it has them and you can continue. If you are not sure, stop and flash FlashForge's Factory image first, then run the installer again.",
+        "doc": "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware"
       },
       {
         "type": "download",

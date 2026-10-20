@@ -486,6 +486,10 @@ pub enum Step {
         #[serde(default)]
         reason: Option<String>,
         doc: String,
+        /// A fact that does not fit warns instead of refusing: the user reads `reason`, with
+        /// `doc`, and continues or stops.
+        #[serde(default)]
+        warn: bool,
         #[serde(default)]
         commits: bool,
     },

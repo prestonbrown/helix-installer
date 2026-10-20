@@ -15,7 +15,7 @@ From the repository root: the CLI finds `crates/app` and runs the UI's own scrip
 
 The printer list is a signed manifest. Until one is published, point the app at one with `HELIX_INSTALLER_MANIFEST` (a URL or file path; its signature sits beside it as `<location>.minisig`) and `HELIX_INSTALLER_PUBKEY` (the minisign public key, or a path to the `.pub` file; honored only by debug builds such as `cargo tauri dev`). Without a list that verifies, the app shows "Can't load the printer list". `HELIX_INSTALLER_CHANNEL=stable|beta` makes every `helix_install` step read that HelixScreen release channel instead of the recipe's.
 
-To see the interface without the Rust side, `npm run dev:mock` in `ui/` serves it against a mock of every command; `?screen=info` (or `user_action`, `ask`, `login`, `drive`, `drive_empty`, `progress`, `done`, `refused`, `failed`, `recovery`, `resume`, `no_list`) picks what an install shows after the first printer's button. `node scripts/shots.mjs <dir>` (in `ui/`) captures every screen headless, light and dark, at 1280x800 and 1024x640.
+To see the interface without the Rust side, `npm run dev:mock` in `ui/` serves it against a mock of every command; `?screen=info` (or `user_action`, `ask`, `confirm`, `warn`, `login`, `drive`, `drive_empty`, `progress`, `done`, `refused`, `failed`, `recovery`, `resume`, `no_list`) picks what an install shows after the first printer's button. `node scripts/shots.mjs <dir>` (in `ui/`) captures every screen headless, light and dark, at 1280x800 and 1024x640.
 
 `e2e/run-xvfb.sh` drives a debug build (`cargo tauri build --debug --no-bundle`) through one update run on a real printer, on a private Xvfb display, over WebDriver: it needs `cargo install tauri-driver` and `WebKitWebDriver` (the `webkit2gtk-driver` package). The variables it reads are listed at the top of `e2e/run-update.mjs`; the password is read from the variable `E2E_PW_VAR` names and never printed. It stops at any screen it does not know how to answer, so it never agrees to a change on the printer's behalf. It is not part of CI.
 
@@ -73,7 +73,7 @@ A manifest has:
 | `info`, `user_action` | Shows text (and a picture); `user_action` can `verify` with a probe before Next |
 | `ask` | Asks the user a multiple-choice question and stores the answer as a fact |
 | `probe` | Reads a fact over Moonraker, SSH, a TCP port or a serial port |
-| `require` | Stops with a `reason` and a help `doc` unless a fact equals a value or is in a version range |
+| `require` | Stops with a `reason` and a help `doc` unless a fact equals a value or is in a version range; with `warn: true` it shows them instead and the user continues or stops |
 | `download`, `write_stick` | Fetches artifacts, then writes them to a FAT32 removable drive (never formats) |
 | `wait_for` | Waits for Moonraker, Klipper, an SSH login, a restart, or the HelixScreen service |
 | `ssh_login` | Tries each listed login, then asks the user; keys from the agent and `~/.ssh` are offered too |

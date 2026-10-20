@@ -144,6 +144,7 @@
       {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
       <div class="actions">
         <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>{ev.button}</button>
+        {#if ev.doc}<button onclick={() => openGuide(ev.doc ?? "")}>Open the guide</button>{/if}
         {@render stopLink()}
       </div>
     </section>

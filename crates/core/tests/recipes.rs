@@ -1215,7 +1215,9 @@ fn asked_versions(recipe_id: &str) -> (Vec<String>, helix_installer_core::versio
     let range = steps
         .iter()
         .find_map(|s| match s {
-            helix_installer_core::manifest::Step::Require { range, .. } => range.clone(),
+            helix_installer_core::manifest::Step::Require {
+                range, warn: false, ..
+            } => range.clone(),
             _ => None,
         })
         .unwrap();
@@ -1241,17 +1243,17 @@ fn the_ad5x_window_is_zmods_list_and_nothing_between() {
 }
 
 #[test]
-fn the_ad5m_window_is_forgexs_minus_the_factory_image_version() {
+fn the_ad5m_window_is_forgexs_own() {
     use helix_installer_core::version::FwVersion;
     for recipe_id in ["ad5m_forgex", "ad5m_pro_forgex"] {
         let (choices, range) = asked_versions(recipe_id);
         let ok = |v: &str| range.matches(&FwVersion::parse(v).unwrap());
         for v in [
-            "2.6.5", "2.7.8", "3.1.3", "3.1.4", "3.1.6", "3.2.3", "5.0.3", "5.1.7",
+            "2.6.5", "2.7.8", "3.1.3", "3.1.4", "3.1.5", "3.1.6", "3.2.3", "5.0.3", "5.1.7",
         ] {
             assert!(ok(v), "{v}");
         }
-        for v in ["2.6.4", "3.1.5", "5.2", "5.2.1", "6.0"] {
+        for v in ["2.6.4", "5.2", "5.2.1", "6.0"] {
             assert!(!ok(v), "{v}");
         }
         assert!(
@@ -1596,7 +1598,7 @@ async fn a_stock_ad5m_gets_forgex_under_its_own_name_then_helixscreen_in_data() 
 
 #[tokio::test]
 async fn an_ad5m_on_a_firmware_forgex_cannot_take_is_refused_before_the_stick() {
-    for version in ["2.6.4", "3.1.5", "5.2"] {
+    for version in ["2.6.4", "5.2"] {
         let rig = forgex_rig();
         let m = with_test_firmware(&rig, "forgex_1.4.1");
         let picked = identify_as(&m, "ad5m", &Facts::new());
@@ -1613,6 +1615,87 @@ async fn an_ad5m_on_a_firmware_forgex_cannot_take_is_refused_before_the_stick() 
             .file("usb1", "Adventurer5M-ForgeX-1.4.1.tgz")
             .is_none());
     }
+}
+
+const FACTORY_IMAGE_DOC: &str =
+    "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware";
+
+/// A stock AD5M on firmware 3.1.5, answered with `at_warning` at the config-files warning.
+async fn forgex_on_3_1_5(printer: &str, at_warning: Input) -> (Rig, Trace, Vec<Prompt>) {
+    let rig = forgex_rig();
+    let m = with_test_firmware(&rig, "forgex_1.4.1");
+    let picked = identify_as(&m, printer, &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+    let mut warnings = Vec::new();
+    let mut answer = flash_answers(&rig, "3.1.5", forgex_objects());
+    let trace = drive(&mut r, |p, n| match p {
+        Prompt::Confirm { .. } => {
+            warnings.push(p.clone());
+            at_warning.clone()
+        }
+        other => answer(other, n),
+    })
+    .await;
+    drop(answer);
+    (rig, trace, warnings)
+}
+
+#[tokio::test]
+async fn an_ad5m_on_3_1_5_is_warned_about_its_config_files_and_may_go_on() {
+    for (printer, stick_name) in [
+        ("ad5m", "Adventurer5M-ForgeX-1.4.1.tgz"),
+        ("ad5m_pro", "Adventurer5MPro-ForgeX-1.4.1.tgz"),
+    ] {
+        let (rig, trace, warnings) = forgex_on_3_1_5(printer, Input::Next).await;
+        assert!(trace.done(), "{printer}: {:?}", trace.end);
+        match &warnings[..] {
+            [Prompt::Confirm { text, doc, .. }] => {
+                assert!(text.contains("Factory"), "{text}");
+                assert!(text.contains("prints normally"), "{text}");
+                assert_eq!(doc.as_deref(), Some(FACTORY_IMAGE_DOC));
+            }
+            other => panic!("{printer}: one warning expected, got {other:?}"),
+        }
+        assert_eq!(
+            rig.drives.file("usb1", stick_name).as_deref(),
+            Some(FIRMWARE),
+            "{printer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_ad5m_on_other_supported_firmware_gets_no_warning() {
+    for version in ["2.6.5", "3.1.6"] {
+        let rig = forgex_rig();
+        let m = with_test_firmware(&rig, "forgex_1.4.1");
+        let picked = identify_as(&m, "ad5m", &Facts::new());
+        let mut r = rig.runner(&m, &picked, Facts::new());
+        // flash_answers panics on any prompt it does not expect, a warning included.
+        let trace = drive(&mut r, flash_answers(&rig, version, forgex_objects())).await;
+        assert!(trace.done(), "{version}: {:?}", trace.end);
+    }
+}
+
+#[tokio::test]
+async fn stopping_at_the_3_1_5_warning_writes_nothing() {
+    let (rig, trace, warnings) = forgex_on_3_1_5("ad5m", Input::Cancel).await;
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        matches!(
+            trace.end,
+            Event::Refused {
+                cancelled: true,
+                ..
+            }
+        ),
+        "{:?}",
+        trace.end
+    );
+    assert!(rig
+        .drives
+        .file("usb1", "Adventurer5M-ForgeX-1.4.1.tgz")
+        .is_none());
 }
 
 #[tokio::test]

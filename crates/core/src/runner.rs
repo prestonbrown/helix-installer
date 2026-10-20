@@ -29,10 +29,12 @@ pub enum Prompt {
         image: Option<String>,
     },
     /// The installer is about to do what `text` says; `button` (answered with `Input::Next`) lets
-    /// it go ahead.
+    /// it go ahead. `doc` is a page that explains the choice, when there is one.
     Confirm {
         text: String,
         button: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        doc: Option<String>,
     },
     Ask {
         question: String,

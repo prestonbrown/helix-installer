@@ -235,7 +235,7 @@ async fn a_first_install_writes_only_the_flash_args_parts_then_points_at_the_set
     assert_eq!(rig.serial.read_back(PORT, CFG, 13), vec![0xff; 13]);
     // The user was told before anything was opened, then before the erase.
     match t.prompts.first() {
-        Some(Prompt::Confirm { text, button }) => {
+        Some(Prompt::Confirm { text, button, .. }) => {
             assert!(text.contains(PORT), "{text}");
             assert_eq!(button, "Continue");
         }

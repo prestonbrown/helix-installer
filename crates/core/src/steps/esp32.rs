@@ -502,6 +502,7 @@ pub(crate) fn confirm_open(ctx: &StepCtx<'_>, port: &str) -> StepOutcome {
              restarts it. If {port} is some other device, unplug it or stop here."
         ),
         button: "Continue".into(),
+        doc: None,
     })
 }
 

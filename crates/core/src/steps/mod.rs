@@ -472,14 +472,19 @@ pub(crate) async fn run_builtin(
             equals,
             reason,
             doc,
+            warn,
             ..
         } => require::run(
             ctx,
-            fact,
-            range.as_ref(),
-            equals.as_deref(),
-            reason.as_deref(),
-            doc,
+            &require::Spec {
+                fact,
+                range: range.as_ref(),
+                equals: equals.as_deref(),
+                reason: reason.as_deref(),
+                doc,
+                warn: *warn,
+            },
+            input,
         ),
         Step::Download { artifact, .. } => download::run(ctx, artifact).await,
         Step::WaitFor {
