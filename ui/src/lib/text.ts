@@ -120,3 +120,9 @@ export function formatBytes(n: number): string {
   }
   return i === 0 ? `${v} ${units[0]}` : `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
+
+/** The heading of a confirm: a caution the user may continue past has one, a routine confirm
+ * has none. */
+export function confirmHeading(warn: boolean | undefined): string | null {
+  return warn ? "Check this before you continue" : null;
+}

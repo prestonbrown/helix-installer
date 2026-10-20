@@ -9,7 +9,7 @@
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
   import { signInInput, sudoInput } from "../lib/login";
-  import { finishScreen, formatBytes, isUrl, keepPowerText, sentence, stepLabel } from "../lib/text";
+  import { confirmHeading, finishScreen, formatBytes, isUrl, keepPowerText, sentence, stepLabel } from "../lib/text";
   import { nameLines } from "../lib/candidates";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
@@ -140,8 +140,16 @@
       </div>
     </section>
   {:else if ev.event === "need_input" && ev.prompt === "confirm"}
+    {@const heading = confirmHeading(ev.warn)}
     <section class="card body">
-      {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
+      {#if heading}
+        <h1>{heading}</h1>
+        <div class="notice warn" role="alert">
+          {#each paragraphs(ev.text) as p}<p>{p}</p>{/each}
+        </div>
+      {:else}
+        {#each paragraphs(ev.text) as p}<p class="lead">{p}</p>{/each}
+      {/if}
       <div class="actions sticky">
         <button class="primary" disabled={busy} onclick={() => send({ input: "next" })}>{ev.button}</button>
         {#if ev.doc}<button onclick={() => openGuide(ev.doc ?? "")}>Open the guide</button>{/if}

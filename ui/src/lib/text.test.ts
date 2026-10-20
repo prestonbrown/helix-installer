@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { finishScreen, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
+import { confirmHeading, finishScreen, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
 
 describe("a K-Touch flashed over USB", () => {
   it("names the step", () => {
@@ -73,5 +73,15 @@ describe("the finish screen of an update", () => {
   it("says installed only for a first install", () => {
     expect(finishScreen(null, null, "Creality K1", null).heading).toBe("HelixScreen is installed");
     expect(finishScreen(null, null, "Creality K1", "v1.0.5").heading).toBe("HelixScreen updated to v1.0.5");
+  });
+});
+
+describe("a confirm", () => {
+  it("that warns opens with a caution heading", () => {
+    expect(confirmHeading(true)).toBe("Check this before you continue");
+  });
+  it("that is routine has no heading", () => {
+    expect(confirmHeading(false)).toBeNull();
+    expect(confirmHeading(undefined)).toBeNull();
   });
 });

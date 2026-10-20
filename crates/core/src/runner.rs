@@ -35,6 +35,9 @@ pub enum Prompt {
         button: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         doc: Option<String>,
+        /// A caution the user may continue past (a `require` with `warn`), not a routine step.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        warn: bool,
     },
     Ask {
         question: String,

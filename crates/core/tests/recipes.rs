@@ -1778,7 +1778,10 @@ async fn an_ad5m_on_3_1_5_is_warned_about_its_config_files_and_may_go_on() {
         let (rig, trace, warnings) = forgex_on_3_1_5(printer, Input::Next).await;
         assert!(trace.done(), "{printer}: {:?}", trace.end);
         match &warnings[..] {
-            [Prompt::Confirm { text, doc, .. }] => {
+            [Prompt::Confirm {
+                text, doc, warn, ..
+            }] => {
+                assert!(*warn, "{printer}: a require warning reads as a caution");
                 assert!(text.contains("Factory"), "{text}");
                 assert!(text.contains("prints normally"), "{text}");
                 assert_eq!(doc.as_deref(), Some(FACTORY_IMAGE_DOC));

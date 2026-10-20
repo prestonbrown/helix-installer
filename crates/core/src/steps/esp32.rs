@@ -508,6 +508,7 @@ pub(crate) fn confirm_open(ctx: &StepCtx<'_>, port: &str) -> StepOutcome {
         ),
         button: "Continue".into(),
         doc: None,
+        warn: false,
     })
 }
 

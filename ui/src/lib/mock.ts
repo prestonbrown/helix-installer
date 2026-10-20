@@ -179,6 +179,7 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       text: "Firmware 3.1.5 can be missing the printer's configuration files: FlashForge's own 3.1.5 image does not include them, so a printer that was reset or wiped and then given that image has none, and Forge-X will not work on it. If this printer prints normally now, it has them and you can continue. If you are not sure, stop and flash FlashForge's Factory image first, then run the installer again.",
       button: "Continue anyway",
       doc: "https://github.com/DrA1ex/ff5m/blob/main/docs/UNINSTALL.md#flashing-factory-firmware",
+      warn: true,
     },
     run: run({ printer_name: "FlashForge Adventurer 5M", address: "192.168.1.62", host_name: "ad5m", step: 3, total_steps: 17, step_kind: "require" }),
   },

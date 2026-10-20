@@ -68,5 +68,6 @@ pub fn run(ctx: &StepCtx<'_>, spec: &Spec<'_>, input: Option<Input>) -> StepOutc
         text: reason,
         button: CONTINUE.into(),
         doc: Some(doc.to_string()),
+        warn: true,
     })
 }
