@@ -1901,15 +1901,34 @@ fn binary_printing(line: &str) -> String {
 /// as its body, and `<tree>/release_info.json` names `release_info_says`.
 #[cfg(unix)]
 fn run_version_probe_on(binary: &str, release_info_says: &str) -> ProbeRun {
-    run_version_probe_with(binary, release_info_says, &[])
+    run_version_probe_with(binary, release_info_says, &[], RUNS_AS_HELIX_SCREEN)
 }
 
-/// As `run_version_probe_on`, with each of `busybox_applets` run by BusyBox instead of the host.
+/// How the faked printer runs HelixScreen: the program name `pidof` knows it by, and whether
+/// `/proc/<pid>/exe` can be read (not for a process with file capabilities, read as another user).
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct Running {
+    name: &'static str,
+    exe_readable: bool,
+}
+
+#[cfg(unix)]
+const RUNS_AS_HELIX_SCREEN: Running = Running {
+    name: "helix-screen",
+    exe_readable: true,
+};
+
+/// As `run_version_probe_on`, with each of `busybox_applets` run by BusyBox instead of the host
+/// and HelixScreen running as `running` says. Any other than the default runs a real process
+/// from `<tree>/bin/<name>`, whose `/proc/<pid>/cmdline` the probe reads; the file at that path
+/// is then the faked binary.
 #[cfg(unix)]
 fn run_version_probe_with(
     binary: &str,
     release_info_says: &str,
     busybox_applets: &[&str],
+    running: Running,
 ) -> ProbeRun {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
@@ -1919,13 +1938,37 @@ fn run_version_probe_with(
     let sleeps = dir.path().join("sleeps");
     std::fs::create_dir_all(&stubs).unwrap();
     std::fs::create_dir_all(tree.join("bin")).unwrap();
-    let exe = tree.join("bin/helix-screen");
+    let exe = tree.join("bin").join(running.name);
     let script = |path: &std::path::Path, body: String| {
         std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
-    script(&stubs.join("pidof"), "echo 4242".into());
-    script(&stubs.join("readlink"), format!("echo '{}'", exe.display()));
+    let mut process = None;
+    let pid = if running.name == "helix-screen" && running.exe_readable {
+        4242
+    } else {
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
+        let pid = child.id();
+        process = Some(child);
+        std::fs::remove_file(&exe).unwrap();
+        pid
+    };
+    script(
+        &stubs.join("pidof"),
+        format!(
+            "for n; do [ \"$n\" = '{}' ] && {{ echo {pid}; exit 0; }}; done; exit 1",
+            running.name
+        ),
+    );
+    if running.exe_readable {
+        script(&stubs.join("readlink"), format!("echo '{}'", exe.display()));
+    } else {
+        script(
+            &stubs.join("readlink"),
+            "echo \"readlink: $1: Permission denied\" >&2; exit 1".into(),
+        );
+    }
     script(
         &stubs.join("sleep"),
         format!("echo $$ >> '{}'\nexec /bin/sleep \"$@\"", sleeps.display()),
@@ -1951,6 +1994,10 @@ fn run_version_probe_with(
         .output()
         .unwrap();
     let took = started.elapsed();
+    if let Some(mut child) = process {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     let sleeps_alive = std::fs::read_to_string(&sleeps)
         .unwrap_or_default()
         .lines()
@@ -2027,6 +2074,45 @@ fn a_binary_that_hangs_is_stopped_and_release_info_answers() {
     assert!(run.took < Duration::from_secs(20), "{:?}", run.took);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn the_egl_build_is_found_running_and_asked_for_its_version() {
+    let run = run_version_probe_with(
+        &binary_printing("helix-screen 1.1.0-beta.10 (917215c35c)\n"),
+        "v1.0.0",
+        &[],
+        Running {
+            name: "helix-screen-egl",
+            exe_readable: true,
+        },
+    );
+    assert_eq!(
+        run.stdout,
+        "running helix-screen 1.1.0-beta.10 (917215c35c)\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_running_binary_whose_exe_link_is_unreadable_is_found_by_its_command_line() {
+    // A binary with file capabilities is not dumpable: another user cannot read its exe link.
+    for name in ["helix-screen", "helix-screen-egl"] {
+        let run = run_version_probe_with(
+            &binary_printing("helix-screen 1.1.0-beta.10 (917215c35c)\n"),
+            "v1.0.0",
+            &[],
+            Running {
+                name,
+                exe_readable: false,
+            },
+        );
+        assert_eq!(
+            run.stdout, "running helix-screen 1.1.0-beta.10 (917215c35c)\n",
+            "{name}"
+        );
+    }
+}
+
 #[cfg(unix)]
 fn busybox() -> Option<std::path::PathBuf> {
     std::env::var_os("PATH")?
@@ -2053,6 +2139,7 @@ fn busybox_finds_the_version_handler_in_a_binary() {
         &binary_printing("helix-screen 1.1.0-beta.10 (917215c35c)\n"),
         "v1.0.0",
         &["grep", "tr"],
+        RUNS_AS_HELIX_SCREEN,
     );
     assert_eq!(
         run.stdout,
