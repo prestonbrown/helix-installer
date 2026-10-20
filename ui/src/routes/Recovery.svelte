@@ -53,6 +53,7 @@
   <p>
     The install stopped at step {Math.min(run.step + 1, run.total_steps)} of {run.total_steps}: {stepLabel(
       run.step_kind,
+      run.committed,
     )}. {stoppedState(run.step_kind)}
   </p>
   <p>

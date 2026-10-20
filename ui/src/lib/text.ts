@@ -19,22 +19,17 @@ const STEP_LABELS: Record<string, string> = {
 
 };
 
-export function stepLabel(kind: string | null): string {
+/** The step's name in the strip. Before the run's point of no return the HelixScreen
+ * installer only checks the printer (`install.sh --dry-run`), so it is not called installing. */
+export function stepLabel(kind: string | null, committed: boolean): string {
+  if (kind === "helix_install" && !committed) return "Checking your printer";
   return (kind && STEP_LABELS[kind]) || "Installing";
 }
 
-/** Steps during which the printer is busy changing itself and must keep its power. */
-const PRINTER_BUSY = new Set([
-  "wait_for",
-  "ssh_run",
-  "helix_install",
-  "moonraker_gcode",
-  "moonraker_update",
-  "serial_flash",
-]);
-
-export function keepPowerOn(kind: string | null, committed: boolean): boolean {
-  return committed || (kind !== null && PRINTER_BUSY.has(kind));
+/** Whether to warn against switching off or unplugging: only once the run has passed its
+ * point of no return, since nothing on the printer changes before it. */
+export function keepPowerOn(committed: boolean): boolean {
+  return committed;
 }
 
 /** What must not happen while `kind` runs: a screen flashed over USB must stay plugged in. */
@@ -71,6 +66,35 @@ export function stoppedState(kind: string | null): string {
     default:
       return "The installer has already changed your printer, and it stopped before the end. The printer may not work normally until the install is finished.";
   }
+}
+
+/** `s` as a sentence: capitalised, with a full stop when it has no closing punctuation. */
+export function sentence(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1).replace(/([^.!?])$/, "$1.") : s;
+}
+
+const UP_TO_DATE = "HelixScreen is up to date";
+
+/** The finish screen. A run that ended early without changing the printer (`note` says why,
+ * "HelixScreen is up to date: ...") is a success that changed nothing; one that changed it and
+ * left a note says what to check. */
+export function finishScreen(
+  note: string | null,
+  printerName: string,
+  committed: boolean,
+): { heading: string; lines: string[] } {
+  if (committed || !note) {
+    return {
+      heading: "HelixScreen is installed",
+      lines: [
+        note
+          ? sentence(note)
+          : `Your ${printerName} may restart on its own. When it has, its screen shows HelixScreen.`,
+      ],
+    };
+  }
+  const rest = note.startsWith(`${UP_TO_DATE}: `) ? note.slice(UP_TO_DATE.length + 2) : note;
+  return { heading: UP_TO_DATE, lines: [sentence(rest), "Nothing on your printer was changed."] };
 }
 
 export function isUrl(s: string | null | undefined): s is string {

@@ -4,7 +4,7 @@
   import { onMount } from "svelte";
   import * as api from "../lib/api";
   import { ApiError } from "../lib/api";
-  import { readyLine, startLabel, whereLine } from "../lib/candidates";
+  import { cardSubtitle, cardTitle, readyLine, startLabel, whereLine } from "../lib/candidates";
   import Copyable from "../lib/Copyable.svelte";
   import PrinterTile from "../lib/PrinterTile.svelte";
   import { openGuide } from "../lib/open";
@@ -67,7 +67,7 @@
 
   async function recordPrinter(c: CandidateView) {
     try {
-      recording = { name: c.name, json: await api.recordPrinter(c.key) };
+      recording = { name: cardTitle(c), json: await api.recordPrinter(c.key) };
     } catch (e) {
       error = e as ApiError;
     }
@@ -129,7 +129,8 @@
         <li class="card candidate">
           <PrinterTile photo={c.photo} name={c.name} />
           <div class="about">
-            <h2>{c.name}</h2>
+            <h2>{cardTitle(c)}</h2>
+            {#if cardSubtitle(c)}<p class="kind">{cardSubtitle(c)}</p>{/if}
             <p class="muted address">{whereLine(c)}</p>
             {#if c.status === "ready"}
               <p class="status ok">{readyLine(c)}</p>
@@ -270,6 +271,10 @@
   }
   .about h2 {
     margin: 0;
+  }
+  .kind {
+    margin: 0.1rem 0 0;
+    font-size: 0.95rem;
   }
   .address {
     margin: 0 0 0.25rem;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // What the picker says about each printer it found, by how it is reached and what it runs.
-import type { CandidateView } from "./types";
+import type { CandidateView, PrinterView } from "./types";
 
 /** Where the candidate is: its network address, or the USB port a screen is plugged into. */
 export function whereLine(c: CandidateView): string {
@@ -20,4 +20,46 @@ export function readyLine(c: CandidateView): string {
 export function startLabel(c: CandidateView): string {
   if (c.connection === "usb" && c.helix_version === null) return "Install or update HelixScreen";
   return c.helix_version !== null ? "Update HelixScreen" : "Install HelixScreen";
+}
+
+/** A MAC address, or its last three bytes, glued to the end of a host name by an image that
+ * makes names unique (`voron-b827eb1a2b3c`, `k1-dc:a6:32:01:02:03`, `mainsailos-1a2b3c`). Hex
+ * that is all digits or all letters reads as part of the name and stays. */
+const MAC_SUFFIX = /[-_](?:[0-9a-f]{2}[:-]?){5}[0-9a-f]{2}$|[-_][0-9a-f]{6}$/i;
+
+function hostTitle(host: string | null): string | null {
+  const h = host?.trim();
+  if (!h) return null;
+  const m = h.match(MAC_SUFFIX);
+  if (!m) return h;
+  const hex = m[0].slice(1).replace(/[:-]/g, "");
+  const plain = hex.length === 12 || (/[0-9]/.test(hex) && /[a-f]/i.test(hex));
+  const rest = h.slice(0, m.index);
+  return plain && rest ? rest : h;
+}
+
+/** The models an ambiguous printer could be, sharing their common leading words:
+ * "FlashForge Adventurer 5M or 5M Pro". */
+function modelList(choices: PrinterView[]): string {
+  const words = choices.map((p) => p.name.split(" "));
+  let common = 0;
+  while (words.every((w) => w.length > common + 1 && w[common] === words[0][common])) common++;
+  const names = words.map((w, i) => (i === 0 ? w : w.slice(common)).join(" "));
+  return names.length <= 1
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
+/** The card's heading: the printer's own name when it gives one, else what the installer
+ * takes it for. A printer that could be several models is named by those models, since its
+ * host name is often a model id (`ad5m`) that says nothing to the user. */
+export function cardTitle(c: CandidateView): string {
+  if (c.status === "choose" && c.choices.length > 0) return modelList(c.choices);
+  return hostTitle(c.host_name) ?? c.name;
+}
+
+/** What the installer takes the printer for, under a title that is the printer's own name. */
+export function cardSubtitle(c: CandidateView): string | null {
+  if (c.status === "choose" && c.choices.length > 0) return null;
+  return hostTitle(c.host_name) !== null ? c.name : null;
 }

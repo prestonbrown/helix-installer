@@ -16,7 +16,8 @@
 //! logs or stores one.
 
 use async_trait::async_trait;
-use helix_installer_core::bundle::support_bundle;
+use helix_installer_core::app_log::AppLog;
+use helix_installer_core::bundle::support_bundle_with_app_log;
 use helix_installer_core::discovery::{self, Candidate};
 use helix_installer_core::facts::Facts;
 use helix_installer_core::identify::{identify, identify_as, start_state, Identified, StartState};
@@ -108,6 +109,8 @@ pub struct AppConfig {
     /// Replaces the release channel of every `helix_install` step; `None` keeps the recipes'.
     pub channel_override: Option<Channel>,
     pub app_version: String,
+    /// The app's own log; `None` writes nothing.
+    pub log: Option<Arc<AppLog>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +163,8 @@ pub struct CandidateView {
     pub answered: bool,
     /// Set when HelixScreen is already installed: its version, empty when unknown.
     pub helix_version: Option<String>,
+    /// The name the printer's own system goes by (Moonraker's `hostname`), as it reports it.
+    pub host_name: Option<String>,
     pub choices: Vec<PrinterView>,
     pub doc: Option<String>,
     pub reason: Option<String>,
@@ -203,11 +208,20 @@ pub struct RunSummary {
 
 type SharedRunner = Arc<Mutex<Runner>>;
 
+#[derive(Default)]
+struct RunLogged {
+    /// Entries of the run's own log already copied.
+    entries: usize,
+    line: String,
+}
+
 pub struct AppCore {
     cfg: AppConfig,
     manifest: Mutex<Option<Arc<SignedManifest>>>,
     candidates: std::sync::Mutex<Vec<Candidate>>,
     runs: Mutex<HashMap<String, SharedRunner>>,
+    /// What each run has written to the app log so far.
+    logged: std::sync::Mutex<HashMap<String, RunLogged>>,
 }
 
 fn printer_view(p: &helix_installer_core::manifest::Printer) -> PrinterView {
@@ -232,6 +246,53 @@ fn reported_name(facts: &Facts) -> Option<String> {
         .iter()
         .find_map(|k| facts.get(*k).and_then(Value::as_str))
         .map(str::to_string)
+}
+
+/// One picker card for the log: where, what it was taken for, and what it runs.
+fn describe(v: &CandidateView) -> String {
+    format!(
+        "{} {:?} {} (host name {}, printer {}, HelixScreen {})",
+        v.address,
+        v.status,
+        v.name,
+        v.host_name.as_deref().unwrap_or("-"),
+        v.printer_id.as_deref().unwrap_or("-"),
+        v.helix_version.as_deref().unwrap_or("-"),
+    )
+}
+
+/// An event for the log. Prompts are named, never the answers typed into them.
+fn describe_event(event: &Event) -> String {
+    match event {
+        Event::Progress {
+            title,
+            detail,
+            fraction,
+            ..
+        } => {
+            let mut s = format!("progress: {title}");
+            if let Some(d) = detail {
+                s.push_str(&format!(" ({d})"));
+            }
+            if let Some(f) = fraction {
+                s.push_str(&format!(" {:.0}%", f * 100.0));
+            }
+            s
+        }
+        Event::NeedInput(prompt) => {
+            let kind = serde_json::to_value(prompt)
+                .ok()
+                .and_then(|v| v.get("prompt").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| "input".into());
+            format!("waiting for the user: {kind}")
+        }
+        Event::Done => "done".into(),
+        Event::Refused {
+            cancelled: true, ..
+        } => "stopped by the user".into(),
+        Event::Refused { reason, doc, .. } => format!("refused: {reason} ({doc})"),
+        Event::Failed { reason, .. } => format!("failed: {reason}"),
+    }
 }
 
 fn is_url(location: &str) -> bool {
@@ -282,6 +343,46 @@ impl AppCore {
             manifest: Mutex::new(None),
             candidates: std::sync::Mutex::new(Vec::new()),
             runs: Mutex::new(HashMap::new()),
+            logged: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Writes `text` to the app log with `secrets` removed.
+    pub fn log(&self, text: &str, secrets: &[&str]) {
+        if let Some(log) = &self.cfg.log {
+            log.write(self.cfg.env.clock.now(), text, secrets);
+        }
+    }
+
+    /// Logs the run's new engine log entries, then its event unless the event's line repeats
+    /// the last one: a step polled many times logs once per change.
+    fn log_run(&self, r: &Runner, event: &Event) {
+        let state = r.state();
+        let info = run_info(r);
+        let secrets = r.secrets();
+        let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
+        let mut logged = self.logged.lock().unwrap_or_else(|e| e.into_inner());
+        let seen = logged.entry(state.run_id.clone()).or_default();
+        for e in state.log.iter().skip(seen.entries) {
+            self.log(
+                &format!("{}: step {}: {}", state.run_id, e.step + 1, e.text),
+                &secrets,
+            );
+        }
+        seen.entries = state.log.len();
+        let at = match &info.step_kind {
+            Some(kind) => format!("step {}/{} {kind}", info.step + 1, info.total_steps),
+            None => "end".into(),
+        };
+        let line = format!(
+            "{}: {at}{}: {}",
+            state.run_id,
+            if info.committed { " (committed)" } else { "" },
+            describe_event(event)
+        );
+        if seen.line != line {
+            self.log(&line, &secrets);
+            seen.line = line;
         }
     }
 
@@ -321,7 +422,20 @@ impl AppCore {
         if let Some(m) = held.as_ref() {
             return Ok(m.clone());
         }
-        let loaded = Arc::new(self.load_manifest().await?);
+        let loaded = match self.load_manifest().await {
+            Ok(m) => Arc::new(m),
+            Err(e) => {
+                self.log(&format!("no printer list: {}", e.message), &[]);
+                return Err(e);
+            }
+        };
+        self.log(
+            &format!(
+                "printer list loaded: {} printers",
+                loaded.manifest.printers.len()
+            ),
+            &[],
+        );
         *held = Some(loaded.clone());
         Ok(loaded)
     }
@@ -406,6 +520,11 @@ impl AppCore {
             status: CandidateStatus::NoAnswer,
             answered,
             helix_version: None,
+            host_name: c
+                .facts
+                .get("klipper_hostname")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             choices: Vec::new(),
             doc: None,
             reason: None,
@@ -459,7 +578,11 @@ impl AppCore {
     pub async fn discover(&self) -> Result<Vec<CandidateView>, CommandError> {
         let m = self.manifest().await?;
         let found = self.cfg.discovery.discover(&self.cfg.env).await;
-        let views = found.iter().map(|c| self.view(&m.manifest, c)).collect();
+        let views: Vec<CandidateView> = found.iter().map(|c| self.view(&m.manifest, c)).collect();
+        self.log(&format!("discovery found {} printers", views.len()), &[]);
+        for v in &views {
+            self.log(&format!("  {}", describe(v)), &[]);
+        }
         *self.candidates.lock().unwrap_or_else(|e| e.into_inner()) = found;
         Ok(views)
     }
@@ -475,6 +598,7 @@ impl AppCore {
             .unwrap_or_default();
         let candidate = Candidate::new(host, facts);
         let view = self.view(&m.manifest, &candidate);
+        self.log(&format!("address typed in: {}", describe(&view)), &[]);
         let mut held = self.candidates.lock().unwrap_or_else(|e| e.into_inner());
         held.retain(|c| c.key != candidate.key);
         held.push(candidate);
@@ -550,6 +674,16 @@ impl AppCore {
         .map_err(storage)?
         .with_cache_dir(self.cache_dir());
         let runner = self.with_channel(runner);
+        self.log(
+            &format!(
+                "{run_id}: started for {} at {} (printer {}, recipe {})",
+                c.key,
+                runner.state().host.addr,
+                runner.state().printer_id,
+                runner.state().recipe_id
+            ),
+            &[],
+        );
         self.runs
             .lock()
             .await
@@ -597,9 +731,16 @@ impl AppCore {
         run_id: &str,
         input: Option<Input>,
     ) -> Result<AdvanceView, CommandError> {
-        let runner = self.runner(run_id).await?;
+        let runner = match self.runner(run_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.log(&format!("{run_id}: {}", e.message), &[]);
+                return Err(e);
+            }
+        };
         let mut r = runner.lock().await;
         let event = r.advance(input).await;
+        self.log_run(&r, &event);
         Ok(AdvanceView {
             event,
             run: run_info(&r),
@@ -636,6 +777,7 @@ impl AppCore {
                 "this install has already changed the printer",
             ));
         }
+        self.log(&format!("{run_id}: dismissed"), &[]);
         match r.advance(Some(Input::Cancel)).await {
             Event::Failed { reason, .. } => Err(CommandError::new(ErrorKind::Storage, reason)),
             _ => Ok(()),
@@ -646,12 +788,24 @@ impl AppCore {
     /// run. Passwords held in memory are always stripped; `mask` also hides addresses and the
     /// serial.
     pub async fn export_bundle(&self, run_id: &str, mask: bool) -> Result<String, CommandError> {
+        let app_log = self
+            .cfg
+            .log
+            .as_ref()
+            .map(|l| l.contents())
+            .unwrap_or_default();
         let held = self.runs.lock().await.get(run_id).cloned();
         if let Some(r) = held {
             let r = r.lock().await;
             let secrets = r.secrets();
             let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
-            return Ok(support_bundle(r.state(), &r.job_logs(), &secrets, mask));
+            return Ok(support_bundle_with_app_log(
+                r.state(),
+                &r.job_logs(),
+                &app_log,
+                &secrets,
+                mask,
+            ));
         }
         let state = Runner::load(&self.runs_dir(), run_id).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::InvalidInput => {
@@ -659,7 +813,13 @@ impl AppCore {
             }
             _ => storage(e),
         })?;
-        Ok(support_bundle(&state, &[], &[], mask))
+        Ok(support_bundle_with_app_log(
+            &state,
+            &[],
+            &app_log,
+            &[],
+            mask,
+        ))
     }
 
     /// What the candidate answered, masked, as a fixture for the identify tests.

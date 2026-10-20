@@ -29,6 +29,8 @@ export interface CandidateView {
   status: CandidateStatus;
   answered: boolean;
   helix_version: string | null;
+  /** The name the printer's own system goes by, as it reports it. */
+  host_name: string | null;
   choices: PrinterView[];
   doc: string | null;
   reason: string | null;

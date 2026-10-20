@@ -1592,6 +1592,9 @@ fn remote_checks(tarball: &'static [u8], script: &'static [u8]) -> impl Fn(&str)
     }
 }
 
+const COPYING: &str = "Copying the HelixScreen files to the printer";
+const ALREADY: &str = "The HelixScreen files are already on the printer";
+
 fn dry_run_then_install(f: &Fakes) -> Runner {
     for _ in 0..2 {
         f.ssh.script_job(vec![
@@ -1695,6 +1698,59 @@ async fn an_install_that_stops_before_uploading_removes_what_the_dry_run_left() 
         "{ev:?}"
     );
     assert_eq!(rm_commands(&f), vec![CLEANUP.to_string()]);
+}
+
+#[tokio::test]
+async fn the_progress_says_the_files_are_already_on_the_printer_when_they_are_reused() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh.set_fallback(remote_checks(TARBALL, INSTALL_SH));
+    let mut r = dry_run_then_install(&f);
+    let (ev, titles) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    let copying = titles.iter().position(|t| t == COPYING);
+    let already = titles.iter().position(|t| t == ALREADY);
+    assert!(copying.is_some(), "the dry run copies them: {titles:?}");
+    assert!(
+        already > copying,
+        "the install finds them there: {titles:?}"
+    );
+    assert_eq!(
+        titles.iter().filter(|t| *t == COPYING).count(),
+        1,
+        "{titles:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_changed_remote_file_is_copied_again_and_not_called_already_there() {
+    let f = Fakes::standard(&["pi"]);
+    f.ssh
+        .set_fallback(remote_checks(b"something else", INSTALL_SH));
+    let mut r = dry_run_then_install(&f);
+    let (ev, titles) = settle(&mut r).await;
+    assert!(matches!(ev, Event::Done), "{ev:?}");
+    assert_eq!(
+        titles.iter().filter(|t| *t == COPYING).count(),
+        2,
+        "{titles:?}"
+    );
+    assert!(!titles.iter().any(|t| t == ALREADY), "{titles:?}");
+}
+
+#[tokio::test]
+async fn the_preparing_line_names_no_platform_token() {
+    let f = Fakes::standard(&["pi"]);
+    let mut r = dry_run_then_install(&f);
+    let (_, titles) = settle(&mut r).await;
+    assert!(
+        titles.contains(&"Preparing to check the printer for HelixScreen".to_string()),
+        "{titles:?}"
+    );
+    assert!(
+        titles.contains(&"Preparing to install HelixScreen".to_string()),
+        "{titles:?}"
+    );
+    assert!(!titles.iter().any(|t| t.contains("(pi)")), "{titles:?}");
 }
 
 // ---------------------------------------------------------------- the installed version

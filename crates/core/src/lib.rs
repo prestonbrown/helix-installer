@@ -2,6 +2,7 @@
 
 //! Installer logic for HelixScreen. This crate must not depend on Tauri.
 
+pub mod app_log;
 pub mod bundle;
 pub mod cache;
 pub mod discovery;

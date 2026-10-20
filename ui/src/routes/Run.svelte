@@ -9,7 +9,7 @@
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
   import { signInInput, sudoInput } from "../lib/login";
-  import { formatBytes, isUrl, keepPowerOn, keepPowerText, stepLabel } from "../lib/text";
+  import { finishScreen, formatBytes, isUrl, keepPowerOn, keepPowerText, sentence, stepLabel } from "../lib/text";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
 
@@ -74,10 +74,6 @@
     return text.split(/\n\s*\n/).filter((p) => p.trim());
   }
 
-  function sentence(s: string): string {
-    return s ? s[0].toUpperCase() + s.slice(1).replace(/([^.!?])$/, "$1.") : s;
-  }
-
   onMount(() => {
     send();
     return () => (alive = false);
@@ -97,7 +93,7 @@
         <div class="printer">{run.printer_name}</div>
         {#if run.total_steps > 0 && ev?.event !== "done"}
           <div class="muted">
-            Step {Math.min(run.step + 1, run.total_steps)} of {run.total_steps}: {stepLabel(run.step_kind)}
+            Step {Math.min(run.step + 1, run.total_steps)} of {run.total_steps}: {stepLabel(run.step_kind, run.committed)}
           </div>
         {/if}
       </div>
@@ -329,27 +325,22 @@
       <div class="bar" class:indeterminate={ev.fraction === null}>
         <span style:width={ev.fraction === null ? "35%" : `${Math.round(ev.fraction * 100)}%`}></span>
       </div>
-      {#if keepPowerOn(run?.step_kind ?? null, run?.committed ?? false)}
+      {#if keepPowerOn(run?.committed ?? false)}
         <div class="notice warn" role="status">
           {keepPowerText(run?.step_kind ?? null)}
         </div>
       {/if}
     </section>
   {:else if ev.event === "done"}
+    {@const finish = finishScreen(run?.done_note ?? null, run?.printer_name ?? "printer", run?.committed ?? false)}
     <section class="card body done">
       <div class="badge ok" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
       </div>
-      {#if run?.done_note}
-        <h1>Nothing to update</h1>
-        <p class="lead">{sentence(run.done_note)}</p>
-        <p>Nothing on your printer was changed.</p>
-      {:else}
-        <h1>HelixScreen is installed</h1>
-        <p class="lead">
-          Your {run?.printer_name} may restart on its own. When it has, its screen shows HelixScreen.
-        </p>
-      {/if}
+      <h1>{finish.heading}</h1>
+      {#each finish.lines as line, i}
+        <p class:lead={i === 0}>{line}</p>
+      {/each}
       <div class="actions">
         <button class="primary" onclick={onexit}>Finish</button>
       </div>

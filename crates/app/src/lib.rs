@@ -4,6 +4,7 @@ pub mod commands;
 pub mod updater;
 
 use commands::{ipc, AppConfig, AppCore, LanDiscovery};
+use helix_installer_core::app_log::AppLog;
 use helix_installer_core::keys::{manifest_location, MANIFEST_PUBKEY};
 use helix_installer_core::manifest::Channel;
 use helix_installer_core::transport::drives_sys::SysDrives;
@@ -15,6 +16,7 @@ use helix_installer_core::transport::ssh_russh::SshRussh;
 use helix_installer_core::transport::{Env, SystemClock};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 use tauri::Manager;
 
 /// Overrides for development: where to fetch the printer list (`<url or path>`, signature at
@@ -58,7 +60,7 @@ fn real_env(data_dir: &Path) -> Env {
     }
 }
 
-fn app_core(data_dir: PathBuf) -> AppCore {
+fn app_core(data_dir: PathBuf, log: Option<Arc<AppLog>>) -> AppCore {
     AppCore::new(AppConfig {
         env: real_env(&data_dir),
         data_dir,
@@ -67,7 +69,21 @@ fn app_core(data_dir: PathBuf) -> AppCore {
         manifest_location: Some(manifest_location(std::env::var(MANIFEST_ENV).ok())),
         channel_override: channel_override(std::env::var(CHANNEL_ENV).ok()),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        log,
     })
+}
+
+/// This launch's log in the platform log directory; the app runs without one if it cannot
+/// be opened.
+fn open_log(dir: std::io::Result<PathBuf>) -> Option<Arc<AppLog>> {
+    let opened = dir.and_then(|d| AppLog::open(&d, SystemTime::now()));
+    match opened {
+        Ok(log) => Some(Arc::new(log)),
+        Err(e) => {
+            eprintln!("no app log: {e}");
+            None
+        }
+    }
 }
 
 pub fn run() {
@@ -78,7 +94,18 @@ pub fn run() {
     builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
-            app.manage(app_core(data_dir));
+            let log = open_log(app.path().app_log_dir().map_err(std::io::Error::other));
+            let core = app_core(data_dir, log);
+            core.log(
+                &format!(
+                    "HelixScreen Installer {} started ({} {})",
+                    env!("CARGO_PKG_VERSION"),
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ),
+                &[],
+            );
+            app.manage(core);
             app.manage(updater::PendingUpdate::default());
             tauri::async_runtime::spawn(updater::check(app.handle().clone()));
             Ok(())

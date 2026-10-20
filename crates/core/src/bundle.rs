@@ -22,18 +22,44 @@ pub fn support_bundle(
     secrets: &[&str],
     mask: bool,
 ) -> String {
+    support_bundle_with_app_log(state, job_logs, "", secrets, mask)
+}
+
+/// `support_bundle` with the app's own log (`app_log::AppLog`) after the printer's, redacted
+/// and masked the same way.
+pub fn support_bundle_with_app_log(
+    state: &RunState,
+    job_logs: &[String],
+    app_log: &str,
+    secrets: &[&str],
+    mask: bool,
+) -> String {
     let serial = serial_of(state);
     let mut text = render(state, job_logs, mask);
-    let mut secrets: Vec<&str> = secrets.iter().copied().filter(|s| !s.is_empty()).collect();
-    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    for s in secrets {
-        text = text.replace(s, SECRET);
+    if !app_log.is_empty() {
+        text.push_str("installer log:\n");
+        for line in app_log.lines() {
+            text.push_str(&format!("  {line}\n"));
+        }
     }
+    let mut text = redact(&text, secrets);
     if mask {
         if let Some(serial) = serial.filter(|s| !s.is_empty()) {
             text = text.replace(&serial, SERIAL);
         }
         text = mask_addresses(&text);
+    }
+    text
+}
+
+/// `text` with each of `secrets` replaced, longest first so one that contains another goes
+/// whole. An empty secret is ignored.
+pub fn redact(text: &str, secrets: &[&str]) -> String {
+    let mut secrets: Vec<&str> = secrets.iter().copied().filter(|s| !s.is_empty()).collect();
+    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    let mut text = text.to_string();
+    for s in secrets {
+        text = text.replace(s, SECRET);
     }
     text
 }

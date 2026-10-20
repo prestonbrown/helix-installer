@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use helix_installer_app_lib::commands::{
     AppConfig, AppCore, CandidateStatus, CommandError, Connection, Discovery, ErrorKind,
 };
+use helix_installer_core::app_log::AppLog;
 use helix_installer_core::discovery::Candidate;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::manifest::Login;
@@ -172,7 +173,11 @@ impl Fakes {
 }
 
 fn core(f: &Fakes, data: &Path, manifest: Option<String>) -> AppCore {
-    AppCore::new(AppConfig {
+    AppCore::new(config(f, data, manifest))
+}
+
+fn config(f: &Fakes, data: &Path, manifest: Option<String>) -> AppConfig {
+    AppConfig {
         data_dir: data.to_path_buf(),
         env: f.env(),
         discovery: Arc::new(Fixed(found())),
@@ -180,6 +185,14 @@ fn core(f: &Fakes, data: &Path, manifest: Option<String>) -> AppCore {
         manifest_location: manifest,
         channel_override: None,
         app_version: "0.1.0".into(),
+        log: None,
+    }
+}
+
+fn core_with_log(f: &Fakes, data: &Path, manifest: Option<String>, log: Arc<AppLog>) -> AppCore {
+    AppCore::new(AppConfig {
+        log: Some(log),
+        ..config(f, data, manifest)
     })
 }
 
@@ -253,6 +266,8 @@ async fn discover_names_each_printer_and_what_can_be_done_with_it() {
     assert_eq!(found[0].name, "Creality K1");
     assert_eq!(found[0].status, CandidateStatus::Ready);
     assert_eq!(found[0].printer_id.as_deref(), Some("k1"));
+    assert_eq!(found[0].host_name.as_deref(), Some("k1-printer"));
+    assert_eq!(found[1].host_name, None);
 
     assert_eq!(found[1].status, CandidateStatus::Choose);
     assert_eq!(
@@ -624,6 +639,7 @@ async fn a_k_touch_on_usb_is_listed_as_connected_by_usb() {
         manifest_location: Some(path.to_string_lossy().into_owned()),
         channel_override: None,
         app_version: "0.1.0".into(),
+        log: None,
     });
     let views = c.discover().await.unwrap();
     let panel = views.iter().find(|v| v.address == "/dev/ttyUSB0").unwrap();
@@ -638,4 +654,64 @@ async fn a_k_touch_on_usb_is_listed_as_connected_by_usb() {
         .iter()
         .filter(|v| v.address != "/dev/ttyUSB0")
         .all(|v| v.connection == Connection::Network));
+}
+
+#[tokio::test]
+async fn the_app_log_follows_a_run_with_timestamps_and_never_the_password() {
+    let f = Fakes::new();
+    f.ssh.accept(ADDR, "root", PASSWORD);
+    f.ssh.on_command(
+        "id -u",
+        ExecOutput {
+            stdout: "0\n".into(),
+            stderr: String::new(),
+            exit: 0,
+        },
+    );
+    let data = tempfile::tempdir().unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let log = Arc::new(AppLog::open(logs.path(), std::time::SystemTime::now()).unwrap());
+    let c = core_with_log(
+        &f,
+        data.path(),
+        Some(write_manifest(src.path(), false)),
+        log.clone(),
+    );
+    c.discover().await.unwrap();
+    let run = c.start_run("SN42", None).await.unwrap();
+    settle(&c, &run, None).await;
+    settle(&c, &run, Some(Input::Next)).await;
+    settle(&c, &run, Some(Input::Choice("home".into()))).await;
+    let login = |password: &str| Input::Login(Login::new("root", password));
+    settle(&c, &run, Some(login("not-it"))).await;
+    assert!(matches!(
+        settle(&c, &run, Some(login(PASSWORD))).await,
+        Event::Done
+    ));
+
+    let text = log.contents();
+    assert!(!text.contains(PASSWORD), "{text}");
+    assert!(!text.contains("not-it"), "{text}");
+    for line in text.lines() {
+        let (stamp, _) = line.split_once(' ').unwrap_or_default();
+        assert!(
+            stamp.len() == 24 && stamp.ends_with('Z') && stamp.as_bytes()[10] == b'T',
+            "an untimed line: {line:?}"
+        );
+    }
+    assert!(text.contains(ADDR), "discovery is logged: {text}");
+    assert!(text.contains(&run), "the run is logged: {text}");
+    assert!(
+        text.contains("moonraker_gcode"),
+        "its steps are logged: {text}"
+    );
+    assert!(text.lines().last().unwrap().contains("done"), "{text}");
+
+    let bundle = c.export_bundle(&run, true).await.unwrap();
+    let (_, section) = bundle
+        .split_once("installer log:\n")
+        .expect("the bundle carries the app log");
+    assert!(section.contains(&run), "{bundle}");
+    assert!(!bundle.contains(ADDR), "masked: {bundle}");
 }

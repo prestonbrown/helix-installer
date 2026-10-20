@@ -157,7 +157,7 @@ async function sudo() {
 }
 
 const FINAL = [
-  "Nothing to update",
+  "HelixScreen is up to date",
   "HelixScreen is installed",
   "Install stopped",
   "This printer can't be set up automatically",
@@ -221,7 +221,7 @@ async function main() {
       await sleep(250);
     }
     log(`outcome: ${outcome}`);
-    if (outcome !== "Nothing to update" && outcome !== "HelixScreen is installed") process.exitCode = 2;
+    if (outcome !== "HelixScreen is up to date" && outcome !== "HelixScreen is installed") process.exitCode = 2;
   } finally {
     await wd("DELETE", s("")).catch(() => {});
   }

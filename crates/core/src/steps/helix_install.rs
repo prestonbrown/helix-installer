@@ -47,6 +47,10 @@ const TOO_OLD: &str = "This HelixScreen release is older than this installer sup
 const TITLE: &str = "Installing HelixScreen";
 const UNINSTALL_TITLE: &str = "Removing HelixScreen";
 const DRY_RUN_TITLE: &str = "Checking the printer with the HelixScreen installer";
+const COPYING: &str = "Copying the HelixScreen files to the printer";
+const ALREADY_THERE: &str = "The HelixScreen files are already on the printer";
+const COPYING_INSTALLER: &str = "Copying the HelixScreen installer to the printer";
+const INSTALLER_ALREADY_THERE: &str = "The HelixScreen installer is already on the printer";
 
 /// What `install.sh` is asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,16 +97,23 @@ pub async fn run(
     if let Some(running) = ctx.job.clone() {
         return follow(ctx, &running, &platform, run).await;
     }
+    let prepared = ctx.session.prepared_install.take();
+    if let Some(prepared) = prepared.filter(|p| p.step == ctx.step) {
+        return match start(ctx, prepared).await {
+            Ok(started) => {
+                *ctx.job = Some(started);
+                progress(run.title().into(), None)
+            }
+            Err(stop) => stop,
+        };
+    }
     if ctx.calls == 0 {
         let verb = match (run.dry_run, run.mode) {
             (true, _) => "check the printer for",
             (false, Mode::Uninstall) => "remove",
             (false, _) => "install",
         };
-        return progress(
-            format!("Preparing to {verb} HelixScreen ({platform})"),
-            None,
-        );
+        return progress(format!("Preparing to {verb} HelixScreen"), None);
     }
     // The run-wide override (testing, beta testers) wins over the recipe.
     let pinned = ctx.channel_override.or(channel);
@@ -120,10 +131,11 @@ pub async fn run(
         channels: &channels,
         installed: installed.as_ref(),
     };
-    match launch(ctx, target, run, dir.unwrap_or(DEFAULT_DIR)).await {
-        Ok(started) => {
-            *ctx.job = Some(started);
-            progress(run.title().into(), None)
+    match prepare(ctx, target, run, dir.unwrap_or(DEFAULT_DIR)).await {
+        Ok(prepared) => {
+            let title = prepared.title(run.mode);
+            ctx.session.prepared_install = Some(prepared);
+            progress(title.into(), None)
         }
         // Waiting on the user keeps a dry run's files for the launch that follows; any other
         // stop leaves nothing behind.
@@ -247,12 +259,63 @@ struct Target<'a> {
     installed: Option<&'a ReleaseVersion>,
 }
 
-async fn launch(
+/// A launch whose files are verified on this computer and checked against the printer's
+/// copies, announced to the user and started by the step's next call. Held in memory only.
+pub(crate) struct PreparedLaunch {
+    /// The run's step this launch belongs to.
+    step: usize,
+    /// (local, remote) for each file the printer does not already hold.
+    to_send: Vec<(PathBuf, String)>,
+    command: String,
+    sudo_password: Option<String>,
+}
+
+impl PreparedLaunch {
+    /// The progress line while the files go to the printer, or once they are found there.
+    fn title(&self, mode: Mode) -> &'static str {
+        match (mode, self.to_send.is_empty()) {
+            (Mode::Uninstall, true) => INSTALLER_ALREADY_THERE,
+            (Mode::Uninstall, false) => COPYING_INSTALLER,
+            (_, true) => ALREADY_THERE,
+            (_, false) => COPYING,
+        }
+    }
+}
+
+/// Sends what the printer lacks and starts install.sh there.
+async fn start(ctx: &mut StepCtx<'_>, p: PreparedLaunch) -> Result<RemoteJob, StepOutcome> {
+    let sent = async {
+        let ssh = ctx.ssh().await?;
+        for (local, remote) in &p.to_send {
+            ssh.upload(local, remote).await?;
+        }
+        ssh.spawn_detached(&p.command, p.sudo_password.as_deref())
+            .await
+    }
+    .await;
+    match sent {
+        Ok(job) => Ok(job),
+        Err(e) => Err(transport_stop(ctx, e).await),
+    }
+}
+
+/// Ends a launch the printer's connection broke: the session is dropped and every file this
+/// run sent is removed.
+async fn transport_stop(ctx: &mut StepCtx<'_>, e: TransportError) -> StepOutcome {
+    ctx.drop_ssh();
+    remove_uploaded(ctx).await;
+    match e {
+        TransportError::Auth => sudo::refused(ctx),
+        e => StepOutcome::failed(format!("could not start the installer on the printer: {e}")),
+    }
+}
+
+async fn prepare(
     ctx: &mut StepCtx<'_>,
     target: Target<'_>,
     run: Run,
     dir: &str,
-) -> Result<RemoteJob, StepOutcome> {
+) -> Result<PreparedLaunch, StepOutcome> {
     let platform = target.platform;
     let mode = run.mode;
     let (release, offered) = release::newest(ctx.env, target.channels).await?;
@@ -336,29 +399,25 @@ async fn launch(
     }
     ctx.facts
         .insert(UPLOADED_FACT.into(), serde_json::json!(uploaded));
-    let sent = async {
+    let checked = async {
         let ssh = ctx.ssh().await?;
+        let mut to_send = Vec::new();
         for (local, remote, sha256) in &sends {
-            if earlier.contains(remote) && remote_matches(ssh, local, remote, sha256).await {
-                continue;
+            if !(earlier.contains(remote) && remote_matches(ssh, local, remote, sha256).await) {
+                to_send.push((local.clone(), remote.clone()));
             }
-            ssh.upload(local, remote).await?;
         }
-        ssh.spawn_detached(&command, sudo_password.as_deref()).await
+        Ok(to_send)
     }
     .await;
-    match sent {
-        Ok(job) => Ok(job),
-        Err(e) => {
-            ctx.drop_ssh();
-            remove_uploaded(ctx).await;
-            Err(match e {
-                TransportError::Auth => sudo::refused(ctx),
-                e => StepOutcome::failed(format!(
-                    "could not start the installer on the printer: {e}"
-                )),
-            })
-        }
+    match checked {
+        Ok(to_send) => Ok(PreparedLaunch {
+            step: ctx.step,
+            to_send,
+            command,
+            sudo_password,
+        }),
+        Err(e) => Err(transport_stop(ctx, e).await),
     }
 }
 

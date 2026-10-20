@@ -101,12 +101,15 @@ pub struct Session {
     sudo_tries: u32,
     /// Typed sudo passwords sudo refused: no longer held, still stripped from a support bundle.
     refused_secrets: Vec<String>,
+    /// A `helix_install` launch announced by the step's last call, started by its next.
+    pub(crate) prepared_install: Option<helix_install::PreparedLaunch>,
 }
 
 impl Session {
     /// Called when a step becomes current or is retried.
     pub(crate) fn begin_step(&mut self) {
         self.defaults_tried = false;
+        self.prepared_install = None;
     }
 
     /// What the printer-side jobs printed: the ended jobs' lines, then the current job's.
