@@ -2454,6 +2454,7 @@ fn a_forgex_ad5x_that_answers_flashforge_udp_is_still_refused() {
 
 // ---------------------------------------------------------------- stock K1 texts and probes
 
+#[cfg(unix)]
 fn k1_stock_ota_probe() -> String {
     staging().recipes["k1_stock"]
         .iter()
