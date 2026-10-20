@@ -2,10 +2,11 @@
 
 //! The key the published printer list is signed with, and where the list is published.
 
-/// The public half of the production manifest key (the text of its minisign `.pub` file or the
-/// bare base64 line). Empty until `docs/SIGNING.md` has been followed, so until then nothing
-/// verifies except in a debug build given a key in `HELIX_INSTALLER_PUBKEY`.
-pub const MANIFEST_PUBKEY: &str = "";
+/// The public half of the production manifest key (the bare base64 line of its minisign `.pub`
+/// file). Changing it means every installed app stops trusting the published list, so it is
+/// permanent (`docs/SIGNING.md`). A debug build can be given another key in
+/// `HELIX_INSTALLER_PUBKEY`.
+pub const MANIFEST_PUBKEY: &str = "RWRxS2qC5t0QSNK4KA0dM6m9eHEejJyZrfK5tqqUL9U5+T8C8eXrHkyY";
 
 /// Where the signed printer list is fetched from; the signature is at `<url>.minisig`.
 pub const DEFAULT_MANIFEST_URL: &str = "https://releases.helixscreen.org/installer/manifest.json";
