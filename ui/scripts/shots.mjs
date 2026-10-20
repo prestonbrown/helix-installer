@@ -44,6 +44,7 @@ const shots = [
     },
   ],
   ["confirm", "confirm", async (p) => (await install(p), p.getByRole("button", { name: "Continue" }).waitFor())],
+  ["warn", "warn", async (p) => (await install(p), p.getByRole("button", { name: "Continue anyway" }).waitFor())],
   ["info", "info", async (p) => (await install(p), p.getByRole("button", { name: "Next" }).waitFor())],
   ["user-action", "user_action", async (p) => (await install(p), p.getByRole("button", { name: "I've done this" }).waitFor())],
   ["ask", "ask", async (p) => (await install(p), p.waitForSelector(".answer"))],
