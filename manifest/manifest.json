@@ -154,7 +154,7 @@
       },
       "verified": {
         "by": "helixscreen",
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "firmware": "01.01.02.01",
         "runs": [
           {
@@ -164,10 +164,15 @@
             "helixscreen": "unreadable over Moonraker -> v1.1.0-beta.10",
             "recipe": "qidi_update",
             "behavior_sha256": "fd92d81be26e16d1393094357296f796456eefbf4b5d0e10a6f9e309e1dea1eb"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "QIDI Q2, mks login with sudo password",
+            "firmware": "QIDI firmware 01.01.02.01",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
+            "recipe": "qidi_update",
+            "behavior_sha256": "e67346f3724214fd25ff4bc37d2a508755708bfe0cef32b1e1f9d91013251a4c"
           }
-        ],
-        "awaiting_rerun": [
-          "qidi_update"
         ]
       }
     },
@@ -203,7 +208,7 @@
       },
       "verified": {
         "by": "helixscreen",
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "firmware": "",
         "runs": [
           {
@@ -213,10 +218,15 @@
             "helixscreen": "dev build not seen by Moonraker -> v1.1.0-beta.10",
             "recipe": "k2_update",
             "behavior_sha256": "802d40c53766d6e6a9bd3cb5689aa4ee6962468768f76643a69f9071a677d02c"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "Creality K2 Plus, root login",
+            "firmware": "Creality K2 firmware (version not recorded)",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
+            "recipe": "k2_update",
+            "behavior_sha256": "917ece5834eb28b0b5787c6580aabcbf8073f86200edac5a53558884e4d9b32f"
           }
-        ],
-        "awaiting_rerun": [
-          "k2_update"
         ]
       }
     },
@@ -246,7 +256,7 @@
       },
       "verified": {
         "by": "helixscreen",
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "firmware": "1.3.3.46",
         "runs": [
           {
@@ -256,10 +266,15 @@
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10",
             "recipe": "k1_update",
             "behavior_sha256": "f3faeb0f4a8c36f6bb76485d4d2f01cd418b227adae60074dd0c9aaef7600925"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "Creality K1C, root login",
+            "firmware": "Creality 1.3.3.46 with Simple AF (pellcorp ea7125a)",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
+            "recipe": "k1_update",
+            "behavior_sha256": "a8baf78166a091ee78b2ae05e03665b3d420c7398769134a097c7b93293cb7bb"
           }
-        ],
-        "awaiting_rerun": [
-          "k1_update"
         ]
       }
     },
@@ -380,7 +395,7 @@
       },
       "verified": {
         "by": "helixscreen",
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "firmware": "Forge-X 1.4.2",
         "runs": [
           {
@@ -390,10 +405,15 @@
             "helixscreen": "v1.1.0-beta.10 reinstalled, then the reboot that starts it",
             "recipe": "ad5m_forgex_update",
             "behavior_sha256": "8e411464620ba945f16ea4e080205941e8651e3757b22567a5f763229aaab056"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "FlashForge Adventurer 5M Pro, root login",
+            "firmware": "FlashForge 3.1.5 with Forge-X 1.4.2",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
+            "recipe": "ad5m_forgex_update",
+            "behavior_sha256": "c176956a5f4efd439328fdbf38c1469a5192a871e44dcbaf67c69290900877ab"
           }
-        ],
-        "awaiting_rerun": [
-          "ad5m_forgex_update"
         ]
       }
     },
@@ -574,10 +594,15 @@
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10, no erase, WiFi and settings kept",
             "recipe": "ktouch_update",
             "behavior_sha256": "8c73c539c917d7f92c04f6d6aeb8bf51a3d90e6fab7c96ee25ae680716ab212e"
+          },
+          {
+            "date": "2026-10-20",
+            "printer": "BTT K-Touch over USB (CH340)",
+            "firmware": "ESP32-S3 16 MB",
+            "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
+            "recipe": "ktouch_update",
+            "behavior_sha256": "d2947c21107789964250c5850c9ee568dbc46f4bd4948bed6f61170a6a19af80"
           }
-        ],
-        "awaiting_rerun": [
-          "ktouch_update"
         ]
       }
     }
