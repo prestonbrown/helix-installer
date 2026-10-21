@@ -152,13 +152,36 @@ pub fn choose_for(m: &Manifest, printer_id: &str, f: &Facts) -> Option<Identifie
     Some(choose_recipe(printer, f))
 }
 
-/// A printer with no matching choice always refuses; `fallback.refuse` is not consulted.
+/// A printer with no matching choice always refuses; `fallback.refuse` is not consulted. One
+/// the list can update but not install from scratch says so, since that is the usual reason.
 fn refuse(printer: &Printer) -> Identified {
+    let updates = printer
+        .recipes
+        .iter()
+        .any(|c| matches!(c.when.get("state"), Some(Cond::Exact(s)) if s == "helix"));
+    let reason = if updates {
+        "the installer can update HelixScreen on this printer, but can't do a first install yet"
+            .to_string()
+    } else {
+        format!(
+            "the installer can't install HelixScreen on this {} as it is set up now",
+            printer.name
+        )
+    };
     Identified::Refuse {
         printer_id: Some(printer.id.clone()),
         doc: printer.fallback.doc.clone(),
-        reason: format!("no install recipe for this {} setup", printer.name),
+        reason,
     }
+}
+
+/// `name` after "a" or "an", whichever its first letter is said with.
+fn a_or_an(name: &str) -> String {
+    let vowel = name
+        .chars()
+        .next()
+        .is_some_and(|c| "AEIOUaeiou".contains(c));
+    format!("{} {name}", if vowel { "an" } else { "a" })
 }
 
 /// The printers the facts match, a last-resort printer only when nothing else does.
@@ -190,9 +213,9 @@ fn refused_match(m: &Manifest, f: &Facts) -> Option<Identified> {
             printer_id: Some(p.id.clone()),
             doc: p.fallback.doc.clone(),
             reason: format!(
-                "the printer did not report enough to tell it apart from a {}, which this \
+                "the printer did not report enough to tell it apart from {}, which this \
                  installer cannot put HelixScreen on",
-                p.name
+                a_or_an(&p.name)
             ),
         })
 }
@@ -201,7 +224,10 @@ fn turned_away(p: &Printer) -> Identified {
     Identified::Refuse {
         printer_id: Some(p.id.clone()),
         doc: p.fallback.doc.clone(),
-        reason: format!("this installer cannot put HelixScreen on a {}", p.name),
+        reason: format!(
+            "this installer cannot put HelixScreen on {}",
+            a_or_an(&p.name)
+        ),
     }
 }
 
@@ -297,8 +323,8 @@ pub fn identify_as(m: &Manifest, printer_id: &str, f: &Facts) -> Identified {
             printer_id: Some(printer.id.clone()),
             doc: printer.fallback.doc.clone(),
             reason: format!(
-                "this printer answers as a different model, not a {}",
-                printer.name
+                "this printer answers as a different model, not {}",
+                a_or_an(&printer.name)
             ),
         };
     }

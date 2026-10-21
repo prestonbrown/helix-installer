@@ -543,3 +543,88 @@ fn a_last_resort_printer_matches_only_when_no_other_does() {
         Identified::Recipe { .. }
     ));
 }
+
+fn refusal_reason(got: Identified) -> String {
+    match got {
+        Identified::Refuse { reason, .. } => reason,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+fn update_only_and_refused() -> Manifest {
+    serde_json::from_value(serde_json::json!({
+        "manifest_version": 1, "min_app_version": "0.1.0", "artifacts": {}, "recipes": {"u": []},
+        "printers": [
+            {
+                "id": "k1", "name": "Creality K1", "identify": [{"cpu_arch": "mips"}],
+                "recipes": [{"when": {"state": "helix"}, "recipe": "u"}],
+                "fallback": {"refuse": true, "doc": "https://d/k1"}
+            },
+            {
+                "id": "neptune", "name": "Elegoo Neptune 4", "refused": true,
+                "identify": [{"klipper_hostname": "neptune", "cpu_arch": "aarch64"}],
+                "recipes": [], "fallback": {"refuse": true, "doc": "https://d/n4"}
+            },
+            {
+                "id": "kobra", "name": "Anycubic Kobra", "refused": true,
+                "identify": [{"klipper_objects": {"contains": "kobra_box"}, "cpu_arch": "armv7l"}],
+                "recipes": [], "fallback": {"refuse": true, "doc": "https://d/kobra"}
+            },
+            {
+                "id": "sovol", "name": "Sovol SV08", "refused": true,
+                "identify": [{"klipper_hostname": "sovol"}],
+                "recipes": [], "fallback": {"refuse": true, "doc": "https://d/sovol"}
+            }
+        ]
+    }))
+    .unwrap()
+}
+
+fn facts(v: serde_json::Value) -> Facts {
+    serde_json::from_value(v).unwrap()
+}
+
+#[test]
+fn a_printer_the_list_can_only_update_says_so_in_plain_words() {
+    let m = update_only_and_refused();
+    let got = identify(
+        &m,
+        &facts(serde_json::json!({"has_moonraker": true, "cpu_arch": "mips"})),
+    );
+    let Identified::Refuse { doc, reason, .. } = got else {
+        panic!("expected a refusal, got {got:?}");
+    };
+    assert_eq!(doc, "https://d/k1");
+    assert_eq!(
+        reason,
+        "the installer can update HelixScreen on this printer, but can't do a first install yet"
+    );
+    assert!(!reason.contains("recipe"), "{reason}");
+}
+
+#[test]
+fn a_refusal_puts_a_or_an_before_the_model_name_as_it_is_said() {
+    let m = update_only_and_refused();
+    let r = |f| refusal_reason(identify(&m, &facts(f)));
+    assert_eq!(
+        r(serde_json::json!({"klipper_hostname": "neptune", "cpu_arch": "aarch64"})),
+        "this installer cannot put HelixScreen on an Elegoo Neptune 4"
+    );
+    assert_eq!(
+        r(serde_json::json!({"klipper_hostname": "sovol"})),
+        "this installer cannot put HelixScreen on a Sovol SV08"
+    );
+    // Partly matching a refused printer names it the same way.
+    let partial = r(serde_json::json!({"klipper_objects": ["kobra_box"]}));
+    assert!(
+        partial.contains("tell it apart from an Anycubic Kobra"),
+        "{partial}"
+    );
+    // Picking a model the printer is not.
+    let picked = refusal_reason(identify_as(
+        &m,
+        "k1",
+        &facts(serde_json::json!({"klipper_hostname": "neptune", "cpu_arch": "aarch64"})),
+    ));
+    assert!(picked.contains("an Elegoo Neptune 4"), "{picked}");
+}

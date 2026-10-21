@@ -512,8 +512,6 @@ fn booted(ctx: &mut StepCtx<'_>, task: &Task, log: &str) -> StepOutcome {
             )),
         },
         None if task.update => {
-            ctx.facts
-                .insert(UPDATED_TO_FACT.into(), json!(task.version));
             StepOutcome::Complete {
             note: format!(
                 "HelixScreen {} was written to the {name} and checked, and it restarted, but the \

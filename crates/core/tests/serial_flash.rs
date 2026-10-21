@@ -336,6 +336,22 @@ async fn a_finished_update_says_what_the_panel_now_runs_and_that_its_wifi_and_se
     assert_eq!(r.state().facts[UPDATED_TO_FACT], json!("v1.1.0-beta.10"));
 }
 
+#[tokio::test]
+async fn an_update_whose_new_version_cannot_be_read_back_does_not_claim_the_version() {
+    let rig = Rig::new();
+    rig.running("v1.1.0-beta.9");
+    rig.serial.silent_boot();
+    let mut r = rig.runner();
+    let t = drive(&mut r).await;
+    assert!(matches!(t.end, Event::Done), "{:?}", t.end);
+    let note = r.state().done_note.clone().unwrap_or_default();
+    assert!(note.contains("could not read its version back"), "{note}");
+    assert!(
+        !r.state().facts.contains_key(UPDATED_TO_FACT),
+        "an unread version is not shown as updated to"
+    );
+}
+
 fn log_lines(r: &Runner) -> Vec<String> {
     r.state().log.iter().map(|e| e.text.clone()).collect()
 }

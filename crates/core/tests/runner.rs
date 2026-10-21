@@ -1999,7 +1999,7 @@ async fn a_probe_that_leaves_the_printer_no_recipe_refuses_before_the_commit() {
     match settle(&mut r, None).await {
         Event::Refused { doc, reason, .. } => {
             assert_eq!(doc, PRINTER_DOC);
-            assert!(reason.contains("no install recipe"), "{reason}");
+            assert!(reason.starts_with("the installer can"), "{reason}");
         }
         e => panic!("expected a refusal, got {e:?}"),
     }
