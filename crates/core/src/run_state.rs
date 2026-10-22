@@ -96,6 +96,19 @@ pub struct RunState {
     /// What kind of ending `done_note` describes.
     #[serde(default)]
     pub done_kind: Option<DoneKind>,
+    /// Lines the finish screen adds about what the run kept for the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finish_notes: Vec<FinishNote>,
+}
+
+/// One line for the finish screen, from the step that wrote it: a step run again replaces its
+/// own line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishNote {
+    pub step: usize,
+    pub text: String,
+    /// Something did not go as planned and the user should look.
+    pub warn: bool,
 }
 
 /// Why a run ended before its last step.
@@ -144,6 +157,7 @@ impl RunState {
             log: Vec::new(),
             status: RunStatus::Running,
             done_note: None,
+            finish_notes: Vec::new(),
             done_kind: None,
         }
     }

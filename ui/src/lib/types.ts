@@ -112,6 +112,15 @@ export interface RunInfo {
   host_name: string | null;
   /** The version a finished update installed; null for a first install. */
   updated_to: string | null;
+  /** Lines the finish screen adds about what the run kept for the user. */
+  finish_notes: FinishNote[];
+}
+
+export interface FinishNote {
+  step: number;
+  text: string;
+  /** Something did not go as planned and the user should look. */
+  warn: boolean;
 }
 
 export interface AdvanceView {

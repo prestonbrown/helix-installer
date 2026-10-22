@@ -394,12 +394,15 @@ fn is_terminal(s: &Step, is_restore: bool) -> bool {
 /// The first step that changes the printer, which the commit must come at or before so a
 /// failure from there on is shown as a half-changed printer (Recovery), never "nothing was
 /// changed". Commands, G-code, Moonraker updates and installs change it. Writing a stick does
-/// not: it only touches the user's drive. The first user action after a stick is written is
-/// where the user puts the stick in and the printer flashes itself, so it counts as a change.
+/// not: it only touches the user's drive. Setting print files aside does not either: it adds
+/// hard links and leaves every file where it was. The first user action after a stick is
+/// written is where the user puts the stick in and the printer flashes itself, so it counts as
+/// a change.
 fn first_change(steps: &[Step]) -> Option<usize> {
     let mut stick_written = false;
     steps.iter().position(|s| match s {
         Step::SshRun { .. }
+        | Step::KeepGcodes { restore: true, .. }
         | Step::MoonrakerGcode { .. }
         | Step::MoonrakerUpdate { .. }
         | Step::HelixInstall {
@@ -499,6 +502,43 @@ fn stale_after_commit(id: &str, steps: &[Step], commit: usize, err: &mut impl Fn
     }
 }
 
+/// Files set aside before the commit are only safe once a restore of the same folder runs after
+/// it: a set-aside after the commit is too late for the step it guards against, and one with no
+/// restore leaves the files hidden.
+fn kept_gcodes_come_back(
+    id: &str,
+    steps: &[Step],
+    commit: Option<usize>,
+    err: &mut impl FnMut(&str, String),
+) {
+    for (i, s) in steps.iter().enumerate() {
+        let Step::KeepGcodes {
+            dir,
+            into,
+            restore: false,
+            ..
+        } = s
+        else {
+            continue;
+        };
+        if commit.is_none_or(|c| i >= c) {
+            err(
+                id,
+                format!("step {i}: keep_gcodes sets files aside after the commit (or with none)"),
+            );
+        }
+        let restored = steps[i + 1..].iter().any(|r| {
+            matches!(r, Step::KeepGcodes { dir: d, into: n, restore: true, .. } if d == dir && n == into)
+        });
+        if !restored {
+            err(
+                id,
+                format!("step {i}: keep_gcodes sets files aside, and no later keep_gcodes restore of {dir} into {into:?} puts them back"),
+            );
+        }
+    }
+}
+
 fn lint_recipe(
     m: &Manifest,
     id: &str,
@@ -546,6 +586,7 @@ fn lint_recipe(
         stale_after_commit(id, steps, c, err);
         release_checked_before(id, steps, c, err);
     }
+    kept_gcodes_come_back(id, steps, commits.first().copied(), err);
     let artifact = |name: &str, err: &mut dyn FnMut(&str, String)| {
         if !m.artifacts.contains_key(name) {
             err(id, format!("references unknown artifact {name:?}"));

@@ -8,6 +8,7 @@ pub mod esp32;
 pub mod helix_install;
 pub mod info;
 mod job;
+pub mod keep_gcodes;
 pub mod moonraker;
 pub mod probe;
 pub mod progress;
@@ -23,7 +24,7 @@ pub mod write_stick;
 use crate::facts::Facts;
 use crate::identify::{self, GENERIC_REFUSE_DOC};
 use crate::manifest::{Channel, Login, Manifest, Step};
-use crate::run_state::{DoneKind, LogEntry, IDENTITY_KEYS};
+use crate::run_state::{DoneKind, FinishNote, LogEntry, IDENTITY_KEYS};
 use crate::runner::{unix_secs, Input, Prompt};
 use crate::transport::{Env, Host, RemoteJob, SshSession, TransportError};
 use async_trait::async_trait;
@@ -188,6 +189,7 @@ pub struct StepCtx<'a> {
     pub recipe: &'a [Step],
     pub(crate) identity: Option<&'a Facts>,
     pub(crate) log: &'a mut Vec<LogEntry>,
+    pub(crate) finish_notes: &'a mut Vec<FinishNote>,
     pub(crate) session: &'a mut Session,
 }
 
@@ -508,6 +510,9 @@ pub(crate) async fn run_builtin(
         Step::SshRun {
             command, timeout_s, ..
         } => ssh_run::run(ctx, command, *timeout_s, input).await,
+        Step::KeepGcodes {
+            dir, into, restore, ..
+        } => keep_gcodes::run(ctx, dir, into, *restore, input).await,
         Step::HelixInstall {
             platform,
             channel,

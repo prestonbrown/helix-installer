@@ -559,6 +559,17 @@ pub enum Step {
         #[serde(default)]
         commits: bool,
     },
+    /// Keeps the top-level `.gcode` files in `dir` through a later step that deletes them: set
+    /// aside (hard links, no copy) before it, then with `restore` moved into the folder `into`
+    /// and counted, with a line on the finish screen.
+    KeepGcodes {
+        dir: String,
+        into: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        restore: bool,
+        #[serde(default)]
+        commits: bool,
+    },
     MoonrakerGcode {
         script: String,
         #[serde(default)]
@@ -630,6 +641,7 @@ impl Step {
             Step::WaitFor { .. } => "wait_for",
             Step::SshLogin { .. } => "ssh_login",
             Step::SshRun { .. } => "ssh_run",
+            Step::KeepGcodes { .. } => "keep_gcodes",
             Step::MoonrakerGcode { .. } => "moonraker_gcode",
             Step::MoonrakerUpdate { .. } => "moonraker_update",
             Step::HelixInstall { .. } => "helix_install",
@@ -658,6 +670,7 @@ impl Step {
         matches!(
             self,
             Step::SshRun { .. }
+                | Step::KeepGcodes { .. }
                 | Step::HelixInstall { check: false, .. }
                 | Step::MoonrakerGcode { .. }
                 | Step::MoonrakerUpdate { .. }
@@ -678,6 +691,7 @@ impl Step {
             | Step::WaitFor { commits, .. }
             | Step::SshLogin { commits, .. }
             | Step::SshRun { commits, .. }
+            | Step::KeepGcodes { commits, .. }
             | Step::MoonrakerGcode { commits, .. }
             | Step::MoonrakerUpdate { commits, .. }
             | Step::HelixInstall { commits, .. }
@@ -707,6 +721,17 @@ impl Step {
                 "a helix_install check resolves a new install's release before the point of no \
                  return: it cannot update, uninstall, dry-run or commit",
             ),
+            Step::KeepGcodes { dir, into, .. }
+                if !dir.starts_with('/')
+                    || into.is_empty()
+                    || into.contains('/')
+                    || into.starts_with('.') =>
+            {
+                Some(
+                    "keep_gcodes needs an absolute dir and, for into, a folder name that is not \
+                     hidden and has no /",
+                )
+            }
             Step::SerialFlash { chip, flash_mb, .. } if chip.is_empty() || *flash_mb == 0 => {
                 Some("serial_flash needs a chip and a flash_mb")
             }

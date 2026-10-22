@@ -14,6 +14,7 @@ use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
     releases_manifest_url, GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE,
 };
+use helix_installer_core::steps::keep_gcodes::{restore_script, set_aside_script};
 use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
@@ -753,6 +754,8 @@ fn k1_rig(k1: K1) -> Rig {
         .on_command(OTA_PROBE, out(&format!("{}\n", k1.firmware), 0));
     rig.ssh.on_command(LEFTOVERS_PROBE, yes_no(k1.leftovers));
     rig.ssh.on_command(K1_MODEL_PROBE, yes_no(k1.is_k1));
+    rig.ssh.on_command(&k1_set_aside(), out("0\n", 0));
+    rig.ssh.on_command(&k1_restore(), out("0 0\n", 0));
     let objects = fleet("k1c_helper_script")["klipper_objects"].clone();
     rig.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "K1C-0000" }));
@@ -766,6 +769,17 @@ fn k1_rig(k1: K1) -> Rig {
         }
     });
     rig
+}
+
+const K1_GCODES: &str = "/usr/data/printer_data/gcodes";
+const K1_KEPT_FOLDER: &str = "From Creality firmware";
+
+fn k1_set_aside() -> String {
+    set_aside_script(K1_GCODES)
+}
+
+fn k1_restore() -> String {
+    restore_script(K1_GCODES, K1_KEPT_FOLDER)
 }
 
 /// Answers a stock K1 run: the root option is there, Next everywhere else.
@@ -926,6 +940,93 @@ async fn a_stock_k1_picked_from_the_grid_gets_simple_af_then_helixscreen() {
         "{:?}",
         rig.installs()
     );
+}
+
+/// A stock K1 run where the set-aside finds `set_aside` files and the restore prints
+/// `restored`, ending done.
+async fn stock_k1_keeping(set_aside: ExecOutput, restored: ExecOutput) -> (Rig, Trace, RunState) {
+    let rig = k1_rig(STOCK_K1);
+    rig.ssh.on_command(&k1_set_aside(), set_aside);
+    rig.ssh.on_command(&k1_restore(), restored);
+    rig.ssh.script_job(vec![("Simple AF installed\n", Some(0))]);
+    rig.installer_succeeds("k1");
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+    let trace = drive(&mut r, stock_k1_answers).await;
+    let state = r.state().clone();
+    (rig, trace, state)
+}
+
+#[tokio::test]
+async fn a_stock_k1_keeps_its_print_files_through_simple_af_and_says_so() {
+    let (rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("3 0\n", 0)).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    let cmds = rig.ssh.commands();
+    let at = |c: &str| {
+        cmds.iter()
+            .position(|x| x == c)
+            .unwrap_or_else(|| panic!("{c} not run: {cmds:?}"))
+    };
+    assert!(at(&k1_set_aside()) < at(SIMPLE_AF), "{cmds:?}");
+    assert!(at(SIMPLE_AF) < at(&k1_restore()), "{cmds:?}");
+    assert!(!rig.installs().is_empty());
+    assert_eq!(state.finish_notes.len(), 1, "{:?}", state.finish_notes);
+    let note = &state.finish_notes[0];
+    assert!(!note.warn);
+    assert!(note.text.contains("3 print files"), "{}", note.text);
+    assert!(note.text.contains(K1_KEPT_FOLDER), "{}", note.text);
+}
+
+#[tokio::test]
+async fn print_files_that_did_not_all_come_back_are_a_warning_on_the_finish_screen() {
+    let (_rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("2 1\n", 0)).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    let note = &state.finish_notes[0];
+    assert!(note.warn, "{note:?}");
+    assert!(
+        note.text
+            .contains("/usr/data/printer_data/gcodes/.helix-kept"),
+        "{}",
+        note.text
+    );
+}
+
+#[tokio::test]
+async fn a_restore_that_cannot_run_still_finishes_the_install_with_a_warning() {
+    let (rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("", 1)).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(!rig.installs().is_empty());
+    let note = &state.finish_notes[0];
+    assert!(note.warn, "{note:?}");
+    assert!(note.text.contains("3 print files"), "{}", note.text);
+}
+
+#[tokio::test]
+async fn a_stock_k1_with_no_print_files_gets_no_note() {
+    let (_rig, trace, state) = stock_k1_keeping(out("0\n", 0), out("0 0\n", 0)).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(state.finish_notes.is_empty(), "{:?}", state.finish_notes);
+}
+
+#[tokio::test]
+async fn print_files_that_cannot_be_set_aside_stop_the_run_before_simple_af() {
+    let rig = k1_rig(STOCK_K1);
+    rig.ssh.on_command(&k1_set_aside(), out("", 1));
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    match &trace.end {
+        Event::Failed {
+            committed: false,
+            reason,
+            ..
+        } => assert!(reason.contains("set aside"), "{reason}"),
+        other => panic!("expected an uncommitted failure, got {other:?}"),
+    }
+    assert!(!ran(&rig, SIMPLE_AF));
 }
 
 /// An `install.sh` from before `--progress`, as stable 1.0.5 ships it.

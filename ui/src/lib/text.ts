@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Wording the screens share, keyed by the manifest step type the engine reports.
-import type { DoneKind } from "./types";
+import type { DoneKind, FinishNote } from "./types";
 
 const STEP_LABELS: Record<string, string> = {
   info: "Getting ready",
@@ -13,6 +13,7 @@ const STEP_LABELS: Record<string, string> = {
   wait_for: "Waiting for your printer",
   ssh_login: "Connecting to your printer",
   ssh_run: "Setting up your printer",
+  keep_gcodes: "Keeping your print files",
   moonraker_gcode: "Switching your printer's screen",
   moonraker_update: "Updating HelixScreen",
   helix_install: "Installing HelixScreen",
@@ -71,17 +72,22 @@ export function sentence(s: string): string {
 
 /** The finish screen. A run that found HelixScreen current is a success that changed
  * nothing; one that ended with a note says what to check. An update names the version it
- * installed (`updatedTo`); only a first install says HelixScreen is installed. */
+ * installed (`updatedTo`); only a first install says HelixScreen is installed. What the run
+ * kept for the user follows (`kept`), and the ones that did not go as planned are `warnings`. */
 export function finishScreen(
   kind: DoneKind | null,
   note: string | null,
   printerName: string,
   updatedTo: string | null = null,
-): { heading: string; lines: string[] } {
+  kept: FinishNote[] = [],
+): { heading: string; lines: string[]; warnings: string[] } {
+  const keptLines = kept.filter((n) => !n.warn).map((n) => sentence(n.text));
+  const warnings = kept.filter((n) => n.warn).map((n) => sentence(n.text));
   if (kind === "up_to_date") {
     return {
       heading: "HelixScreen is up to date",
       lines: [sentence(note ?? ""), "Nothing on your printer was changed."].filter((l) => l),
+      warnings,
     };
   }
   return {
@@ -90,7 +96,9 @@ export function finishScreen(
       note
         ? sentence(note)
         : `Your ${printerName} may restart on its own. When it has, its screen shows HelixScreen.`,
+      ...keptLines,
     ],
+    warnings,
   };
 }
 

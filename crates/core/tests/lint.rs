@@ -977,3 +977,61 @@ fn a_field_left_at_its_default_does_not_change_the_behavior_digest() {
     assert_ne!(steps(json!({})), steps(json!({"commits": true})));
     assert_ne!(steps(json!({})), steps(json!({"channel": "beta"})));
 }
+
+fn keep(restore: bool) -> Value {
+    json!({"type": "keep_gcodes", "dir": "/g", "into": "Kept", "restore": restore})
+}
+
+/// install with a set-aside before its commit (step 2), and a probe and a restore after the
+/// commit: the restore acts on the printer, so the probe re-identifies it first.
+fn keeping() -> Value {
+    let mut v = base();
+    let steps = v["recipes"]["install"].as_array_mut().unwrap();
+    steps.insert(2, keep(false));
+    let at = steps.len() - 1;
+    steps.insert(at, json!({"type": "probe", "moonraker": "objects_list"}));
+    steps.insert(at + 1, keep(true));
+    v
+}
+
+#[test]
+fn a_set_aside_before_the_commit_with_a_restore_after_it_is_clean() {
+    assert_eq!(run(keeping(), false), vec![]);
+}
+
+#[test]
+fn a_set_aside_with_no_restore_after_it_is_refused() {
+    let mut v = keeping();
+    let steps = v["recipes"]["install"].as_array_mut().unwrap();
+    let restore = steps.len() - 2;
+    steps.remove(restore);
+    only(v, "puts them back");
+}
+
+#[test]
+fn a_set_aside_after_the_commit_is_refused() {
+    let mut v = base();
+    let steps = v["recipes"]["install"].as_array_mut().unwrap();
+    steps.insert(3, json!({"type": "probe", "moonraker": "objects_list"}));
+    steps.insert(4, keep(false));
+    steps.insert(5, keep(true));
+    only(v, "after the commit");
+}
+
+#[test]
+fn keep_gcodes_needs_an_absolute_dir_and_a_plain_folder_name() {
+    for (dir, into) in [("g", "Kept"), ("/g", "a/b"), ("/g", ".hidden"), ("/g", "")] {
+        let mut v = keeping();
+        let steps = v["recipes"]["install"].as_array_mut().unwrap();
+        let n = steps.len();
+        for i in [2, n - 2] {
+            steps[i]["dir"] = json!(dir);
+            steps[i]["into"] = json!(into);
+        }
+        let errs = run(v, false);
+        assert!(
+            errs.iter().any(|e| e.message.contains("absolute dir")),
+            "{dir} {into}: {errs:?}"
+        );
+    }
+}

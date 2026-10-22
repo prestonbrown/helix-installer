@@ -1087,13 +1087,18 @@
         "type": "require",
         "fact": "k1_leftovers",
         "equals": "false",
-        "reason": "Something from an earlier mod is on this printer (Helper Script, Creality's Fluidd or Mainsail script, or files in /opt). Simple AF installs only on a printer fresh from a factory reset: reset it from its Settings, then run the installer again.",
+        "reason": "Something from an earlier mod is on this printer (Helper Script, Creality's Fluidd or Mainsail script, or files in /opt). Simple AF installs only on a printer fresh from a factory reset. A factory reset erases what the earlier mod kept, its print files and print history included, so download any print files you want to keep first. Then reset the printer from its Settings and run the installer again.",
         "doc": "https://helixscreen.org/guide/install-k1/"
       },
       {
         "type": "helix_install",
         "platform": "k1",
         "check": true
+      },
+      {
+        "type": "keep_gcodes",
+        "dir": "/usr/data/printer_data/gcodes",
+        "into": "From Creality firmware"
       },
       {
         "type": "ssh_run",
@@ -1120,6 +1125,12 @@
         "type": "probe",
         "ssh": "uname -m",
         "fact": "cpu_arch"
+      },
+      {
+        "type": "keep_gcodes",
+        "dir": "/usr/data/printer_data/gcodes",
+        "into": "From Creality firmware",
+        "restore": true
       },
       {
         "type": "helix_install",
@@ -1323,7 +1334,7 @@
       },
       {
         "type": "info",
-        "text": "ZMOD installs only on a printer reset to factory settings: its own guide makes this a requirement. Reset the printer from its Settings now if it has not been reset since its firmware was last flashed. Then press Next to copy ZMOD onto a USB stick."
+        "text": "ZMOD installs only on a printer reset to factory settings: its own guide makes this a requirement. A reset can erase the print files stored on the printer, so copy any you want to keep to your computer first. Reset the printer from its Settings now if it has not been reset since its firmware was last flashed. Then press Next to copy ZMOD onto a USB stick."
       },
       {
         "type": "download",

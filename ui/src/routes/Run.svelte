@@ -350,6 +350,7 @@
       run?.done_note ?? null,
       run?.printer_name ?? "printer",
       run?.updated_to ?? null,
+      run?.finish_notes ?? [],
     )}
     <section class="card body done">
       <div class="badge ok" aria-hidden="true">
@@ -358,6 +359,9 @@
       <h1>{finish.heading}</h1>
       {#each finish.lines as line, i}
         <p class:lead={i === 0}>{line}</p>
+      {/each}
+      {#each finish.warnings as warning}
+        <div class="notice warn" role="status">{warning}</div>
       {/each}
       <div class="actions sticky">
         <button class="primary" onclick={onexit}>Finish</button>

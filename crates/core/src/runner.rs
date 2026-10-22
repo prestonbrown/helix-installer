@@ -626,6 +626,7 @@ impl Runner {
             committed: self.state.committed,
             identity: self.state.identity.as_ref(),
             log: &mut self.state.log,
+            finish_notes: &mut self.state.finish_notes,
             step: self.state.step_index,
             printer_id: &self.state.printer_id,
             recipe: manifest

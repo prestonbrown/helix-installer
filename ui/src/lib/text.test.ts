@@ -36,6 +36,15 @@ describe("before the point of no return", () => {
 });
 
 describe("the finish screen", () => {
+  it("adds what the run kept after the install line, and shows a shortfall as a warning", () => {
+    const s = finishScreen(null, null, "Creality K1", null, [
+      { step: 21, text: 'your 3 print files from before the install were kept: they are in the folder "Kept"', warn: false },
+      { step: 22, text: "only 2 came back", warn: true },
+    ]);
+    expect(s.lines[0]).toMatch(/Your Creality K1 may restart/);
+    expect(s.lines[1]).toBe('Your 3 print files from before the install were kept: they are in the folder "Kept".');
+    expect(s.warnings).toEqual(["Only 2 came back."]);
+  });
   it("reads an up-to-date check as a success that changed nothing", () => {
     const s = finishScreen(
       "up_to_date",

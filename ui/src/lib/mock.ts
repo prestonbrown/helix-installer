@@ -157,6 +157,7 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   done_kind: null,
   host_name: "k1-printer",
   updated_to: null,
+  finish_notes: [],
   ...over,
 });
 
@@ -327,6 +328,36 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
     run: run({ step: 7, step_kind: "helix_install", committed: true }),
   },
   done: { event: { event: "done" }, run: run({ step: 9, step_kind: null, committed: true }) },
+  done_kept: {
+    event: { event: "done" },
+    run: run({
+      step: 9,
+      step_kind: null,
+      committed: true,
+      finish_notes: [
+        {
+          step: 21,
+          text: 'your 3 print files from before the install were kept: they are in the folder "From Creality firmware"',
+          warn: false,
+        },
+      ],
+    }),
+  },
+  done_kept_short: {
+    event: { event: "done" },
+    run: run({
+      step: 9,
+      step_kind: null,
+      committed: true,
+      finish_notes: [
+        {
+          step: 21,
+          text: 'the installer set aside 3 print files before the install, and only 2 reached the folder "From Creality firmware". The rest are still on the printer in /usr/data/printer_data/gcodes/.helix-kept',
+          warn: true,
+        },
+      ],
+    }),
+  },
   up_to_date: {
     event: { event: "done" },
     run: run({
