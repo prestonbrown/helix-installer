@@ -28,7 +28,11 @@ pub const BACK_FACT: &str = "kept_gcodes_back";
 
 const KEEP_TIMEOUT: Duration = Duration::from_secs(120);
 
-const RUN_AGAIN: &str = "Run the installer on this printer again and it puts them back";
+/// The line telling the user how files still set aside come back.
+fn run_again(n: u64) -> String {
+    let them = if n == 1 { "it" } else { "them" };
+    format!("Run the installer on this printer again and it puts {them} back")
+}
 
 /// Links every top-level `*.gcode` in `dir` into `dir/.helix-kept` and prints how many the
 /// folder holds. A file already set aside is never replaced: the same file is skipped and a
@@ -50,16 +54,18 @@ pub fn set_aside_script(dir: &str) -> String {
 }
 
 /// Moves what the set-aside holds into `dir/into`, never over a file already there (a name
-/// taken gets ` (2)`), and prints whether a set-aside was there, how many `.gcode` files `into`
+/// taken gets ` (2)`), as a folder and files anyone can read like the rest of the gcodes. Once no
+/// `.gcode` is left set aside, the thumbnails Moonraker made for them go and the folder with
+/// them. Prints whether a set-aside was there, how many `.gcode` files `into`
 /// holds and how many are still set aside; `gone` when `dir` itself is missing.
 pub fn restore_script(dir: &str, into: &str) -> String {
     format!(
         "cd {d} 2>/dev/null || {{ echo gone; exit 0; }}; I={i}; had=0; \
-         if [ -d {k} ]; then had=1; mkdir -p \"$I\" || exit 1; \
+         if [ -d {k} ]; then had=1; mkdir -p \"$I\" || exit 1; chmod 755 \"$I\"; \
          for f in {k}/*.gcode; do [ -f \"$f\" ] || continue; b=${{f#{k}/}}; t=\"$I/$b\"; i=2; \
          while [ -e \"$t\" ]; do t=\"$I/${{b%.gcode}} ($i).gcode\"; i=$((i+1)); done; \
-         mv \"$f\" \"$t\"; done; \
-         rmdir {k} 2>/dev/null; fi; \
+         mv \"$f\" \"$t\" && chmod 644 \"$t\"; done; \
+         if ! ls {k}/*.gcode >/dev/null 2>&1; then rm -rf {k}/.thumbs; rmdir {k} 2>/dev/null; fi; fi; \
          kept=0; for f in \"$I\"/*.gcode; do [ -f \"$f\" ] && kept=$((kept+1)); done; \
          left=0; for f in {k}/*.gcode; do [ -f \"$f\" ] && left=$((left+1)); done; \
          echo \"$had $kept $left\"",
@@ -105,6 +111,15 @@ fn files(n: u64) -> String {
     }
 }
 
+/// `one` for a single file, `many` otherwise, so every verb agrees with its count.
+fn agree(n: u64, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 {
+        one
+    } else {
+        many
+    }
+}
+
 fn hidden(dir: &str) -> String {
     format!("{}/{SET_ASIDE_DIR}", dir.trim_end_matches('/'))
 }
@@ -122,8 +137,10 @@ pub fn restore_note(
     let kept_line = |kept| {
         (
             format!(
-                "your {} from before the install were kept: they are in the folder \"{into}\"",
-                files(kept)
+                "your {} from before the install {}: {} in the folder \"{into}\"",
+                files(kept),
+                agree(kept, "was kept", "were kept"),
+                agree(kept, "it is", "they are"),
             ),
             false,
         )
@@ -131,9 +148,11 @@ pub fn restore_note(
     let missing = |e: u64, kept| {
         (
             format!(
-                "the installer set aside {} before the install, and only {kept} are in the folder \
-                 \"{into}\". The others could not be found on the printer",
-                files(e)
+                "the installer set aside {} before the install, and only {kept} {} in the folder \
+                 \"{into}\". {} could not be found on the printer",
+                files(e),
+                agree(kept, "is", "are"),
+                files(e - kept),
             ),
             true,
         )
@@ -142,10 +161,12 @@ pub fn restore_note(
         None => expected.map(|e| {
             (
                 format!(
-                    "the installer could not move back the {} it set aside. They should still be \
-                     on the printer in {}. {RUN_AGAIN}",
+                    "the installer could not move back the {} it set aside. {} still be on \
+                     the printer in {}. {}",
                     files(e),
-                    hidden(dir)
+                    agree(e, "It should", "They should"),
+                    hidden(dir),
+                    run_again(e)
                 ),
                 true,
             )
@@ -162,10 +183,12 @@ pub fn restore_note(
         }),
         Some(Restored::Found { left, .. }) if left > 0 => Some((
             format!(
-                "{} the installer set aside could not be moved and are still on the printer in \
-                 {}. {RUN_AGAIN}",
+                "{} the installer set aside could not be moved and {} still on the printer in \
+                 {}. {}",
                 files(left),
-                hidden(dir)
+                agree(left, "is", "are"),
+                hidden(dir),
+                run_again(left)
             ),
             true,
         )),
@@ -176,8 +199,9 @@ pub fn restore_note(
             // what keeps that true.
             None if had => Some((
                 format!(
-                    "{} from an earlier run were put back in the folder \"{into}\"",
-                    files(kept)
+                    "{} from an earlier run {} put back in the folder \"{into}\"",
+                    files(kept),
+                    agree(kept, "was", "were"),
                 ),
                 false,
             )),
@@ -474,12 +498,12 @@ mod tests {
         let (text, warn) = restore_note(Some(3), Some(found(true, 2, 1)), "/g/", INTO).unwrap();
         assert!(warn);
         assert!(
-            text.contains("/g/.helix-kept") && text.contains(RUN_AGAIN),
+            text.contains("/g/.helix-kept") && text.contains(&run_again(1)),
             "{text}"
         );
         let (text, warn) = restore_note(Some(3), None, "/g", INTO).unwrap();
         assert!(
-            warn && text.contains("3 print files") && text.contains(RUN_AGAIN),
+            warn && text.contains("3 print files") && text.contains(&run_again(3)),
             "{text}"
         );
         assert!(!text.contains('\u{2014}'));
@@ -506,5 +530,84 @@ mod tests {
         assert_eq!(parse_restored("4 0"), None);
         assert_eq!(parse_restored("2 4 0"), None);
         assert_eq!(parse_restored("1 x 0"), None);
+    }
+
+    /// Every line the restore can write, for one file: no plural verb or pronoun with it.
+    #[test]
+    fn a_single_file_is_never_spoken_of_in_the_plural() {
+        let lines = [
+            restore_note(Some(1), Some(found(true, 1, 0)), "/g", INTO),
+            restore_note(None, Some(found(true, 1, 0)), "/g", INTO),
+            restore_note(Some(1), None, "/g", INTO),
+            restore_note(Some(1), Some(Restored::Gone), "/g", INTO),
+            restore_note(Some(3), Some(found(true, 2, 1)), "/g", INTO),
+        ];
+        for (text, _) in lines.into_iter().map(Option::unwrap) {
+            for plural in ["files", " were ", " are ", "They ", "they ", "them"] {
+                assert!(!text.contains(plural), "{plural:?} in {text}");
+            }
+            assert!(text.contains("1 print file"), "{text}");
+        }
+        let (text, _) = restore_note(None, Some(found(true, 1, 0)), "/g", INTO).unwrap();
+        assert!(
+            text.starts_with("1 print file from an earlier run was put back"),
+            "{text}"
+        );
+        let (text, _) = restore_note(Some(2), Some(found(true, 1, 0)), "/g", INTO).unwrap();
+        assert!(
+            text.contains("only 1 is in") && text.contains("1 print file could not be found"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_restore_clears_the_thumbnails_and_the_folder_once_nothing_is_left() {
+        let t = tempfile::tempdir().unwrap();
+        let g = t.path();
+        let dir = g.to_str().unwrap();
+        fs::write(g.join("a.gcode"), "A").unwrap();
+        sh(&set_aside_script(dir));
+        delete_top_level(g);
+        fs::create_dir(g.join(SET_ASIDE_DIR).join(".thumbs")).unwrap();
+        fs::write(g.join(SET_ASIDE_DIR).join(".thumbs/a-32x32.png"), "png").unwrap();
+
+        assert_eq!(
+            parse_restored(&sh(&restore_script(dir, INTO))),
+            Some(found(true, 1, 0))
+        );
+        assert!(!g.join(SET_ASIDE_DIR).exists());
+    }
+
+    #[test]
+    fn thumbnails_stay_while_a_file_is_still_set_aside() {
+        let t = tempfile::tempdir().unwrap();
+        let g = t.path();
+        let dir = g.to_str().unwrap();
+        let k = g.join(SET_ASIDE_DIR);
+        fs::create_dir_all(k.join(".thumbs")).unwrap();
+        fs::write(k.join("a.gcode"), "A").unwrap();
+        // A move that fails leaves a.gcode set aside.
+        let script = format!("mv() {{ return 1; }}; {}", restore_script(dir, INTO));
+        let r = parse_restored(&sh(&script)).unwrap();
+        assert_eq!(r, found(true, 0, 1));
+        assert!(k.join(".thumbs").is_dir());
+    }
+
+    #[test]
+    fn put_back_files_and_their_folder_are_readable_like_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let g = t.path();
+        let dir = g.to_str().unwrap();
+        let k = g.join(SET_ASIDE_DIR);
+        fs::create_dir(&k).unwrap();
+        fs::write(k.join("a.gcode"), "A").unwrap();
+        fs::set_permissions(k.join("a.gcode"), fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&k, fs::Permissions::from_mode(0o700)).unwrap();
+
+        sh(&format!("umask 077; {}", restore_script(dir, INTO)));
+        let mode = |p: std::path::PathBuf| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(g.join(INTO)), 0o755);
+        assert_eq!(mode(g.join(INTO).join("a.gcode")), 0o644);
     }
 }
