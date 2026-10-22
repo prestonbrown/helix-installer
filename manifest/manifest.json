@@ -843,6 +843,12 @@
         "fact": "helix_installed"
       },
       {
+        "type": "keep_gcodes",
+        "dir": "/usr/data/printer_data/gcodes",
+        "into": "From Creality firmware",
+        "restore": true
+      },
+      {
         "type": "helix_install",
         "platform": "k1",
         "update": true,

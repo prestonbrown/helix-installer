@@ -394,15 +394,14 @@ fn is_terminal(s: &Step, is_restore: bool) -> bool {
 /// The first step that changes the printer, which the commit must come at or before so a
 /// failure from there on is shown as a half-changed printer (Recovery), never "nothing was
 /// changed". Commands, G-code, Moonraker updates and installs change it. Writing a stick does
-/// not: it only touches the user's drive. Setting print files aside does not either: it adds
-/// hard links and leaves every file where it was. The first user action after a stick is
-/// written is where the user puts the stick in and the printer flashes itself, so it counts as
-/// a change.
+/// not: it only touches the user's drive. Neither does keeping print files: setting them aside
+/// adds hard links and leaves every file where it was, and a restore only moves what an earlier
+/// set-aside hid back into view. The first user action after a stick is written is where the
+/// user puts the stick in and the printer flashes itself, so it counts as a change.
 fn first_change(steps: &[Step]) -> Option<usize> {
     let mut stick_written = false;
     steps.iter().position(|s| match s {
         Step::SshRun { .. }
-        | Step::KeepGcodes { restore: true, .. }
         | Step::MoonrakerGcode { .. }
         | Step::MoonrakerUpdate { .. }
         | Step::HelixInstall {

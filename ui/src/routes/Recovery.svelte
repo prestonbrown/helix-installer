@@ -6,7 +6,7 @@
   import { ApiError } from "../lib/api";
   import Copyable from "../lib/Copyable.svelte";
   import { openGuide } from "../lib/open";
-  import { isUrl, keepOnLabel, retryAdvice, sentence, stepLabel, stoppedState } from "../lib/text";
+  import { isUrl, keepOnLabel, retryAdvice, sentence, setAsideText, stepLabel, stoppedState } from "../lib/text";
   import type { RunEvent, RunInfo } from "../lib/types";
 
   let {
@@ -57,6 +57,7 @@
     )}. {stoppedState(run.step_kind)}
   </p>
   <p class="muted">Why it stopped: {sentence(event.reason)}</p>
+  {#if run.set_aside}<div class="notice" role="status">{setAsideText(run.set_aside)}</div>{/if}
   <p>
     {retryAdvice(run.step_kind)}, then choose <strong>Try this step again</strong>.
     If it stops again, follow the recovery guide for your printer.

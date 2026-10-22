@@ -14,7 +14,9 @@ use helix_installer_core::runner::{Event, Input, Prompt, Runner};
 use helix_installer_core::steps::helix_install::{
     releases_manifest_url, GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE,
 };
-use helix_installer_core::steps::keep_gcodes::{restore_script, set_aside_script};
+use helix_installer_core::steps::keep_gcodes::{
+    restore_script, set_aside_pending, set_aside_script,
+};
 use helix_installer_core::transport::fake::FakeSerial;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSsh,
@@ -755,7 +757,7 @@ fn k1_rig(k1: K1) -> Rig {
     rig.ssh.on_command(LEFTOVERS_PROBE, yes_no(k1.leftovers));
     rig.ssh.on_command(K1_MODEL_PROBE, yes_no(k1.is_k1));
     rig.ssh.on_command(&k1_set_aside(), out("0\n", 0));
-    rig.ssh.on_command(&k1_restore(), out("0 0\n", 0));
+    rig.ssh.on_command(&k1_restore(), out("0 0 0\n", 0));
     let objects = fleet("k1c_helper_script")["klipper_objects"].clone();
     rig.moonraker
         .set_printer_info(ADDR, json!({ "state": "ready", "hostname": "K1C-0000" }));
@@ -960,7 +962,7 @@ async fn stock_k1_keeping(set_aside: ExecOutput, restored: ExecOutput) -> (Rig, 
 
 #[tokio::test]
 async fn a_stock_k1_keeps_its_print_files_through_simple_af_and_says_so() {
-    let (rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("3 0\n", 0)).await;
+    let (rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("1 3 0\n", 0)).await;
     assert!(trace.done(), "{:?}", trace.end);
     let cmds = rig.ssh.commands();
     let at = |c: &str| {
@@ -980,7 +982,7 @@ async fn a_stock_k1_keeps_its_print_files_through_simple_af_and_says_so() {
 
 #[tokio::test]
 async fn print_files_that_did_not_all_come_back_are_a_warning_on_the_finish_screen() {
-    let (_rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("2 1\n", 0)).await;
+    let (_rig, trace, state) = stock_k1_keeping(out("3\n", 0), out("1 2 1\n", 0)).await;
     assert!(trace.done(), "{:?}", trace.end);
     let note = &state.finish_notes[0];
     assert!(note.warn, "{note:?}");
@@ -1004,9 +1006,105 @@ async fn a_restore_that_cannot_run_still_finishes_the_install_with_a_warning() {
 
 #[tokio::test]
 async fn a_stock_k1_with_no_print_files_gets_no_note() {
-    let (_rig, trace, state) = stock_k1_keeping(out("0\n", 0), out("0 0\n", 0)).await;
+    let (_rig, trace, state) = stock_k1_keeping(out("0\n", 0), out("0 0 0\n", 0)).await;
     assert!(trace.done(), "{:?}", trace.end);
     assert!(state.finish_notes.is_empty(), "{:?}", state.finish_notes);
+}
+
+#[tokio::test]
+async fn a_simple_af_that_fails_after_the_set_aside_leaves_the_files_named_for_recovery() {
+    let rig = k1_rig(STOCK_K1);
+    rig.ssh.on_command(&k1_set_aside(), out("3\n", 0));
+    rig.ssh
+        .script_job(vec![("FATAL: git pull failed\n", Some(1))]);
+    let m = staging();
+    let picked = identify_as(&m, "k1", &Facts::new());
+    let mut r = rig.runner(&m, &picked, Facts::new());
+
+    let trace = drive(&mut r, stock_k1_answers).await;
+    assert!(
+        matches!(
+            trace.end,
+            Event::Failed {
+                committed: true,
+                ..
+            }
+        ),
+        "{:?}",
+        trace.end
+    );
+    assert_eq!(
+        set_aside_pending(&r.state().facts),
+        Some((3, format!("{K1_GCODES}/.helix-kept")))
+    );
+}
+
+/// The fleet K1C update, with the restore answering `restored`.
+async fn k1c_update_restoring(restored: ExecOutput) -> (Rig, Trace, RunState) {
+    let rig = k1c_update_rig("1.1.0-beta.10");
+    rig.ssh.on_command(&k1_restore(), restored);
+    let m = staging();
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+    let trace = drive(&mut r, next_only).await;
+    let state = r.state().clone();
+    (rig, trace, state)
+}
+
+#[tokio::test]
+async fn a_k1_update_puts_back_print_files_an_earlier_run_set_aside() {
+    let (rig, trace, state) = k1c_update_restoring(out("1 4 0\n", 0)).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    let cmds = rig.ssh.commands();
+    let restore = cmds
+        .iter()
+        .position(|c| *c == k1_restore())
+        .expect("restore ran");
+    assert!(
+        cmds.iter().skip(restore).any(|c| c.contains("install.sh")),
+        "{cmds:?}"
+    );
+    assert_eq!(state.finish_notes.len(), 1, "{:?}", state.finish_notes);
+    assert!(!state.finish_notes[0].warn);
+    assert!(state.finish_notes[0].text.contains("4 print files"));
+}
+
+#[tokio::test]
+async fn a_k1_update_with_nothing_set_aside_says_nothing_about_print_files() {
+    for restored in [out("0 2 0\n", 0), out("", 1)] {
+        let (_rig, trace, state) = k1c_update_restoring(restored).await;
+        assert!(trace.done(), "{:?}", trace.end);
+        assert!(state.finish_notes.is_empty(), "{:?}", state.finish_notes);
+    }
+}
+
+#[test]
+fn every_k1_recipe_that_installs_puts_set_aside_print_files_back() {
+    let m = staging();
+    for id in ["k1_stock", "k1_modded", "k1_update"] {
+        let steps = &m.recipes[id];
+        let restore = steps
+            .iter()
+            .position(|s| {
+                matches!(s, Step::KeepGcodes { dir, into, restore: true, .. }
+                    if dir == K1_GCODES && into == K1_KEPT_FOLDER)
+            })
+            .unwrap_or_else(|| panic!("{id} has no restore"));
+        let install = steps
+            .iter()
+            .rposition(|s| {
+                matches!(
+                    s,
+                    Step::HelixInstall {
+                        dry_run: false,
+                        check: false,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(restore < install, "{id}");
+    }
 }
 
 #[tokio::test]

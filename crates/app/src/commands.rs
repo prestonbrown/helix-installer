@@ -27,6 +27,7 @@ use helix_installer_core::manifest::{
 use helix_installer_core::record::record;
 use helix_installer_core::run_state::{DoneKind, FinishNote, RunState, RunStatus};
 use helix_installer_core::runner::{Event, Input, Runner};
+use helix_installer_core::steps::keep_gcodes;
 use helix_installer_core::steps::UPDATED_TO_FACT;
 use helix_installer_core::transport::Env;
 use serde::Serialize;
@@ -198,6 +199,15 @@ pub struct RunInfo {
     pub updated_to: Option<String>,
     /// Lines the finish screen adds about what the run kept, warnings marked.
     pub finish_notes: Vec<FinishNote>,
+    /// Print files this run set aside on the printer and has not put back yet.
+    pub set_aside: Option<SetAside>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetAside {
+    pub count: u64,
+    /// The hidden folder on the printer that holds them.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -365,6 +375,8 @@ fn run_info(r: &Runner) -> RunInfo {
         host_name: host_name(&state.facts),
         updated_to: updated_to(state),
         finish_notes: state.finish_notes.clone(),
+        set_aside: keep_gcodes::set_aside_pending(&state.facts)
+            .map(|(count, path)| SetAside { count, path }),
     }
 }
 

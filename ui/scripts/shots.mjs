@@ -68,6 +68,7 @@ const shots = [
   ["up-to-date", "up_to_date", async (p) => (await install(p), p.getByText("HelixScreen is up to date").waitFor())],
   ["refused", "refused", async (p) => (await install(p), p.getByText("can't be set up").waitFor())],
   ["failed-not-committed", "failed", async (p) => (await install(p), p.getByText("The install stopped").waitFor())],
+  ["recovery-kept", "recovery_kept", async (p) => (await install(p), p.getByText("safe on the printer").waitFor())],
   ["recovery", "recovery", async (p) => (await install(p), p.getByText("Get help").waitFor())],
   ["resume-banner", "resume", async (p) => (await p.waitForSelector(".banner"), p.waitForSelector(".candidate"))],
   ["no-printer-list", "no_list", async (p) => p.getByText("Can't load the printer list").waitFor()],

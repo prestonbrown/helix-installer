@@ -114,6 +114,8 @@ export interface RunInfo {
   updated_to: string | null;
   /** Lines the finish screen adds about what the run kept for the user. */
   finish_notes: FinishNote[];
+  /** Print files this run set aside on the printer and has not put back yet. */
+  set_aside: { count: number; path: string } | null;
 }
 
 export interface FinishNote {

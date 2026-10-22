@@ -134,3 +134,9 @@ export function formatBytes(n: number): string {
 export function confirmHeading(warn: boolean | undefined): string | null {
   return warn ? "Check this before you continue" : null;
 }
+
+/** The recovery screen's line for print files the run set aside and has not put back. */
+export function setAsideText(set: { count: number; path: string }): string {
+  const files = set.count === 1 ? "1 print file is" : `${set.count} print files are`;
+  return `Your ${files} safe on the printer in ${set.path}. Finishing the install puts them back, and so does running the installer on this printer again later.`;
+}

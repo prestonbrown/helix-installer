@@ -149,3 +149,15 @@ fn the_longest_secret_is_stripped_first() {
     assert!(out.contains("pw=<secret>-tail"), "{out}");
     assert!(!out.contains("extra"), "{out}");
 }
+
+#[test]
+fn print_files_still_set_aside_head_the_bundle() {
+    let mut s = state();
+    let line = "print files set aside and not yet put back: 3 in /g/.helix-kept";
+    assert!(!support_bundle(&s, &logs(), &[], true).contains("set aside"));
+    s.facts.insert("kept_gcodes".into(), json!(3));
+    s.facts.insert("kept_gcodes_dir".into(), json!("/g"));
+    assert!(support_bundle(&s, &logs(), &[], true).contains(line));
+    s.facts.insert("kept_gcodes_back".into(), json!(true));
+    assert!(!support_bundle(&s, &logs(), &[], true).contains(line));
+}

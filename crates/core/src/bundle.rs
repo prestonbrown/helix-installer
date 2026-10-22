@@ -122,6 +122,11 @@ fn render(state: &RunState, job_logs: &[String], mask: bool) -> String {
         "step: {} committed: {}\n",
         state.step_index, state.committed
     ));
+    if let Some((n, path)) = crate::steps::keep_gcodes::set_aside_pending(&state.facts) {
+        out.push_str(&format!(
+            "print files set aside and not yet put back: {n} in {path}\n"
+        ));
+    }
     out.push_str("facts:\n");
     for (key, value) in &state.facts {
         if mask && key == "serial" {

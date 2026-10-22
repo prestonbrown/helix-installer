@@ -158,6 +158,7 @@ const run = (over: Partial<RunInfo> = {}): RunInfo => ({
   host_name: "k1-printer",
   updated_to: null,
   finish_notes: [],
+  set_aside: null,
   ...over,
 });
 
@@ -412,6 +413,22 @@ const screens: Record<string, { event: RunEvent; run: RunInfo }> = {
       help: "https://helixscreen.org/guide/install-k1/",
     },
     run: run({ step: 7, step_kind: "helix_install", committed: true }),
+  },
+  recovery_kept: {
+    event: {
+      event: "failed",
+      committed: true,
+      step: 16,
+      reason: "the command failed (exit 1): FATAL: could not update /usr/data/pellcorp (git pull failed)",
+      help: "https://helixscreen.org/guide/install-k1/",
+    },
+    run: run({
+      step: 16,
+      total_steps: 26,
+      step_kind: "ssh_run",
+      committed: true,
+      set_aside: { count: 3, path: "/usr/data/printer_data/gcodes/.helix-kept" },
+    }),
   },
 };
 

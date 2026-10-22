@@ -1180,6 +1180,12 @@
         "fact": "helix_installed"
       },
       {
+        "type": "keep_gcodes",
+        "dir": "/usr/data/printer_data/gcodes",
+        "into": "From Creality firmware",
+        "restore": true
+      },
+      {
         "type": "helix_install",
         "platform": "k1",
         "dir": "/usr/data",
@@ -1226,6 +1232,12 @@
         "type": "probe",
         "ssh": "test -e /etc/init.d/S99helixscreen && echo yes || echo no",
         "fact": "helix_installed"
+      },
+      {
+        "type": "keep_gcodes",
+        "dir": "/usr/data/printer_data/gcodes",
+        "into": "From Creality firmware",
+        "restore": true
       },
       {
         "type": "helix_install",

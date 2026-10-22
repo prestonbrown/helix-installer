@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { confirmHeading, finishScreen, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
+import { confirmHeading, finishScreen, setAsideText, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
 
 describe("a K-Touch flashed over USB", () => {
   it("names the step", () => {
@@ -92,5 +92,14 @@ describe("a confirm", () => {
   it("that is routine has no heading", () => {
     expect(confirmHeading(false)).toBeNull();
     expect(confirmHeading(undefined)).toBeNull();
+  });
+});
+
+describe("the recovery screen", () => {
+  it("names where set-aside print files are and how they come back", () => {
+    const t = setAsideText({ count: 3, path: "/usr/data/printer_data/gcodes/.helix-kept" });
+    expect(t).toMatch(/^Your 3 print files are safe on the printer in \/usr\/data\/printer_data\/gcodes\/\.helix-kept\./);
+    expect(t).toMatch(/running the installer on this printer again/);
+    expect(setAsideText({ count: 1, path: "/g" })).toMatch(/^Your 1 print file is safe/);
   });
 });
