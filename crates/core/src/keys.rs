@@ -19,9 +19,9 @@ pub fn manifest_location(override_: Option<String>) -> String {
 }
 
 /// The public half of the key release builds are signed with for the in-app updater (the text
-/// printed by `npx tauri signer generate`). Empty until `docs/SIGNING.md` has been followed;
-/// while empty the app never checks for updates.
-pub const UPDATER_PUBKEY: &str = "";
+/// printed by `npx tauri signer generate`). Installed copies accept only updates signed with its
+/// private half, so it is permanent (`docs/SIGNING.md`); blank switches update checks off.
+pub const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ4QUUzMzg4NkRFMjgyNzgKUldSNGd1SnRpRE91MkkxRkJhbU9yV2xreDFNNVBOcEQ4Wk1qMkhLc1IyOExNOGlHRUlBd2gzNVEK";
 
 /// Where the app looks for a newer release: a Tauri updater manifest.
 pub const UPDATE_ENDPOINT: &str = "https://releases.helixscreen.org/installer/app/latest.json";

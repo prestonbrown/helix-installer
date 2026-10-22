@@ -110,8 +110,8 @@ Set repository secrets with `gh secret set NAME -R prestonbrown/helix-installer`
 ## In-app updater
 
 The app checks `https://releases.helixscreen.org/installer/app/latest.json` once at startup,
-but only when `UPDATER_PUBKEY` in `crates/core/src/keys.rs` is set. Empty (today), it never
-checks and shows nothing.
+using the public key compiled in as `UPDATER_PUBKEY` in `crates/core/src/keys.rs` (key id
+D8AE33886DE28278). A blank key switches the check off and the app shows nothing.
 
 ```sh
 cd ui && npx tauri signer generate -w ~/helix-installer-updater.key
