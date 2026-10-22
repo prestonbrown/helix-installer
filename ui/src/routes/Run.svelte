@@ -9,7 +9,7 @@
   import { openGuide } from "../lib/open";
   import { printerName, session } from "../lib/session.svelte";
   import { signInInput, sudoInput } from "../lib/login";
-  import { confirmHeading, finishScreen, formatBytes, isUrl, keepPowerText, sentence, stepLabel } from "../lib/text";
+  import { confirmHeading, finishScreen, formatBytes, isUrl, keepPowerText, sentence, stepLabel, unchangedLines } from "../lib/text";
   import { nameLines } from "../lib/candidates";
   import type { AdvanceView, Input } from "../lib/types";
   import Recovery from "./Recovery.svelte";
@@ -371,10 +371,10 @@
     <section class="card body">
       {#if ev.cancelled}
         <h1>Install stopped</h1>
-        <p class="lead">Nothing on your printer was changed.</p>
+        {#each unchangedLines(run?.finish_notes ?? []) as line, i}<p class:lead={i === 0}>{line}</p>{/each}
       {:else}
         <h1>This printer can't be set up automatically</h1>
-        <p class="lead">Nothing on your printer was changed.</p>
+        {#each unchangedLines(run?.finish_notes ?? []) as line, i}<p class:lead={i === 0}>{line}</p>{/each}
         <p>
           The installer stops whenever it isn't sure it has the right files for your printer. The install guide
           shows how to do it by hand.
@@ -389,7 +389,7 @@
   {:else if ev.event === "failed" && !ev.committed}
     <section class="card body">
       <h1>The install stopped</h1>
-      <p class="lead">Nothing on your printer was changed.</p>
+      {#each unchangedLines(run?.finish_notes ?? []) as line, i}<p class:lead={i === 0}>{line}</p>{/each}
       <p class="muted">What happened: {sentence(ev.reason)}</p>
       {#if ev.help && !isUrl(ev.help)}<p class="help-text">{ev.help}</p>{/if}
       <div class="actions sticky">

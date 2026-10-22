@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { confirmHeading, finishScreen, setAsideText, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
+import { confirmHeading, finishScreen, setAsideText, unchangedLines, keepOnLabel, keepPowerText, retryAdvice, stepLabel, stoppedState } from "./text";
 
 describe("a K-Touch flashed over USB", () => {
   it("names the step", () => {
@@ -101,5 +101,23 @@ describe("the recovery screen", () => {
     expect(t).toMatch(/^Your 3 print files are safe on the printer in \/usr\/data\/printer_data\/gcodes\/\.helix-kept\./);
     expect(t).toMatch(/running the installer on this printer again/);
     expect(setAsideText({ count: 1, path: "/g" })).toMatch(/^Your 1 print file is safe/);
+  });
+});
+
+describe("a run that stopped before its point of no return", () => {
+  const putBack = { step: 4, text: 'your 2 print files from an earlier run were put back in the folder "Kept"', warn: false };
+  it("says nothing changed when nothing did", () => {
+    expect(unchangedLines([])).toEqual(["Nothing on your printer was changed."]);
+  });
+  it("names print files a restore moved, and only then says nothing else changed", () => {
+    expect(unchangedLines([putBack])).toEqual([
+      'Your 2 print files from an earlier run were put back in the folder "Kept".',
+      "Nothing else on your printer was changed.",
+    ]);
+  });
+  it("does the same on an up-to-date finish", () => {
+    const s = finishScreen("up_to_date", "1.1.0 is installed", "Creality K1", null, [putBack]);
+    expect(s.lines).toContain("Nothing else on your printer was changed.");
+    expect(s.lines.join(" ")).toMatch(/put back/);
   });
 });

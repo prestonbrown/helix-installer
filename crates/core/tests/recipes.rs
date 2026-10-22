@@ -1078,6 +1078,28 @@ async fn a_k1_update_with_nothing_set_aside_says_nothing_about_print_files() {
     }
 }
 
+#[tokio::test]
+async fn a_k1_update_that_stops_before_its_commit_still_reports_print_files_it_put_back() {
+    // The newest beta is the one installed: the run ends up to date, nothing installed.
+    let rig = k1c_update_rig("1.1.0-beta.9");
+    rig.ssh.on_command(&k1_restore(), out("1 2 0\n", 0));
+    let m = staging();
+    let picked = identify(&m, &fleet("k1c_helper_script"));
+    let mut r = rig.runner(&m, &picked, fleet("k1c_helper_script"));
+
+    let trace = drive(&mut r, next_only).await;
+    assert!(trace.done(), "{:?}", trace.end);
+    assert!(!r.state().committed);
+    let notes = &r.state().finish_notes;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0]
+            .text
+            .contains("2 print files from an earlier run were put back"),
+        "{notes:?}"
+    );
+}
+
 #[test]
 fn every_k1_recipe_that_installs_puts_set_aside_print_files_back() {
     let m = staging();

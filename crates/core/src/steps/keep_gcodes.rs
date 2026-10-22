@@ -172,7 +172,15 @@ pub fn restore_note(
         Some(Restored::Found { had, kept, .. }) => match expected {
             Some(e) if kept < e => Some(missing(e, kept)),
             Some(_) => Some(kept_line(kept)),
-            None if had => Some(kept_line(kept)),
+            // A run before its point of no return may end saying nothing changed; this line is
+            // what keeps that true.
+            None if had => Some((
+                format!(
+                    "{} from an earlier run were put back in the folder \"{into}\"",
+                    files(kept)
+                ),
+                false,
+            )),
             None => None,
         },
     }
@@ -422,7 +430,10 @@ mod tests {
         assert!(text.contains("1 print file from"), "{text}");
         // A later run that finds an earlier run's set-aside says what it put back.
         let (text, warn) = restore_note(None, Some(found(true, 4, 0)), "/g", INTO).unwrap();
-        assert!(!warn && text.contains("4 print files"), "{text}");
+        assert!(
+            !warn && text.contains("4 print files from an earlier run were put back"),
+            "{text}"
+        );
         // A resumed run whose restore already ran still reports it.
         let (_, warn) = restore_note(Some(2), Some(found(false, 2, 0)), "/g", INTO).unwrap();
         assert!(!warn);

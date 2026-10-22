@@ -70,6 +70,14 @@ export function sentence(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1).replace(/([^.!?])$/, "$1.") : s;
 }
 
+/** What a run that stopped before its point of no return says it changed. Keeping print files
+ * may still have moved some (`notes`), so those are named first and the rest is "nothing else". */
+export function unchangedLines(notes: FinishNote[]): string[] {
+  return notes.length
+    ? [...notes.map((n) => sentence(n.text)), "Nothing else on your printer was changed."]
+    : ["Nothing on your printer was changed."];
+}
+
 /** The finish screen. A run that found HelixScreen current is a success that changed
  * nothing; one that ended with a note says what to check. An update names the version it
  * installed (`updatedTo`); only a first install says HelixScreen is installed. What the run
@@ -86,7 +94,7 @@ export function finishScreen(
   if (kind === "up_to_date") {
     return {
       heading: "HelixScreen is up to date",
-      lines: [sentence(note ?? ""), "Nothing on your printer was changed."].filter((l) => l),
+      lines: [sentence(note ?? ""), ...unchangedLines(kept.filter((n) => !n.warn))].filter((l) => l),
       warnings,
     };
   }
