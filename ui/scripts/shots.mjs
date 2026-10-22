@@ -81,8 +81,8 @@ const browser = await chromium.launch({ headless: true, executablePath: browserP
 const written = [];
 try {
   for (const [w, h] of [
-    [1280, 800],
-    [1024, 640],
+    [960, 720],
+    [760, 640],
   ]) {
     for (const theme of ["light", "dark"]) {
       const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: theme });

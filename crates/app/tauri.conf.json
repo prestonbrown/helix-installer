@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "HelixScreen Installer",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1024,
+        "width": 960,
+        "height": 720,
+        "minWidth": 760,
         "minHeight": 640
       }
     ],
