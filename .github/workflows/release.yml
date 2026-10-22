@@ -145,7 +145,19 @@ jobs:
           node -e '
             const bundle = {};
             const build = { beforeBuildCommand: "" };
-            if (process.env.SIGN_UPDATER === "true") bundle.createUpdaterArtifacts = true;
+            const config = { build, bundle };
+            if (process.env.SIGN_UPDATER === "true") {
+              // The bundler checks the signing key against the config pubkey; the app itself reads
+              // keys.rs, so the key is copied from there and defined in one place.
+              const keys = require("fs").readFileSync("crates/core/src/keys.rs", "utf8");
+              const m = keys.match(/pub const UPDATER_PUBKEY: &str = "([^"]*)";/);
+              if (!m || m[1] === "") {
+                console.error("TAURI_SIGNING_PRIVATE_KEY is set but UPDATER_PUBKEY in keys.rs is empty");
+                process.exit(1);
+              }
+              bundle.createUpdaterArtifacts = true;
+              config.plugins = { updater: { pubkey: m[1] } };
+            }
             if (process.env.SIGN_AZURE === "true") {
               bundle.windows = { signCommand: [
                 "artifact-signing-cli", "-e", process.env.AZURE_SIGNING_ENDPOINT,
@@ -153,7 +165,7 @@ jobs:
                 "-d", "HelixScreen Installer", "%1"
               ].join(" ") };
             }
-            require("fs").writeFileSync("crates/app/ci-config.json", JSON.stringify({ build, bundle }));
+            require("fs").writeFileSync("crates/app/ci-config.json", JSON.stringify(config));
           '
 
       # scripts/tauri-signed.cjs passes on only the credentials the switches above turned on.
