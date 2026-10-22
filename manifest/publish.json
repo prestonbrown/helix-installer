@@ -113,7 +113,7 @@
       ],
       "verified": {
         "by": "helixscreen",
-        "date": "2026-10-20",
+        "date": "2026-10-22",
         "firmware": "1.3.3.46",
         "runs": [
           {
@@ -131,6 +131,14 @@
             "helixscreen": "v1.1.0-beta.9 -> v1.1.0-beta.10 (installer f6e5e19, published list)",
             "recipe": "k1_update",
             "behavior_sha256": "a8baf78166a091ee78b2ae05e03665b3d420c7398769134a097c7b93293cb7bb"
+          },
+          {
+            "date": "2026-10-22",
+            "printer": "Creality K1C, root login",
+            "firmware": "Creality 1.3.3.46 with Simple AF",
+            "helixscreen": "v1.1.0-beta.10 -> v1.1.0-beta.11 (installer af16904)",
+            "recipe": "k1_update",
+            "behavior_sha256": "14be83245c4af00c44d1f610c44d70586a14defecb1bee672f14abc43aacf6a2"
           }
         ]
       }
