@@ -7,18 +7,21 @@
 #[path = "support/ktouch.rs"]
 mod ktouch;
 
+#[path = "support/release_list.rs"]
+mod release_list;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::identify::{identify, Identified, StartState};
 use helix_installer_core::manifest::{Channel, Manifest};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
-use helix_installer_core::steps::helix_install::{releases_manifest_url, GITHUB_RELEASE_API};
+use helix_installer_core::steps::helix_install::GITHUB_RELEASE_API;
 use helix_installer_core::steps::UPDATED_TO_FACT;
 use helix_installer_core::transport::fake::{
     FakeClock, FakeDrives, FakeFetch, FakeMoonraker, FakeNet, FakeSerial, FakeSsh,
 };
 use helix_installer_core::transport::{ChipInfo, Env, Host};
 use ktouch::*;
+use release_list::{publish_release_list, release_pubkey};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -107,15 +110,13 @@ impl Rig {
     /// The stable list stays at 1.0.5, a release before the K-Touch builds.
     fn publish(&self, tag: &str, zip: &[u8], digest: Option<&str>) {
         let stable = json!({ "version": "1.0.5", "tag": "v1.0.5", "assets": {} });
-        self.fetch.add(
-            &releases_manifest_url(Channel::Stable),
+        publish_release_list(
+            &self.fetch,
+            Channel::Stable,
             stable.to_string().into_bytes(),
         );
         let release = json!({ "version": tag.trim_start_matches('v'), "tag": tag, "assets": {} });
-        self.fetch.add(
-            &releases_manifest_url(Channel::Beta),
-            release.to_string().into_bytes(),
-        );
+        publish_release_list(&self.fetch, Channel::Beta, release.to_string().into_bytes());
         let name = format!("helixscreen-esp32-ktouch-{tag}.zip");
         let url =
             format!("https://github.com/prestonbrown/helixscreen/releases/download/{tag}/{name}");
@@ -142,10 +143,7 @@ impl Rig {
             "pi": { "url": "https://example.invalid/pi.tar.gz", "sha256": sha(b"x"), "size": 1 },
             "esp32-ktouch": { "url": url, "sha256": list_sha, "size": zip.len() },
         }});
-        self.fetch.add(
-            &releases_manifest_url(Channel::Beta),
-            release.to_string().into_bytes(),
-        );
+        publish_release_list(&self.fetch, Channel::Beta, release.to_string().into_bytes());
         self.fetch.add(&url, zip.to_vec());
     }
 
@@ -171,7 +169,9 @@ impl Rig {
     fn runner_for(&self, recipe_id: &str) -> Runner {
         let m = staging();
         let state = RunState::new("run", "ktouch", recipe_id, Host::new(PORT), usb_facts());
-        Runner::new(self.env(), Arc::new(m), state).with_cache_dir(self.cache.path().to_path_buf())
+        Runner::new(self.env(), Arc::new(m), state)
+            .with_release_pubkey(release_pubkey())
+            .with_cache_dir(self.cache.path().to_path_buf())
     }
 
     fn written_offsets(&self) -> Vec<u32> {
@@ -925,6 +925,7 @@ async fn a_reopened_run_names_the_port_again_before_opening_it() {
     let opened = rig.serial.connects().len();
     // The app is closed and opened again: a new runner from the saved state.
     let mut reopened = Runner::new(rig.env(), Arc::new(staging()), r.state().clone())
+        .with_release_pubkey(release_pubkey())
         .with_cache_dir(rig.cache.path().to_path_buf());
     let mut ev = reopened.advance(None).await;
     while matches!(ev, Event::Progress { .. }) {
@@ -1039,7 +1040,9 @@ fn published_runner(rig: &Rig) -> Runner {
         panic!("the K-Touch did not identify on the published list");
     };
     let state = RunState::new("run", "ktouch", &recipe_id, Host::new(PORT), usb_facts());
-    Runner::new(rig.env(), Arc::new(m), state).with_cache_dir(rig.cache.path().to_path_buf())
+    Runner::new(rig.env(), Arc::new(m), state)
+        .with_release_pubkey(release_pubkey())
+        .with_cache_dir(rig.cache.path().to_path_buf())
 }
 
 #[tokio::test]

@@ -28,6 +28,27 @@ pub const UPDATE_ENDPOINT: &str = "https://releases.helixscreen.org/installer/ap
 
 /// `key` trimmed, or `None` when it is blank, meaning updates are switched off.
 pub fn updater_key(key: &str) -> Option<&str> {
+    optional_key(key)
+}
+
+/// PLACEHOLDER, to be replaced by the bare base64 line (starting `RW`) of the release key's
+/// minisign `.pub` file (`docs/SIGNING.md`, "HelixScreen release lists").
+///
+/// The public half of the key HelixScreen's release workflow signs each channel's release list
+/// (`<channel>/manifest.json`, signature at `<channel>/manifest.json.minisig`) with. Set, every
+/// release list must carry a signature that verifies against it before any hash in it is
+/// trusted. Blank, release lists are read unsigned. It stays blank until both the stable and the
+/// beta list are published signed, because an installer that requires a signature the published
+/// lists do not have can install nothing.
+pub const RELEASE_PUBKEY: &str = "";
+
+/// The key release lists must be signed with; `None` while `RELEASE_PUBKEY` is blank.
+pub fn release_key() -> Option<&'static str> {
+    optional_key(RELEASE_PUBKEY)
+}
+
+/// `key` trimmed, or `None` when it is blank.
+fn optional_key(key: &str) -> Option<&str> {
     let key = key.trim();
     (!key.is_empty()).then_some(key)
 }

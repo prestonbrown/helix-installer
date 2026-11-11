@@ -91,6 +91,25 @@ cargo run -p helix_installer_core --bin manifest-lint -- --verify manifest.json 
   --sig manifest.json.minisig --pubkey helix-installer.pub
 ```
 
+# HelixScreen release lists
+
+Before it trusts any hash in a HelixScreen release list (`releases.helixscreen.org/<channel>/manifest.json`:
+the tarball a `helix_install` uploads, the K-Touch zip a `serial_flash` writes), the app fetches
+`<channel>/manifest.json.minisig` and checks it, prehashed, against `RELEASE_PUBKEY` in
+`crates/core/src/keys.rs`. A missing signature, one made with another key, or a list changed
+after signing stops the step before anything is downloaded or sent to the printer.
+
+The HelixScreen release workflow signs the lists with a key of its own, separate from the
+printer-list key above; its setup is in the HelixScreen repository
+(`docs/devel/RELEASE_PROCESS.md`, "Signed channel manifests").
+
+`RELEASE_PUBKEY` is blank until both the stable and the beta list are published signed. While it
+is blank the app reads release lists unsigned, as it always has. Paste the key in only after
+`curl -fsS https://releases.helixscreen.org/stable/manifest.json.minisig` and the same for
+`beta` both succeed: an app that requires a signature the published lists lack installs nothing.
+From the build that carries the key on, every release list must be signed; there is no version
+cutoff, because an unsigned list names its own version and could claim any.
+
 # Signing the app and the updater
 
 `.github/workflows/release.yml` runs on a `v*` tag, or by hand (`gh workflow run release.yml

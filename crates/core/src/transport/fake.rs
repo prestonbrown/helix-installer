@@ -570,6 +570,10 @@ impl FakeFetch {
     pub fn add(&self, url: &str, bytes: Vec<u8>) {
         lock(&self.bodies).insert(url.into(), bytes);
     }
+    /// Stops serving `url`: it answers 404 from now on.
+    pub fn remove(&self, url: &str) {
+        lock(&self.bodies).remove(url);
+    }
     /// Every URL requested, in order, including misses.
     pub fn requests(&self) -> Vec<String> {
         lock(&self.requests).clone()

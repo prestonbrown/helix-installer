@@ -196,9 +196,12 @@ async fn start(
         let v = installed_version(ctx)?;
         (release::update_channels(pinned, &v), Some(v))
     } else {
-        (release::new_install_channels(ctx.env, pinned).await?, None)
+        (
+            release::new_install_channels(ctx.env, ctx.release_pubkey, pinned).await?,
+            None,
+        )
     };
-    let (rel, offered) = release::newest(ctx.env, &channels).await?;
+    let (rel, offered) = release::newest(ctx.env, ctx.release_pubkey, &channels).await?;
     if let Some(installed) = &installed {
         if offered <= *installed {
             return Err(StepOutcome::Complete {

@@ -3,6 +3,8 @@
 //! The recipes in `manifest/staging.json` run end to end against the fakes, starting from facts
 //! recorded on real printers (`tests/fixtures/fleet`).
 
+#[path = "support/release_list.rs"]
+mod release_list;
 use helix_installer_core::facts::Facts;
 use helix_installer_core::identify::{
     identify, identify_as, restore_for, Identified, StartState, GENERIC_REFUSE_DOC,
@@ -11,9 +13,7 @@ use helix_installer_core::lint::lint_with;
 use helix_installer_core::manifest::{Channel, Login, Manifest, Step, WaitTarget};
 use helix_installer_core::run_state::RunState;
 use helix_installer_core::runner::{Event, Input, Prompt, Runner};
-use helix_installer_core::steps::helix_install::{
-    releases_manifest_url, GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE,
-};
+use helix_installer_core::steps::helix_install::{GITHUB_RELEASE_API, INSTALLED_VERSION_PROBE};
 use helix_installer_core::steps::keep_gcodes::{
     restore_script, set_aside_pending, set_aside_script,
 };
@@ -23,6 +23,7 @@ use helix_installer_core::transport::fake::{
 };
 use helix_installer_core::transport::{Env, ExecOutput, Host};
 use helix_installer_core::version::FwVersion;
+use release_list::{publish_release_list, release_pubkey};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -141,10 +142,7 @@ impl Rig {
             self.fetch.add(&url, TARBALL.to_vec());
         }
         let release = json!({ "version": version, "tag": tag, "assets": assets });
-        self.fetch.add(
-            &releases_manifest_url(channel),
-            release.to_string().into_bytes(),
-        );
+        publish_release_list(&self.fetch, channel, release.to_string().into_bytes());
         let script_url = format!(
             "https://github.com/prestonbrown/helixscreen/releases/download/{tag}/install.sh"
         );
@@ -194,6 +192,7 @@ impl Rig {
         };
         let state = RunState::new("run", printer_id, recipe_id, Host::new(ADDR), facts);
         Runner::new(self.env(), Arc::new(m.clone()), state)
+            .with_release_pubkey(release_pubkey())
             .with_cache_dir(self.cache.path().to_path_buf())
     }
 
@@ -616,7 +615,9 @@ async fn k2_with_ssh_still_closed_fails_the_root_step_and_retries_it() {
         unreachable!()
     };
     let state = RunState::new("run", "k2", recipe_id, Host::new(ADDR), fleet("k2_plus"));
-    let mut r = Runner::new(env, Arc::new(m), state).with_cache_dir(rig.cache.path().into());
+    let mut r = Runner::new(env, Arc::new(m), state)
+        .with_release_pubkey(release_pubkey())
+        .with_cache_dir(rig.cache.path().into());
 
     let ev = r.advance(None).await;
     assert!(

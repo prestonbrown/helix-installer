@@ -178,6 +178,8 @@ pub struct StepCtx<'a> {
     pub cache_dir: Option<&'a Path>,
     /// Replaces the release channel of every `helix_install` step in the run.
     pub channel_override: Option<Channel>,
+    /// The key every release list must be signed with; `None` reads them unsigned.
+    pub release_pubkey: Option<&'a str>,
     /// Times this step has already run since it became current; 0 on its first run and again
     /// after a failure or a resume.
     pub calls: u32,

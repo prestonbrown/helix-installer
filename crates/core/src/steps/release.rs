@@ -5,6 +5,7 @@
 
 use super::StepOutcome;
 use crate::manifest::{Artifact, Channel};
+use crate::manifest_sig::verify_signature;
 use crate::transport::Env;
 use crate::version::ReleaseVersion;
 use serde::Deserialize;
@@ -115,12 +116,13 @@ pub fn new_install_channel(stable: &ReleaseVersion) -> Channel {
 /// of the stable release list as it is now.
 pub(crate) async fn new_install_channels(
     env: &Env,
+    release_key: Option<&str>,
     pinned: Option<Channel>,
 ) -> Result<Vec<Channel>, StepOutcome> {
     if let Some(c) = pinned {
         return Ok(vec![c]);
     }
-    let (_, stable) = newest(env, &[Channel::Stable]).await?;
+    let (_, stable) = newest(env, release_key, &[Channel::Stable]).await?;
     Ok(vec![new_install_channel(&stable)])
 }
 
@@ -164,21 +166,58 @@ pub(crate) fn require_supported(offered: &ReleaseVersion) -> Result<(), StepOutc
     })
 }
 
-/// The newest release of `channels`, the first winning a tie.
+/// The newest release of `channels`, the first winning a tie. With `release_key`, each list is
+/// read only once its signature verifies against that key.
 pub(crate) async fn newest(
     env: &Env,
+    release_key: Option<&str>,
     channels: &[Channel],
 ) -> Result<(ReleaseManifest, ReleaseVersion), StepOutcome> {
     let mut newest: Option<(ReleaseManifest, ReleaseVersion)> = None;
     for &channel in channels {
         let list_url = releases_manifest_url(channel);
-        let release: ReleaseManifest = fetch_json(env, &list_url, "the release list").await?;
+        let release: ReleaseManifest = match release_key {
+            Some(key) => fetch_signed_release_list(env, key, channel, &list_url).await?,
+            None => fetch_json(env, &list_url, "the release list").await?,
+        };
         let version = release.release_version()?;
         if newest.as_ref().is_none_or(|(_, best)| version > *best) {
             newest = Some((release, version));
         }
     }
     newest.ok_or_else(|| StepOutcome::failed("no release channel to read"))
+}
+
+/// The release list at `list_url`, parsed only after its signature at `<list_url>.minisig`
+/// verifies over the exact bytes fetched; a missing or failing signature stops the step before
+/// any hash in the list is used.
+async fn fetch_signed_release_list(
+    env: &Env,
+    key: &str,
+    channel: Channel,
+    list_url: &str,
+) -> Result<ReleaseManifest, StepOutcome> {
+    let what = format!("the {} release list", channel.as_str());
+    let text = env
+        .fetch
+        .get_text(list_url)
+        .await
+        .map_err(|e| StepOutcome::failed(format!("could not fetch {what}: {e}")))?;
+    let sig_url = format!("{list_url}.minisig");
+    let sig = env.fetch.get_text(&sig_url).await.map_err(|e| {
+        StepOutcome::failed(format!(
+            "{what} has no signature ({sig_url}: {e}). The installer installs only a release \
+             whose list is signed with HelixScreen's release key, so nothing was installed."
+        ))
+    })?;
+    verify_signature(text.as_bytes(), &sig, key).map_err(|_| {
+        StepOutcome::failed(format!(
+            "{what} is not signed with HelixScreen's release key: its signature ({sig_url}) does \
+             not match it, so its file hashes cannot be trusted and nothing was installed."
+        ))
+    })?;
+    serde_json::from_str(&text)
+        .map_err(|e| StepOutcome::failed(format!("{what} is unreadable: {e}")))
 }
 
 /// Takes the `Env` rather than the `StepCtx`: a shared borrow of the context held across an

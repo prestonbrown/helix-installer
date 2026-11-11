@@ -119,6 +119,9 @@ pub struct Runner {
     session: Session,
     cache_dir: Option<PathBuf>,
     channel_override: Option<Channel>,
+    /// The minisign key every HelixScreen release list must verify against; `None` reads them
+    /// unsigned.
+    release_pubkey: Option<String>,
     autosave: Option<PathBuf>,
     /// Times the current step has run since it became current.
     calls: u32,
@@ -145,6 +148,7 @@ impl Runner {
             session: Session::default(),
             cache_dir: None,
             channel_override: None,
+            release_pubkey: crate::keys::release_key().map(str::to_string),
             autosave: None,
             calls: 0,
             manifest_error: None,
@@ -209,6 +213,13 @@ impl Runner {
     /// Makes every `helix_install` step read `channel`'s release list, whatever its recipe says.
     pub fn with_channel_override(mut self, channel: Channel) -> Runner {
         self.channel_override = Some(channel);
+        self
+    }
+
+    /// Replaces the compiled-in release list key (`keys::RELEASE_PUBKEY`); `None` reads release
+    /// lists unsigned.
+    pub fn with_release_pubkey(mut self, key: Option<String>) -> Runner {
+        self.release_pubkey = key;
         self
     }
 
@@ -622,6 +633,7 @@ impl Runner {
             job: &mut self.state.job,
             cache_dir: self.cache_dir.as_deref(),
             channel_override: self.channel_override,
+            release_pubkey: self.release_pubkey.as_deref(),
             calls: self.calls,
             committed: self.state.committed,
             identity: self.state.identity.as_ref(),

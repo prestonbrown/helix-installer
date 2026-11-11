@@ -20,3 +20,15 @@ fn updates_are_fetched_from_the_release_bucket() {
         "https://releases.helixscreen.org/installer/app/latest.json"
     );
 }
+
+#[test]
+fn a_set_release_key_is_a_minisign_public_key() {
+    // Blank until the release key exists (docs/SIGNING.md); once pasted in it must decode, or
+    // every release list would be refused.
+    if let Some(key) = helix_installer_core::keys::release_key() {
+        assert!(
+            minisign_verify::PublicKey::from_base64(key).is_ok(),
+            "RELEASE_PUBKEY is not the base64 line of a minisign .pub file: {key}"
+        );
+    }
+}

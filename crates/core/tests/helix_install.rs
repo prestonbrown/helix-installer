@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#[path = "support/release_list.rs"]
+mod release_list;
+
 use async_trait::async_trait;
 use helix_installer_core::bundle::support_bundle;
 use helix_installer_core::facts::Facts;
@@ -18,6 +21,7 @@ use helix_installer_core::transport::fake::{
 };
 use helix_installer_core::transport::{Clock, Env, ExecOutput, Host, Ssh};
 use helix_installer_core::version::ReleaseVersion;
+use release_list::{publish_release_list, release_pubkey, sign_with, signature_url};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -133,6 +137,8 @@ struct Fakes {
     fetch: Arc<FakeFetch>,
     clock: Arc<FakeClock>,
     cache: tempfile::TempDir,
+    /// The release list both channels publish.
+    release_list: Vec<u8>,
 }
 
 fn sha(bytes: &[u8]) -> String {
@@ -170,11 +176,9 @@ impl Fakes {
             "published_at": "2026-10-01T00:00:00Z",
             "assets": assets,
         });
+        let release_list = release.to_string().into_bytes();
         for channel in [Channel::Stable, Channel::Beta] {
-            fetch.add(
-                &releases_manifest_url(channel),
-                release.to_string().into_bytes(),
-            );
+            publish_release_list(&fetch, channel, release_list.clone());
         }
         let gh = json!({
             "tag_name": TAG,
@@ -197,6 +201,7 @@ impl Fakes {
             fetch,
             clock: Arc::new(FakeClock::new()),
             cache: tempfile::tempdir().unwrap(),
+            release_list,
         }
     }
 
@@ -233,10 +238,12 @@ impl Fakes {
         let facts: Facts = serde_json::from_value(facts).unwrap();
         let state = RunState::new("run1", "k1", "r", Host::new(ADDR), facts);
         Runner::new(self.env(), manifest(Value::Array(all)), state)
+            .with_release_pubkey(release_pubkey())
             .with_handler(
                 "ssh_login",
                 Arc::new(TestLogin(user.into(), password.into())),
             )
+            .with_release_pubkey(release_pubkey())
             .with_cache_dir(self.cache.path().to_path_buf())
     }
 
@@ -969,6 +976,7 @@ async fn a_reopened_run_asks_for_the_login_then_follows_its_recorded_job() {
     state.started_step = Some(0);
     state.job = Some(job);
     let mut r = Runner::new(f.env(), manifest(install_step(json!("pi"))), state)
+        .with_release_pubkey(release_pubkey())
         .with_cache_dir(f.cache.path().to_path_buf());
 
     match r.advance(None).await {
@@ -1276,8 +1284,9 @@ fn an_unknown_channel_fails_manifest_parsing() {
 async fn a_new_install_without_a_channel_reads_the_beta_while_stable_is_older_than_1_1_0() {
     // The stable list holds 1.0.5; the beta list holds TAG.
     let f = Fakes::standard(&["pi"]);
-    f.fetch.add(
-        &releases_manifest_url(Channel::Stable),
+    publish_release_list(
+        &f.fetch,
+        Channel::Stable,
         json!({ "version": "1.0.5", "tag": "v1.0.5", "assets": {} })
             .to_string()
             .into_bytes(),
@@ -2338,4 +2347,90 @@ async fn a_connection_lost_before_a_file_went_up_never_removes_that_file() {
             }
         }
     }
+}
+
+/// Regenerates the committed test release key pair:
+/// `cargo test -p helix_installer_core --test helix_install -- --ignored regenerate`.
+#[test]
+#[ignore]
+fn regenerate_release_test_keypair() {
+    release_list::regenerate_release_test_keypair();
+}
+
+// ---------------------------------------------------------------- signed release lists
+
+#[tokio::test]
+async fn a_release_list_is_read_only_after_its_signature_verifies() {
+    let f = Fakes::standard(&["pi"]);
+    let r = f.runner("root", channel_step(Some("beta")), json!({}));
+    install_with(&f, r).await;
+    let requests = f.fetch.requests();
+    let sig = requests
+        .iter()
+        .position(|u| *u == signature_url(Channel::Beta));
+    assert!(sig.is_some(), "{requests:?}");
+    let tarball = requests.iter().position(|u| *u == tarball_url("pi"));
+    assert!(sig < tarball, "{requests:?}");
+}
+
+#[tokio::test]
+async fn a_release_list_signed_with_another_key_is_refused() {
+    let f = Fakes::standard(&["pi"]);
+    for channel in [Channel::Stable, Channel::Beta] {
+        f.fetch.add(
+            &signature_url(channel),
+            sign_with("test_key.sec", &f.release_list).into_bytes(),
+        );
+    }
+    let reason = fails_before_upload(f, json!("pi"), json!({})).await;
+    assert!(
+        reason.contains("not signed with HelixScreen's release key"),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_release_list_without_a_signature_is_refused() {
+    let f = Fakes::standard(&["pi"]);
+    for channel in [Channel::Stable, Channel::Beta] {
+        f.fetch.remove(&signature_url(channel));
+    }
+    let reason = fails_before_upload(f, json!("pi"), json!({})).await;
+    assert!(reason.contains("has no signature"), "{reason}");
+    assert!(reason.contains("manifest.json.minisig"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_release_list_changed_after_signing_is_refused() {
+    // The list now names a different tarball hash, and that tarball is served: only the
+    // signature stands between the change and the printer.
+    let f = Fakes::standard(&["pi"]);
+    let evil = b"a swapped binary".to_vec();
+    f.fetch.add(&tarball_url("pi"), evil.clone());
+    for channel in [Channel::Stable, Channel::Beta] {
+        let mut list: Value = serde_json::from_slice(&f.release_list).unwrap();
+        list["assets"]["pi"]["sha256"] = json!(sha(&evil));
+        f.fetch.add(
+            &releases_manifest_url(channel),
+            list.to_string().into_bytes(),
+        );
+    }
+    let reason = fails_before_upload(f, json!("pi"), json!({})).await;
+    assert!(
+        reason.contains("not signed with HelixScreen's release key"),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_release_key_an_unsigned_release_list_is_read() {
+    let f = Fakes::standard(&["pi"]);
+    for channel in [Channel::Stable, Channel::Beta] {
+        f.fetch.remove(&signature_url(channel));
+    }
+    let r = f
+        .runner("root", channel_step(Some("beta")), json!({}))
+        .with_release_pubkey(None);
+    install_with(&f, r).await;
+    assert!(!f.fetch.requests().iter().any(|u| u.ends_with(".minisig")));
 }

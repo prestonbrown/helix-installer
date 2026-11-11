@@ -144,7 +144,7 @@ pub async fn run(
             Err(stop) => return stop,
         },
         Mode::Install | Mode::Uninstall => {
-            match release::new_install_channels(ctx.env, pinned).await {
+            match release::new_install_channels(ctx.env, ctx.release_pubkey, pinned).await {
                 Ok(channels) => (channels, None),
                 Err(stop) => return stop,
             }
@@ -189,7 +189,7 @@ async fn check(
     };
     let pinned = ctx.channel_override.or(channel);
     let resolved = async {
-        let channels = release::new_install_channels(ctx.env, pinned).await?;
+        let channels = release::new_install_channels(ctx.env, ctx.release_pubkey, pinned).await?;
         let target = Target {
             platform: &platform,
             channels: &channels,
@@ -403,7 +403,7 @@ async fn resolve(
     target: Target<'_>,
     mode: Mode,
 ) -> Result<Resolved, StepOutcome> {
-    let (release, offered) = release::newest(ctx.env, target.channels).await?;
+    let (release, offered) = release::newest(ctx.env, ctx.release_pubkey, target.channels).await?;
     if let Some(installed) = target.installed {
         if offered <= *installed {
             return Err(StepOutcome::Complete {
