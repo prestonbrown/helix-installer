@@ -99,16 +99,16 @@ the tarball a `helix_install` uploads, the K-Touch zip a `serial_flash` writes),
 `crates/core/src/keys.rs`. A missing signature, one made with another key, or a list changed
 after signing stops the step before anything is downloaded or sent to the printer.
 
-The HelixScreen release workflow signs the lists with a key of its own, separate from the
-printer-list key above; its setup is in the HelixScreen repository
-(`docs/devel/RELEASE_PROCESS.md`, "Signed channel manifests").
+The HelixScreen release workflow signs the lists with a key of its own (key id
+`A91F86E5AB692257`, held offline), separate from the printer-list key above. Its setup, the
+reviewer-gated `release-signing` environment and the secrets, is in the HelixScreen repository
+(`docs/devel/RELEASE_SIGNING.md`).
 
-`RELEASE_PUBKEY` is blank until both the stable and the beta list are published signed. While it
-is blank the app reads release lists unsigned, as it always has. Paste the key in only after
+`RELEASE_PUBKEY` carries that key, so every release list must be signed. A build that carries it
+installs nothing from a channel whose list is unsigned, so it ships only after
 `curl -fsS https://releases.helixscreen.org/stable/manifest.json.minisig` and the same for
-`beta` both succeed: an app that requires a signature the published lists lack installs nothing.
-From the build that carries the key on, every release list must be signed; there is no version
-cutoff, because an unsigned list names its own version and could claim any.
+`beta` both succeed. There is no version cutoff, because an unsigned list names its own version
+and could claim any. Blanking `RELEASE_PUBKEY` reads release lists unsigned again.
 
 # Signing the app and the updater
 

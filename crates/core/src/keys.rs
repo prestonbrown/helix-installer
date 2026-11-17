@@ -31,16 +31,13 @@ pub fn updater_key(key: &str) -> Option<&str> {
     optional_key(key)
 }
 
-/// PLACEHOLDER, to be replaced by the bare base64 line (starting `RW`) of the release key's
-/// minisign `.pub` file (`docs/SIGNING.md`, "HelixScreen release lists").
-///
-/// The public half of the key HelixScreen's release workflow signs each channel's release list
-/// (`<channel>/manifest.json`, signature at `<channel>/manifest.json.minisig`) with. Set, every
-/// release list must carry a signature that verifies against it before any hash in it is
-/// trusted. Blank, release lists are read unsigned. It stays blank until both the stable and the
-/// beta list are published signed, because an installer that requires a signature the published
-/// lists do not have can install nothing.
-pub const RELEASE_PUBKEY: &str = "";
+/// The bare base64 line of HelixScreen's release key (minisign `.pub`, key id A91F86E5AB692257),
+/// the key HelixScreen's release workflow signs each channel's release list
+/// (`<channel>/manifest.json`, signature at `<channel>/manifest.json.minisig`) with
+/// (`docs/SIGNING.md`, "HelixScreen release lists"). Set, every release list must carry a
+/// prehashed signature that verifies against it before any hash in it is trusted. Blank, release
+/// lists are read unsigned.
+pub const RELEASE_PUBKEY: &str = "RWRXImmr5YYfqd5aaV48WN+50k5e83NgKuEtxECC6agLUBkXG7t7AH9S";
 
 /// The key release lists must be signed with; `None` while `RELEASE_PUBKEY` is blank.
 pub fn release_key() -> Option<&'static str> {
