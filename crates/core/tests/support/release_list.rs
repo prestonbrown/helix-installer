@@ -25,12 +25,23 @@ pub fn release_pubkey() -> Option<String> {
 
 /// A prehashed minisign signature over `bytes` with the secret key in `fixtures/<key_file>`.
 pub fn sign_with(key_file: &str, bytes: &[u8]) -> String {
+    sign_with_comment(key_file, bytes, None)
+}
+
+/// The trusted comment the release workflow signs `channel`'s list with.
+pub fn channel_comment(channel: Channel) -> String {
+    format!("file:manifest.json channel:{}", channel.as_str())
+}
+
+/// Like `sign_with`, with the signature's trusted comment set to `comment` (minisign's default
+/// when `None`).
+pub fn sign_with_comment(key_file: &str, bytes: &[u8], comment: Option<&str>) -> String {
     let text = std::fs::read_to_string(fixture(key_file)).unwrap();
     let sk = minisign::SecretKeyBox::from_string(&text)
         .unwrap()
         .into_unencrypted_secret_key()
         .unwrap();
-    minisign::sign(None, &sk, Cursor::new(bytes), None, None)
+    minisign::sign(None, &sk, Cursor::new(bytes), comment, None)
         .unwrap()
         .into_string()
 }
@@ -44,7 +55,21 @@ pub fn signature_url(channel: Channel) -> String {
 pub fn publish_release_list(fetch: &FakeFetch, channel: Channel, bytes: Vec<u8>) {
     fetch.add(
         &signature_url(channel),
-        sign_with("release_test_key.sec", &bytes).into_bytes(),
+        sign_with_comment(
+            "release_test_key.sec",
+            &bytes,
+            Some(&channel_comment(channel)),
+        )
+        .into_bytes(),
+    );
+    fetch.add(&releases_manifest_url(channel), bytes);
+}
+
+/// Serves `channel`'s list at its URL, signed with the test release key under `comment`.
+pub fn publish_with_comment(fetch: &FakeFetch, channel: Channel, bytes: Vec<u8>, comment: &str) {
+    fetch.add(
+        &signature_url(channel),
+        sign_with_comment("release_test_key.sec", &bytes, Some(comment)).into_bytes(),
     );
     fetch.add(&releases_manifest_url(channel), bytes);
 }

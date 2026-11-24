@@ -21,7 +21,10 @@ use helix_installer_core::transport::fake::{
 };
 use helix_installer_core::transport::{Clock, Env, ExecOutput, Host, Ssh};
 use helix_installer_core::version::ReleaseVersion;
-use release_list::{publish_release_list, release_pubkey, sign_with, signature_url};
+use release_list::{
+    channel_comment, publish_release_list, publish_with_comment, release_pubkey, sign_with,
+    signature_url,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -2433,4 +2436,71 @@ async fn without_a_release_key_an_unsigned_release_list_is_read() {
         .with_release_pubkey(None);
     install_with(&f, r).await;
     assert!(!f.fetch.requests().iter().any(|u| u.ends_with(".minisig")));
+}
+
+async fn fails_on_channel(f: Fakes, channel: Channel) -> String {
+    let mut r = f.runner("root", channel_step(Some(channel.as_str())), json!({}));
+    let (ev, _) = settle(&mut r).await;
+    assert!(f.ssh.uploads().is_empty(), "{:?}", f.ssh.uploads());
+    match ev {
+        Event::Failed { reason, .. } | Event::Refused { reason, .. } => reason,
+        e => panic!("expected a stop, got {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_release_list_signed_for_the_fetched_channel_is_read() {
+    for name in ["stable", "beta"] {
+        let f = Fakes::standard(&["pi"]);
+        let r = f.runner("root", channel_step(Some(name)), json!({}));
+        install_with(&f, r).await;
+    }
+}
+
+#[tokio::test]
+async fn a_release_list_signed_for_another_channel_is_refused() {
+    for (fetched, signed_for) in [
+        (Channel::Stable, Channel::Beta),
+        (Channel::Beta, Channel::Stable),
+    ] {
+        let f = Fakes::standard(&["pi"]);
+        publish_with_comment(
+            &f.fetch,
+            fetched,
+            f.release_list.clone(),
+            &channel_comment(signed_for),
+        );
+        let reason = fails_on_channel(f, fetched).await;
+        assert!(
+            reason.contains(&channel_comment(fetched))
+                && reason.contains(&channel_comment(signed_for)),
+            "{reason}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_release_list_with_any_other_trusted_comment_is_refused() {
+    for comment in [
+        "timestamp:1 file:manifest.json channel:stable",
+        "file:manifest.json",
+        "garbled",
+        "",
+        "file:manifest.json channel:stable channel:beta",
+        "file:manifest.json channel:stable extra:1",
+        "file:manifest.json channel:stable ",
+        "file:manifest.json  channel:stable",
+        "file:other.json channel:stable",
+        "channel:stable file:manifest.json",
+        "file:manifest.json channel:stables",
+    ] {
+        for channel in [Channel::Stable, Channel::Beta] {
+            let f = Fakes::standard(&["pi"]);
+            let comment = comment.replace("stable", channel.as_str());
+            publish_with_comment(&f.fetch, channel, f.release_list.clone(), &comment);
+            // Only the fetched channel's list is wrong; the step must stop on it.
+            let reason = fails_on_channel(f, channel).await;
+            assert!(reason.contains("trusted comment"), "{comment:?}: {reason}");
+        }
+    }
 }

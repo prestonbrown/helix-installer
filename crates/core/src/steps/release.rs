@@ -5,7 +5,7 @@
 
 use super::StepOutcome;
 use crate::manifest::{Artifact, Channel};
-use crate::manifest_sig::verify_signature;
+use crate::manifest_sig::{verify_channel_signature, ChannelSigError};
 use crate::transport::Env;
 use crate::version::ReleaseVersion;
 use serde::Deserialize;
@@ -210,12 +210,18 @@ async fn fetch_signed_release_list(
              whose list is signed with HelixScreen's release key, so nothing was installed."
         ))
     })?;
-    verify_signature(text.as_bytes(), &sig, key).map_err(|_| {
-        StepOutcome::failed(format!(
+    verify_channel_signature(text.as_bytes(), &sig, key, channel.as_str()).map_err(
+        |e| match e {
+            ChannelSigError::BadSignature => StepOutcome::failed(format!(
             "{what} is not signed with HelixScreen's release key: its signature ({sig_url}) does \
              not match it, so its file hashes cannot be trusted and nothing was installed."
-        ))
-    })?;
+        )),
+            ChannelSigError::WrongChannel { expected, found } => StepOutcome::failed(format!(
+            "{what} was signed for another channel: its signature ({sig_url}) has trusted comment \
+             {found:?}, expected {expected:?}. Nothing was installed."
+        )),
+        },
+    )?;
     serde_json::from_str(&text)
         .map_err(|e| StepOutcome::failed(format!("{what} is unreadable: {e}")))
 }
